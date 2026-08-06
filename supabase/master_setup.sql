@@ -475,6 +475,23 @@ CREATE POLICY "Service role or authenticated users can manage webhook events" ON
     FOR ALL USING (auth.role() IN ('authenticated', 'service_role'));
 
 -- Permissions
+-- Step 0 dropped and recreated the `public` schema, which wipes the default table
+-- privileges Supabase normally pre-configures for anon/authenticated/service_role on a
+-- fresh project. RLS policies alone are not enough — Postgres checks table-level GRANTs
+-- before RLS — so these must be restored explicitly, or every real query from the app
+-- fails with "permission denied for table ..." (42501) and silently looks like RLS is
+-- just blocking everything.
+GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO authenticated;
+GRANT ALL ON ALL TABLES IN SCHEMA public TO service_role;
+GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO authenticated, service_role;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+    GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO authenticated;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+    GRANT ALL ON TABLES TO service_role;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+    GRANT ALL ON SEQUENCES TO authenticated, service_role;
+
 REVOKE INSERT, UPDATE, DELETE ON public.audit_logs FROM authenticated, anon, public;
 REVOKE SELECT ON public.integration_connections FROM authenticated, anon, public;
 REVOKE EXECUTE ON FUNCTION public.get_user_org_ids() FROM PUBLIC, anon;
