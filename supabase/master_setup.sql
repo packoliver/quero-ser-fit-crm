@@ -1,0 +1,505 @@
+-- MASTER INSTALL SCRIPT FOR QUERO SER FIT CRM
+
+-- Step 0: Clean Reset (completely cleans the public schema back to 100% blank)
+DROP SCHEMA IF EXISTS public CASCADE;
+CREATE SCHEMA public;
+GRANT ALL ON SCHEMA public TO postgres;
+GRANT ALL ON SCHEMA public TO public;
+
+-- Extensions
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+
+-- Custom Types
+DO $$ 
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'user_role') THEN
+        CREATE TYPE public.user_role AS ENUM ('admin', 'attendant');
+    END IF;
+END $$;
+
+-- 1. Organizations
+CREATE TABLE public.organizations (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name TEXT NOT NULL,
+    slug TEXT NOT NULL UNIQUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 2. Profiles (linked to auth.users)
+CREATE TABLE public.profiles (
+    id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+    full_name TEXT NOT NULL,
+    email TEXT NOT NULL,
+    avatar_url TEXT,
+    phone TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 3. Organization Members
+CREATE TABLE public.organization_members (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    organization_id UUID NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+    role TEXT NOT NULL CHECK (role IN ('admin', 'attendant')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(organization_id, user_id)
+);
+
+-- 4. Contacts
+CREATE TABLE public.contacts (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    organization_id UUID NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    email TEXT,
+    phone TEXT,
+    avatar_url TEXT,
+    status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'archived', 'blocked')),
+    notes TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 5. Contact Channels
+CREATE TABLE public.contact_channels (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    organization_id UUID NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE,
+    contact_id UUID NOT NULL REFERENCES public.contacts(id) ON DELETE CASCADE,
+    channel_type TEXT NOT NULL CHECK (channel_type IN ('whatsapp', 'instagram')),
+    external_id TEXT NOT NULL,
+    identifier TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(organization_id, channel_type, external_id)
+);
+
+-- 6. Conversations
+CREATE TABLE public.conversations (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    organization_id UUID NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE,
+    contact_id UUID NOT NULL REFERENCES public.contacts(id) ON DELETE CASCADE,
+    channel_type TEXT NOT NULL CHECK (channel_type IN ('whatsapp', 'instagram')),
+    status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'assigned', 'closed', 'archived')),
+    current_assignee_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+    last_message_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 7. Conversation Assignments
+CREATE TABLE public.conversation_assignments (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    organization_id UUID NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE,
+    conversation_id UUID NOT NULL REFERENCES public.conversations(id) ON DELETE CASCADE,
+    assigned_to_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+    assigned_by_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+    status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'transferred', 'released')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 8. Messages
+CREATE TABLE public.messages (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    organization_id UUID NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE,
+    conversation_id UUID NOT NULL REFERENCES public.conversations(id) ON DELETE CASCADE,
+    sender_type TEXT NOT NULL CHECK (sender_type IN ('contact', 'user', 'system')),
+    sender_id UUID,
+    content TEXT NOT NULL,
+    media_url TEXT,
+    status TEXT NOT NULL DEFAULT 'sent' CHECK (status IN ('sent', 'delivered', 'read', 'failed')),
+    external_id TEXT,
+    metadata JSONB DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 9. Tags
+CREATE TABLE public.tags (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    organization_id UUID NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    color TEXT NOT NULL DEFAULT '#10B981',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(organization_id, name)
+);
+
+-- 10. Contact Tags
+CREATE TABLE public.contact_tags (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    organization_id UUID NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE,
+    contact_id UUID NOT NULL REFERENCES public.contacts(id) ON DELETE CASCADE,
+    tag_id UUID NOT NULL REFERENCES public.tags(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(contact_id, tag_id)
+);
+
+-- 11. Internal Notes
+CREATE TABLE public.internal_notes (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    organization_id UUID NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE,
+    conversation_id UUID NOT NULL REFERENCES public.conversations(id) ON DELETE CASCADE,
+    author_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+    content TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 12. Tasks
+CREATE TABLE public.tasks (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    organization_id UUID NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    description TEXT,
+    due_date TIMESTAMPTZ,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'in_progress', 'completed', 'cancelled')),
+    assigned_to_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+    contact_id UUID REFERENCES public.contacts(id) ON DELETE CASCADE,
+    conversation_id UUID REFERENCES public.conversations(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 13. Audit Logs
+CREATE TABLE public.audit_logs (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    organization_id UUID NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE,
+    actor_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+    action TEXT NOT NULL,
+    target_type TEXT NOT NULL,
+    target_id UUID,
+    details JSONB DEFAULT '{}'::jsonb,
+    ip_address TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 14. Integration Connections
+CREATE TABLE public.integration_connections (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    organization_id UUID NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE,
+    provider TEXT NOT NULL CHECK (provider IN ('whatsapp_meta', 'instagram_meta')),
+    status TEXT NOT NULL DEFAULT 'inactive' CHECK (status IN ('active', 'inactive', 'error')),
+    encrypted_credentials TEXT,
+    settings JSONB DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(organization_id, provider)
+);
+
+-- 15. Webhook Events (Idempotent)
+CREATE TABLE public.webhook_events (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    provider TEXT NOT NULL,
+    external_event_id TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+    processed BOOLEAN NOT NULL DEFAULT FALSE,
+    processed_at TIMESTAMPTZ,
+    error_message TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(provider, external_event_id)
+);
+
+-- Helper Functions
+CREATE OR REPLACE FUNCTION public.get_user_org_ids()
+RETURNS SETOF UUID
+LANGUAGE sql SECURITY DEFINER STABLE
+SET search_path = ''
+AS $$
+    SELECT organization_id 
+    FROM public.organization_members 
+    WHERE user_id = (SELECT auth.uid());
+$$;
+
+CREATE OR REPLACE FUNCTION public.is_org_admin(org_id UUID)
+RETURNS BOOLEAN
+LANGUAGE sql SECURITY DEFINER STABLE
+SET search_path = ''
+AS $$
+    SELECT EXISTS (
+        SELECT 1 
+        FROM public.organization_members 
+        WHERE organization_id = org_id 
+          AND user_id = (SELECT auth.uid()) 
+          AND role = 'admin'
+    );
+$$;
+
+CREATE OR REPLACE FUNCTION public.normalize_phone(p_phone text)
+RETURNS text
+LANGUAGE sql IMMUTABLE PARALLEL SAFE
+SET search_path = ''
+AS $$
+    SELECT regexp_replace(COALESCE(p_phone, ''), '\D', '', 'g');
+$$;
+
+-- Indexes
+CREATE INDEX idx_org_members_user ON public.organization_members(user_id);
+CREATE INDEX idx_org_members_org ON public.organization_members(organization_id);
+CREATE INDEX idx_contacts_org ON public.contacts(organization_id);
+CREATE INDEX idx_conversations_org ON public.conversations(organization_id);
+CREATE INDEX idx_conversations_contact ON public.conversations(contact_id);
+CREATE INDEX idx_conversations_assignee ON public.conversations(current_assignee_id);
+CREATE INDEX idx_messages_conversation ON public.messages(conversation_id);
+CREATE INDEX idx_messages_org ON public.messages(organization_id);
+CREATE INDEX idx_tasks_org ON public.tasks(organization_id);
+CREATE INDEX idx_tasks_assignee ON public.tasks(assigned_to_id);
+CREATE INDEX idx_audit_logs_org ON public.audit_logs(organization_id);
+CREATE INDEX idx_webhook_events_provider_extid ON public.webhook_events(provider, external_event_id);
+CREATE UNIQUE INDEX idx_contact_channels_global_extid ON public.contact_channels (channel_type, external_id);
+CREATE UNIQUE INDEX idx_contacts_org_normalized_phone ON public.contacts (organization_id, public.normalize_phone(phone)) WHERE phone IS NOT NULL AND public.normalize_phone(phone) <> '';
+
+-- RPC Functions
+CREATE OR REPLACE FUNCTION public.assume_conversation_atomic(p_conversation_id UUID)
+RETURNS BOOLEAN
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+    v_caller_id UUID;
+    v_user_org_id UUID;
+    v_rows_updated INT;
+BEGIN
+    v_caller_id := auth.uid();
+    IF v_caller_id IS NULL THEN
+        RAISE EXCEPTION 'USUÁRIO NÃO AUTENTICADO.';
+    END IF;
+
+    SELECT organization_id INTO v_user_org_id
+    FROM public.organization_members
+    WHERE user_id = v_caller_id
+    LIMIT 1;
+
+    IF v_user_org_id IS NULL THEN
+        RAISE EXCEPTION 'USUÁRIO NÃO PERTENCE A NENHUMA ORGANIZAÇÃO ATIVA.';
+    END IF;
+
+    UPDATE public.conversations
+    SET 
+        current_assignee_id = v_caller_id,
+        status = 'assigned',
+        updated_at = NOW()
+    WHERE id = p_conversation_id
+      AND organization_id = v_user_org_id
+      AND (current_assignee_id IS NULL OR current_assignee_id = v_caller_id);
+
+    GET DIAGNOSTICS v_rows_updated = ROW_COUNT;
+    RETURN v_rows_updated > 0;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.transfer_conversation_atomic(
+    p_conversation_id UUID,
+    p_target_user_id UUID
+)
+RETURNS BOOLEAN
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+    v_caller_id UUID;
+    v_org_id UUID;
+    v_target_valid BOOLEAN;
+    v_rows_updated INT;
+BEGIN
+    v_caller_id := auth.uid();
+    IF v_caller_id IS NULL THEN
+        RAISE EXCEPTION 'USUÁRIO NÃO AUTENTICADO.';
+    END IF;
+
+    SELECT organization_id INTO v_org_id
+    FROM public.conversations
+    WHERE id = p_conversation_id;
+
+    IF v_org_id IS NULL THEN
+        RAISE EXCEPTION 'CONVERSA NÃO ENCONTRADA.';
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM public.organization_members
+        WHERE organization_id = v_org_id AND user_id = v_caller_id
+    ) THEN
+        RAISE EXCEPTION 'PERMISSÃO NEGADA PARA ESTA ORGANIZAÇÃO.';
+    END IF;
+
+    SELECT EXISTS (
+        SELECT 1 FROM public.organization_members
+        WHERE organization_id = v_org_id AND user_id = p_target_user_id
+    ) INTO v_target_valid;
+
+    IF NOT v_target_valid THEN
+        RAISE EXCEPTION 'O ATENDENTE DESTINO NÃO PERTENCE À MESMA ORGANIZAÇÃO.';
+    END IF;
+
+    UPDATE public.conversations
+    SET 
+        current_assignee_id = p_target_user_id,
+        status = 'assigned',
+        updated_at = NOW()
+    WHERE id = p_conversation_id AND organization_id = v_org_id;
+
+    GET DIAGNOSTICS v_rows_updated = ROW_COUNT;
+    RETURN v_rows_updated > 0;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.update_member_role_safe(
+    p_org_id UUID,
+    p_target_user_id UUID,
+    p_new_role TEXT
+)
+RETURNS BOOLEAN
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+    v_caller_id UUID;
+    v_is_caller_admin BOOLEAN;
+    v_current_target_role TEXT;
+    v_active_admins_count INT;
+BEGIN
+    v_caller_id := auth.uid();
+    IF v_caller_id IS NULL THEN
+        RAISE EXCEPTION 'USUÁRIO NÃO AUTENTICADO.';
+    END IF;
+
+    SELECT public.is_org_admin(p_org_id) INTO v_is_caller_admin;
+    IF NOT v_is_caller_admin THEN
+        RAISE EXCEPTION 'SOMENTE ADMINISTRADORES PODEM ALTERAR AS PERMISSÕES DA EQUIPE.';
+    END IF;
+
+    SELECT role INTO v_current_target_role
+    FROM public.organization_members
+    WHERE organization_id = p_org_id AND user_id = p_target_user_id;
+
+    IF v_current_target_role IS NULL THEN
+        RAISE EXCEPTION 'MEMBRO NÃO ENCONTRADO NAF ORGANIZAÇÃO ESPECIFICADA.';
+    END IF;
+
+    IF v_current_target_role = 'admin' AND p_new_role = 'attendant' THEN
+        SELECT COUNT(*) INTO v_active_admins_count
+        FROM public.organization_members
+        WHERE organization_id = p_org_id AND role = 'admin';
+
+        IF v_active_admins_count <= 1 THEN
+            RAISE EXCEPTION 'NÃO É PERMITIDO REMOVER OU REBAIXAR O ÚLTIMO ADMINISTRADOR ATIVO DA ORGANIZAÇÃO.';
+        END IF;
+    END IF;
+
+    UPDATE public.organization_members
+    SET role = p_new_role
+    WHERE organization_id = p_org_id AND user_id = p_target_user_id;
+
+    RETURN TRUE;
+END;
+$$;
+
+-- Enable Row Level Security
+ALTER TABLE public.organizations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.organization_members ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.contacts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.contact_channels ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.conversations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.conversation_assignments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.messages ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.tags ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.contact_tags ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.internal_notes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.tasks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.audit_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.integration_connections ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.webhook_events ENABLE ROW LEVEL SECURITY;
+
+-- RLS Policies
+CREATE POLICY "Users can view their own organizations" ON public.organizations
+    FOR SELECT USING (id IN (SELECT public.get_user_org_ids()));
+
+CREATE POLICY "Admins can update their organization" ON public.organizations
+    FOR UPDATE USING (public.is_org_admin(id));
+
+CREATE POLICY "Profiles viewable by authenticated users" ON public.profiles
+    FOR SELECT USING (auth.role() = 'authenticated');
+
+CREATE POLICY "Users can update their own profile" ON public.profiles
+    FOR UPDATE USING (id = auth.uid());
+
+CREATE POLICY "Members viewable within organization" ON public.organization_members
+    FOR SELECT USING (organization_id IN (SELECT public.get_user_org_ids()));
+
+CREATE POLICY "Admins can manage organization members" ON public.organization_members
+    FOR ALL USING (public.is_org_admin(organization_id));
+
+CREATE POLICY "Tenant isolation for contacts" ON public.contacts
+    FOR ALL USING (organization_id IN (SELECT public.get_user_org_ids()));
+
+CREATE POLICY "Tenant isolation for contact_channels" ON public.contact_channels
+    FOR ALL USING (organization_id IN (SELECT public.get_user_org_ids()));
+
+CREATE POLICY "Tenant isolation for conversations" ON public.conversations
+    FOR ALL USING (organization_id IN (SELECT public.get_user_org_ids()));
+
+CREATE POLICY "Tenant isolation for conversation_assignments" ON public.conversation_assignments
+    FOR ALL USING (organization_id IN (SELECT public.get_user_org_ids()));
+
+CREATE POLICY "Tenant isolation for messages" ON public.messages
+    FOR ALL USING (organization_id IN (SELECT public.get_user_org_ids()));
+
+CREATE POLICY "Tenant isolation for tags" ON public.tags
+    FOR ALL USING (organization_id IN (SELECT public.get_user_org_ids()));
+
+CREATE POLICY "Tenant isolation for contact_tags" ON public.contact_tags
+    FOR ALL USING (organization_id IN (SELECT public.get_user_org_ids()));
+
+CREATE POLICY "Tenant isolation for internal_notes" ON public.internal_notes
+    FOR ALL USING (organization_id IN (SELECT public.get_user_org_ids()));
+
+CREATE POLICY "Tenant isolation for tasks" ON public.tasks
+    FOR ALL USING (organization_id IN (SELECT public.get_user_org_ids()));
+
+CREATE POLICY "Admins can select audit_logs" ON public.audit_logs
+    FOR SELECT USING (public.is_org_admin(organization_id));
+
+CREATE POLICY "Admins can view integration connections" ON public.integration_connections
+    FOR SELECT USING (organization_id IN (SELECT public.get_user_org_ids()));
+
+CREATE POLICY "Admins can modify integration connections" ON public.integration_connections
+    FOR ALL USING (public.is_org_admin(organization_id));
+
+CREATE POLICY "Service role or authenticated users can manage webhook events" ON public.webhook_events
+    FOR ALL USING (auth.role() IN ('authenticated', 'service_role'));
+
+-- Permissions
+REVOKE INSERT, UPDATE, DELETE ON public.audit_logs FROM authenticated, anon, public;
+REVOKE SELECT ON public.integration_connections FROM authenticated, anon, public;
+REVOKE EXECUTE ON FUNCTION public.get_user_org_ids() FROM PUBLIC, anon;
+REVOKE EXECUTE ON FUNCTION public.is_org_admin(UUID) FROM PUBLIC, anon;
+REVOKE EXECUTE ON FUNCTION public.normalize_phone(text) FROM PUBLIC, anon;
+REVOKE EXECUTE ON FUNCTION public.assume_conversation_atomic(UUID) FROM PUBLIC, anon;
+REVOKE EXECUTE ON FUNCTION public.transfer_conversation_atomic(UUID, UUID) FROM PUBLIC, anon;
+REVOKE EXECUTE ON FUNCTION public.update_member_role_safe(UUID, UUID, TEXT) FROM PUBLIC, anon;
+
+GRANT EXECUTE ON FUNCTION public.get_user_org_ids() TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.is_org_admin(UUID) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.normalize_phone(text) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.assume_conversation_atomic(UUID) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.transfer_conversation_atomic(UUID, UUID) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.update_member_role_safe(UUID, UUID, TEXT) TO authenticated, service_role;
+
+-- Views
+CREATE OR REPLACE VIEW public.integration_connections_public AS
+    SELECT 
+        id,
+        organization_id,
+        provider,
+        status,
+        settings,
+        created_at,
+        updated_at
+    FROM public.integration_connections;
+
+GRANT SELECT ON public.integration_connections_public TO authenticated, service_role;
