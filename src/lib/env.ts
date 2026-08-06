@@ -17,6 +17,15 @@ let cachedEnv: ServerEnv | null = null
 export function getServerEnv(): ServerEnv {
   if (cachedEnv) return cachedEnv
 
+  const isProduction = process.env.NODE_ENV === 'production'
+  const envKey = process.env.INTEGRATION_ENCRYPTION_KEY
+
+  if (isProduction && (!envKey || envKey === '12345678901234567890123456789012')) {
+    console.error(
+      '[CRÍTICO] SEGURANÇA DE PRODUÇÃO: A variável INTEGRATION_ENCRYPTION_KEY é obrigatória em ambiente de produção!'
+    )
+  }
+
   const rawEnv = {
     NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL || '',
     NEXT_PUBLIC_SUPABASE_ANON_KEY: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '',
@@ -24,7 +33,7 @@ export function getServerEnv(): ServerEnv {
     SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY || '',
     META_WEBHOOK_VERIFY_TOKEN: process.env.META_WEBHOOK_VERIFY_TOKEN || undefined,
     META_APP_SECRET: process.env.META_APP_SECRET || undefined,
-    INTEGRATION_ENCRYPTION_KEY: process.env.INTEGRATION_ENCRYPTION_KEY || '12345678901234567890123456789012',
+    INTEGRATION_ENCRYPTION_KEY: envKey || (isProduction ? undefined : '12345678901234567890123456789012'),
   }
 
   const result = serverEnvSchema.safeParse(rawEnv)

@@ -5,7 +5,15 @@ const ALGORITHM = 'aes-256-gcm'
 
 function getEncryptionKey(): Buffer {
   const env = getServerEnv()
-  const keyString = env.INTEGRATION_ENCRYPTION_KEY || '12345678901234567890123456789012'
+  const isProduction = process.env.NODE_ENV === 'production'
+  const keyString = env.INTEGRATION_ENCRYPTION_KEY || (isProduction ? '' : '12345678901234567890123456789012')
+
+  if (!keyString) {
+    throw new Error(
+      'FALHA CRÍTICA DE SEGURANÇA: A variável INTEGRATION_ENCRYPTION_KEY precisa ser configurada no ambiente para realizar criptografia.'
+    )
+  }
+
   return Buffer.from(keyString.padEnd(32, '0').slice(0, 32), 'utf8')
 }
 
