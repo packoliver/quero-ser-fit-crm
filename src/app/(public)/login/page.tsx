@@ -34,7 +34,7 @@ export default function LoginPage() {
 
       if (isUnconfigured || process.env.NEXT_PUBLIC_ENABLE_DEMO_MODE === 'true') {
         document.cookie = 'crm_demo_session=true; path=/'
-        router.push('/inbox')
+        router.push('/')
         router.refresh()
         return
       }
@@ -53,7 +53,7 @@ export default function LoginPage() {
           signInError.message.includes('NetworkError')
         ) {
           document.cookie = 'crm_demo_session=true; path=/'
-          router.push('/inbox')
+          router.push('/')
           router.refresh()
           return
         }
@@ -69,11 +69,11 @@ export default function LoginPage() {
         return
       }
 
-      router.push('/inbox')
+      router.push('/')
       router.refresh()
     } catch {
       document.cookie = 'crm_demo_session=true; path=/'
-      router.push('/inbox')
+      router.push('/')
       router.refresh()
     } finally {
       setLoading(false)
@@ -84,7 +84,7 @@ export default function LoginPage() {
     setEmail(demoEmail)
     setPassword('senha123')
     document.cookie = 'crm_demo_session=true; path=/'
-    router.push('/inbox')
+    router.push('/')
     router.refresh()
   }
 
