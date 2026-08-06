@@ -42,7 +42,7 @@ export function DesktopSidebar({ userRole = 'admin' }: DesktopSidebarProps) {
       {/* Navigation Links */}
       <nav className="flex-1 p-4 space-y-1.5 overflow-y-auto">
         <div className="px-3 py-2 text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
-          Menu ({userRole === 'admin' ? 'Administrador' : 'Atendente'})
+          Menu ({userRole === 'admin' ? 'Administrador' : userRole === 'manager' ? 'Gerente' : 'Atendente'})
         </div>
         {navItems.map((item) => {
           const Icon = item.icon

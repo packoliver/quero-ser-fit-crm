@@ -305,6 +305,7 @@ export default function InboxPage() {
                 className={`py-1.5 px-2 rounded-lg font-medium text-center transition ${
                   filterQueue === 'all' ? 'bg-slate-800 text-emerald-400 font-semibold' : 'text-slate-400 hover:text-slate-200'
                 }`}
+                suppressHydrationWarning
               >
                 Todas ({conversations.length})
               </button>
@@ -321,6 +322,7 @@ export default function InboxPage() {
                 className={`py-1.5 px-2 rounded-lg font-medium text-center transition ${
                   filterQueue === 'unassigned' ? 'bg-amber-950/80 text-amber-400 font-semibold' : 'text-slate-400 hover:text-slate-200'
                 }`}
+                suppressHydrationWarning
               >
                 Fila ({conversations.filter((c) => !c.currentAssigneeId || c.status === 'open').length})
               </button>

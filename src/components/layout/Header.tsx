@@ -39,8 +39,9 @@ export function Header({ currentRole = 'admin', onToggleRole }: HeaderProps) {
 
   const pendingTasks = tasks.filter((t) => t.status === 'pending')
 
-  const userName = currentRole === 'admin' ? 'Patricia Silva (Admin)' : 'Carlos Atendimento'
-  const userEmail = currentRole === 'admin' ? 'admin@queroserfit.com.br' : 'carlos@queroserfit.com.br'
+  const roleLabel = currentRole === 'admin' ? 'Administrador' : currentRole === 'manager' ? 'Gerente' : 'Atendente'
+  const userName = currentRole === 'admin' ? 'Patricia Silva (Admin)' : currentRole === 'manager' ? 'Patricia Silva (Gerente)' : 'Carlos Atendimento'
+  const userEmail = currentRole === 'admin' ? 'comercial@queroserfit.com' : currentRole === 'manager' ? 'comercial@queroserfit.com' : 'carlos@queroserfit.com.br'
 
   // Close dropdowns when clicking outside
   useEffect(() => {
@@ -56,7 +57,14 @@ export function Header({ currentRole = 'admin', onToggleRole }: HeaderProps) {
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    try {
+      const { createClient } = await import('@/lib/supabase/client')
+      const supabase = createClient()
+      await supabase.auth.signOut()
+    } catch {
+      // Ignore errors if Supabase is not configured
+    }
     if (typeof document !== 'undefined') {
       document.cookie = 'crm_demo_session=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;'
     }
@@ -93,6 +101,11 @@ export function Header({ currentRole = 'admin', onToggleRole }: HeaderProps) {
               <>
                 <ShieldCheck className="w-4 h-4 text-emerald-400" />
                 <span>Admin</span>
+              </>
+            ) : currentRole === 'manager' ? (
+              <>
+                <Shield className="w-4 h-4 text-indigo-400" />
+                <span>Gerente</span>
               </>
             ) : (
               <>
@@ -193,7 +206,7 @@ export function Header({ currentRole = 'admin', onToggleRole }: HeaderProps) {
             <div className="hidden sm:block text-left">
               <p className="text-xs font-semibold text-slate-200">{userName}</p>
               <p className="text-[10px] text-slate-400">
-                {currentRole === 'admin' ? 'Administrador' : 'Atendente'}
+                {roleLabel}
               </p>
             </div>
             <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
@@ -205,8 +218,8 @@ export function Header({ currentRole = 'admin', onToggleRole }: HeaderProps) {
                 <p className="font-bold text-slate-100">{userName}</p>
                 <p className="text-slate-400 text-[11px] truncate">{userEmail}</p>
                 <div className="mt-1.5">
-                  <Badge variant={currentRole === 'admin' ? 'emerald' : 'teal'}>
-                    {currentRole === 'admin' ? 'Administrador' : 'Atendente'}
+                  <Badge variant={currentRole === 'admin' ? 'emerald' : currentRole === 'manager' ? 'indigo' : 'teal'}>
+                    {roleLabel}
                   </Badge>
                 </div>
               </div>
@@ -268,8 +281,8 @@ export function Header({ currentRole = 'admin', onToggleRole }: HeaderProps) {
               <span className="text-slate-400 flex items-center gap-1.5">
                 <Shield className="w-4 h-4 text-teal-400" /> Nível de Permissão:
               </span>
-              <Badge variant={currentRole === 'admin' ? 'emerald' : 'teal'}>
-                {currentRole === 'admin' ? 'Administrador Total' : 'Atendimento Operacional'}
+              <Badge variant={currentRole === 'admin' ? 'emerald' : currentRole === 'manager' ? 'indigo' : 'teal'}>
+                {currentRole === 'admin' ? 'Administrador Total' : currentRole === 'manager' ? 'Supervisão Gerencial' : 'Atendimento Operacional'}
               </Badge>
             </div>
 

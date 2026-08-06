@@ -14,7 +14,11 @@ export default function DashboardLayout({
   const [currentRole, setCurrentRole] = useState<UserRole>('admin')
 
   const toggleRole = () => {
-    setCurrentRole((prev) => (prev === 'admin' ? 'attendant' : 'admin'))
+    setCurrentRole((prev) => {
+      if (prev === 'admin') return 'manager'
+      if (prev === 'manager') return 'attendant'
+      return 'admin'
+    })
   }
 
   return (

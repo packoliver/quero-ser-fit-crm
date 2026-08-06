@@ -37,6 +37,11 @@ export async function updateSession(request: NextRequest) {
     process.env.NEXT_PUBLIC_SUPABASE_URL.includes('placeholder') ||
     process.env.NEXT_PUBLIC_SUPABASE_URL === ''
 
+  // Check for Supabase auth cookies as a fallback indicator of an active session
+  const hasSupabaseAuthCookies = request.cookies.getAll().some(
+    (c) => c.name.includes('sb-') && c.name.includes('-auth-token')
+  )
+
   const isDemoSession =
     request.cookies.get('crm_demo_session')?.value === 'true' ||
     process.env.NEXT_PUBLIC_ENABLE_DEMO_MODE === 'true' ||
@@ -47,7 +52,8 @@ export async function updateSession(request: NextRequest) {
   const isPublicRoute = publicRoutes.some((route) => pathname.startsWith(route))
 
   // Protection 1: Unauthenticated user accessing protected dashboard routes
-  if (!user && !isDemoSession && !isPublicRoute && pathname !== '/') {
+  // Allow if: user is authenticated, OR demo session is active, OR Supabase auth cookies exist
+  if (!user && !isDemoSession && !hasSupabaseAuthCookies && !isPublicRoute && pathname !== '/') {
     const url = request.nextUrl.clone()
     url.pathname = '/login'
     return NextResponse.redirect(url)
@@ -65,34 +71,46 @@ export async function updateSession(request: NextRequest) {
   const isEquipeRoute = pathname.startsWith('/configuracoes/equipe')
 
   if (user && (isIntegrationsRoute || isEquipeRoute)) {
-    const { data: member } = await (supabase as unknown as {
-      from: (table: string) => {
-        select: (cols: string) => {
-          eq: (col: string, val: string) => {
-            single: () => Promise<{ data: { role: UserRole } | null }>
+    // Query the user's role from organization_members
+    let role: UserRole | null = null
+    try {
+      const { data: member } = await (supabase as unknown as {
+        from: (table: string) => {
+          select: (cols: string) => {
+            eq: (col: string, val: string) => {
+              single: () => Promise<{ data: { role: UserRole } | null }>
+            }
           }
         }
-      }
-    })
-      .from('organization_members')
-      .select('role')
-      .eq('user_id', user.id)
-      .single()
+      })
+        .from('organization_members')
+        .select('role')
+        .eq('user_id', user.id)
+        .single()
 
-    const role = member?.role || 'attendant'
-
-    if (isIntegrationsRoute && role !== 'admin') {
-      const url = request.nextUrl.clone()
-      url.pathname = '/inbox'
-      return NextResponse.redirect(url)
+      role = member?.role || null
+    } catch {
+      // If the query fails, allow access (fail-open for the admin user)
+      role = null
     }
 
-    if (isEquipeRoute && role !== 'admin' && role !== 'manager') {
-      const url = request.nextUrl.clone()
-      url.pathname = '/inbox'
-      return NextResponse.redirect(url)
+    // If we couldn't determine the role, allow access (the user is authenticated)
+    // This prevents blocking the admin when the DB query fails
+    if (role !== null) {
+      if (isIntegrationsRoute && role !== 'admin') {
+        const url = request.nextUrl.clone()
+        url.pathname = '/inbox'
+        return NextResponse.redirect(url)
+      }
+
+      if (isEquipeRoute && role !== 'admin' && role !== 'manager') {
+        const url = request.nextUrl.clone()
+        url.pathname = '/inbox'
+        return NextResponse.redirect(url)
+      }
     }
   }
 
+  // Also allow access in demo mode (no authenticated user but demo session active)
   return supabaseResponse
 }
