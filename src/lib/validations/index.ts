@@ -67,9 +67,12 @@ export const createConnectionSchema = z.discriminatedUnion('connectionMethod', [
     accessToken: z.string().min(20, 'Token de acesso inválido ou incompleto'),
   }),
   z.object({
-    connectionMethod: z.literal('qr_code'),
-    provider: z.literal('whatsapp_meta'),
+    connectionMethod: z.literal('zapi'),
+    provider: z.literal('whatsapp_zapi'),
     label: z.string().min(2, 'Dê um nome pra essa conexão (ex: Loja Centro)').max(60),
+    instanceId: z.string().min(3, 'Informe o Instance ID da Z-API'),
+    instanceToken: z.string().min(10, 'Informe o Instance Token da Z-API'),
+    clientToken: z.string().optional().or(z.literal('')),
   }),
 ])
 

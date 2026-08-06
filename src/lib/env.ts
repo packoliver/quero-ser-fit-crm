@@ -8,6 +8,9 @@ const serverEnvSchema = z.object({
   META_WEBHOOK_VERIFY_TOKEN: z.string().optional(),
   META_APP_SECRET: z.string().optional(),
   INTEGRATION_ENCRYPTION_KEY: z.string().optional(),
+  // Z-API não assina webhooks (sem HMAC) — este segredo é colocado na query string da
+  // URL de webhook cadastrada no painel da Z-API para provar que a chamada é legítima.
+  ZAPI_WEBHOOK_SECRET: z.string().optional(),
 })
 
 export type ServerEnv = z.infer<typeof serverEnvSchema>
@@ -35,6 +38,7 @@ export function getServerEnv(): ServerEnv {
     SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY || '',
     META_WEBHOOK_VERIFY_TOKEN: process.env.META_WEBHOOK_VERIFY_TOKEN || undefined,
     META_APP_SECRET: process.env.META_APP_SECRET || undefined,
+    ZAPI_WEBHOOK_SECRET: process.env.ZAPI_WEBHOOK_SECRET || undefined,
     // Em produção, uma chave ausente OU igual ao fallback conhecido de dev é tratada
     // como "não configurada" (undefined), forçando getEncryptionKey() a lançar erro
     // em vez de criptografar silenciosamente com uma chave pública e comprometida.

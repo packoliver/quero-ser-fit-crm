@@ -189,9 +189,9 @@ CREATE TABLE public.audit_logs (
 CREATE TABLE public.integration_connections (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     organization_id UUID NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE,
-    provider TEXT NOT NULL CHECK (provider IN ('whatsapp_meta', 'instagram_meta')),
+    provider TEXT NOT NULL CHECK (provider IN ('whatsapp_meta', 'whatsapp_zapi', 'instagram_meta')),
     label TEXT NOT NULL DEFAULT 'Conexão Principal',
-    connection_method TEXT NOT NULL DEFAULT 'cloud_api' CHECK (connection_method IN ('cloud_api', 'qr_code')),
+    connection_method TEXT NOT NULL DEFAULT 'cloud_api' CHECK (connection_method IN ('cloud_api', 'zapi')),
     external_identifier TEXT,
     status TEXT NOT NULL DEFAULT 'inactive' CHECK (status IN ('active', 'inactive', 'error')),
     encrypted_credentials TEXT,

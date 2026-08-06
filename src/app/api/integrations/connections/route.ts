@@ -188,27 +188,55 @@ export async function POST(request: NextRequest) {
     )
   }
 
-  // qr_code: create a placeholder the microservice will claim later (it updates
-  // external_identifier/status/settings itself using the service-role key once a
-  // WhatsApp session is actually established and scanned).
+  // zapi: validate the Instance ID/Token by asking Z-API for the connected device before saving.
+  let zapiOk = false
+  let zapiDetail = ''
+  try {
+    const deviceRes = await fetch(
+      `https://api.z-api.io/instances/${encodeURIComponent(input.instanceId)}/token/${encodeURIComponent(input.instanceToken)}/device`,
+      {
+        headers: input.clientToken ? { 'Client-Token': input.clientToken } : undefined,
+      }
+    )
+    const deviceBody = await deviceRes.json().catch(() => ({}))
+    zapiOk = deviceRes.ok && !!deviceBody?.phone
+    zapiDetail = zapiOk
+      ? ''
+      : deviceBody?.error || deviceBody?.message || `HTTP ${deviceRes.status} — instância não conectada ou credenciais inválidas`
+  } catch (err) {
+    zapiDetail = err instanceof Error ? err.message : 'Falha de rede ao validar com a Z-API.'
+  }
+
   const { data: inserted, error: insertError } = await adminDb
     .from('integration_connections')
     .insert({
       organization_id: organizationId,
-      provider: 'whatsapp_meta',
+      provider: 'whatsapp_zapi',
       label: input.label,
-      connection_method: 'qr_code',
-      external_identifier: null,
-      encrypted_credentials: null,
-      status: 'inactive',
-      settings: { qr_status: 'awaiting_worker' },
+      connection_method: 'zapi',
+      external_identifier: input.instanceId,
+      encrypted_credentials: encryptToken(JSON.stringify({ instanceToken: input.instanceToken, clientToken: input.clientToken || '' })),
+      status: zapiOk ? 'active' : 'error',
+      settings: zapiOk ? {} : { last_verify_error: zapiDetail },
     })
     .select(SAFE_SELECT)
     .single()
 
   if (insertError || !inserted) {
-    return NextResponse.json({ error: 'Falha ao criar a conexão de QR Code.' }, { status: 500 })
+    const isDuplicate = insertError?.message?.includes('duplicate') ?? false
+    return NextResponse.json(
+      { error: isDuplicate ? 'Essa Instance ID já está cadastrada nesta organização.' : 'Falha ao salvar a conexão.' },
+      { status: isDuplicate ? 409 : 500 }
+    )
   }
 
-  return NextResponse.json({ connection: inserted }, { status: 201 })
+  return NextResponse.json(
+    {
+      connection: inserted,
+      warning: zapiOk
+        ? undefined
+        : `Conexão salva, mas a Z-API não confirmou o dispositivo conectado: ${zapiDetail}. Escaneie o QR Code no painel da Z-API e tente novamente.`,
+    },
+    { status: 201 }
+  )
 }

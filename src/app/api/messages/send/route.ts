@@ -5,9 +5,11 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { decryptToken } from '@/lib/security/encryption'
 import { MetaWhatsAppProvider } from '@/lib/integrations/whatsapp-meta'
 import { MetaInstagramProvider } from '@/lib/integrations/instagram-meta'
+import { ZApiWhatsAppProvider } from '@/lib/integrations/zapi-whatsapp'
 
 const whatsappProvider = new MetaWhatsAppProvider()
 const instagramProvider = new MetaInstagramProvider()
+const zapiProvider = new ZApiWhatsAppProvider()
 
 const sendSchema = z.object({
   conversationId: z.string().uuid('ID de conversa inválido'),
@@ -24,7 +26,7 @@ interface ConversationRow {
 
 interface ConnectionRow {
   id: string
-  connection_method: 'cloud_api' | 'qr_code'
+  connection_method: 'cloud_api' | 'zapi'
   external_identifier: string | null
   encrypted_credentials: string | null
   status: string
@@ -121,37 +123,54 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Conexão associada não encontrada.' }, { status: 422 })
   }
 
-  if (connection.connection_method === 'qr_code') {
-    // The QR Code (Baileys) worker is a separate always-on process that hasn't been
-    // wired to consume an outbound queue yet — see the microservice scaffold. Fail
-    // clearly instead of pretending the message went out.
-    return NextResponse.json(
-      { error: 'Envio via QR Code ainda depende do microserviço dedicado (worker), que ainda não está processando envios.' },
-      { status: 501 }
-    )
-  }
-
   if (!connection.external_identifier || !connection.encrypted_credentials) {
-    return NextResponse.json({ error: 'Conexão Cloud API incompleta (falta token ou identificador).' }, { status: 422 })
+    return NextResponse.json({ error: 'Conexão incompleta (falta token ou identificador).' }, { status: 422 })
   }
 
-  let accessToken: string
-  try {
-    accessToken = decryptToken(connection.encrypted_credentials)
-  } catch {
-    return NextResponse.json({ error: 'Falha ao decifrar as credenciais da conexão.' }, { status: 500 })
+  let result: { success: boolean; externalId?: string; error?: string }
+
+  if (connection.connection_method === 'zapi') {
+    let instanceToken: string
+    let clientToken: string | undefined
+    try {
+      const decoded = JSON.parse(decryptToken(connection.encrypted_credentials)) as {
+        instanceToken: string
+        clientToken?: string
+      }
+      instanceToken = decoded.instanceToken
+      clientToken = decoded.clientToken || undefined
+    } catch {
+      return NextResponse.json({ error: 'Falha ao decifrar as credenciais da conexão Z-API.' }, { status: 500 })
+    }
+
+    result = await zapiProvider.sendMessage({
+      organizationId: conversation.organization_id,
+      conversationId: conversation.id,
+      recipientExternalId,
+      content: parsed.data.content,
+      accessToken: instanceToken,
+      fromExternalId: connection.external_identifier,
+      secondaryToken: clientToken,
+    })
+  } else {
+    let accessToken: string
+    try {
+      accessToken = decryptToken(connection.encrypted_credentials)
+    } catch {
+      return NextResponse.json({ error: 'Falha ao decifrar as credenciais da conexão.' }, { status: 500 })
+    }
+
+    const provider = conversation.channel_type === 'whatsapp' ? whatsappProvider : instagramProvider
+
+    result = await provider.sendMessage({
+      organizationId: conversation.organization_id,
+      conversationId: conversation.id,
+      recipientExternalId,
+      content: parsed.data.content,
+      accessToken,
+      fromExternalId: connection.external_identifier,
+    })
   }
-
-  const provider = conversation.channel_type === 'whatsapp' ? whatsappProvider : instagramProvider
-
-  const result = await provider.sendMessage({
-    organizationId: conversation.organization_id,
-    conversationId: conversation.id,
-    recipientExternalId,
-    content: parsed.data.content,
-    accessToken,
-    fromExternalId: connection.external_identifier,
-  })
 
   const { error: insertError } = await db.from('messages').insert({
     organization_id: conversation.organization_id,

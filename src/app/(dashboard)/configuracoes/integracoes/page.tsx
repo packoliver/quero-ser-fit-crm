@@ -20,8 +20,8 @@ import { Input } from '@/components/ui/Input'
 import { Select } from '@/components/ui/Select'
 import { Modal } from '@/components/ui/Modal'
 
-type Provider = 'whatsapp_meta' | 'instagram_meta'
-type ConnectionMethod = 'cloud_api' | 'qr_code'
+type Provider = 'whatsapp_meta' | 'whatsapp_zapi' | 'instagram_meta'
+type ConnectionMethod = 'cloud_api' | 'zapi'
 
 interface Connection {
   id: string
@@ -51,6 +51,9 @@ export default function IntegracoesConfigPage() {
     label: '',
     externalIdentifier: '',
     accessToken: '',
+    instanceId: '',
+    instanceToken: '',
+    clientToken: '',
   })
 
   const showToast = (msg: string) => {
@@ -85,7 +88,16 @@ export default function IntegracoesConfigPage() {
   }, [fetchConnections])
 
   const resetForm = () => {
-    setForm({ provider: 'whatsapp_meta', connectionMethod: 'cloud_api', label: '', externalIdentifier: '', accessToken: '' })
+    setForm({
+      provider: 'whatsapp_meta',
+      connectionMethod: 'cloud_api',
+      label: '',
+      externalIdentifier: '',
+      accessToken: '',
+      instanceId: '',
+      instanceToken: '',
+      clientToken: '',
+    })
     setFormError(null)
     setFormWarning(null)
   }
@@ -111,9 +123,12 @@ export default function IntegracoesConfigPage() {
             accessToken: form.accessToken,
           }
         : {
-            connectionMethod: 'qr_code',
-            provider: 'whatsapp_meta',
+            connectionMethod: 'zapi',
+            provider: 'whatsapp_zapi',
             label: form.label,
+            instanceId: form.instanceId,
+            instanceToken: form.instanceToken,
+            clientToken: form.clientToken,
           }
 
     try {
@@ -164,6 +179,8 @@ export default function IntegracoesConfigPage() {
     }
   }
 
+  const providerLabel = (p: Provider) => (p === 'instagram_meta' ? 'Instagram' : 'WhatsApp')
+
   return (
     <div className="p-4 lg:p-8 space-y-6 max-w-7xl mx-auto">
       {toast && (
@@ -212,10 +229,10 @@ export default function IntegracoesConfigPage() {
               <CardHeader className="space-y-3">
                 <div className="flex items-center justify-between">
                   <div className="p-2.5 rounded-xl bg-slate-800 text-emerald-400 border border-slate-700">
-                    {conn.provider === 'whatsapp_meta' ? (
-                      <Phone className="w-5 h-5" />
-                    ) : (
+                    {conn.provider === 'instagram_meta' ? (
                       <Instagram className="w-5 h-5 text-pink-400" />
+                    ) : (
+                      <Phone className="w-5 h-5" />
                     )}
                   </div>
                   <div className="flex flex-col items-end gap-1">
@@ -226,7 +243,7 @@ export default function IntegracoesConfigPage() {
                       {conn.status === 'active' ? 'Ativa' : conn.status === 'error' ? 'Erro' : 'Inativa'}
                     </Badge>
                     <Badge variant="indigo" icon={conn.connection_method === 'cloud_api' ? <Cloud className="w-3 h-3" /> : <QrCode className="w-3 h-3" />}>
-                      {conn.connection_method === 'cloud_api' ? 'Cloud API' : 'QR Code'}
+                      {conn.connection_method === 'cloud_api' ? 'Cloud API' : 'Z-API'}
                     </Badge>
                   </div>
                 </div>
@@ -234,7 +251,7 @@ export default function IntegracoesConfigPage() {
                 <div>
                   <h2 className="text-sm font-bold text-slate-100">{conn.label}</h2>
                   <p className="text-xs text-slate-400 mt-1 leading-relaxed">
-                    {conn.provider === 'whatsapp_meta' ? 'WhatsApp' : 'Instagram'}
+                    {providerLabel(conn.provider)}
                     {conn.external_identifier ? ` · ${conn.external_identifier}` : ' · aguardando identificador'}
                   </p>
                 </div>
@@ -257,24 +274,27 @@ export default function IntegracoesConfigPage() {
         </div>
       )}
 
-      {/* Webhook Endpoint Info Box */}
-      <Card className="p-5 text-xs space-y-3">
+      {/* Webhook Endpoints Info Box */}
+      <Card className="p-5 text-xs space-y-4">
         <h3 className="font-bold text-slate-100 text-sm flex items-center gap-2">
           <Info className="w-4 h-4 text-emerald-400" />
-          <span>Endpoint de Webhook (Cloud API)</span>
+          <span>Endpoints de Webhook</span>
         </h3>
-        <p className="text-slate-400 leading-relaxed">
-          Configure este endpoint no painel de desenvolvedor da Meta (WhatsApp/Instagram → Webhooks) para cada app usado:
-        </p>
-        <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 font-mono space-y-1 text-[11px]">
-          <div className="text-slate-400">
-            <strong className="text-emerald-400">Endpoint:</strong> /api/webhooks/meta
+
+        <div className="space-y-1.5">
+          <p className="text-slate-400">Cloud API oficial — configure no painel de desenvolvedor da Meta (WhatsApp/Instagram → Webhooks):</p>
+          <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 font-mono space-y-1 text-[11px]">
+            <div className="text-slate-400"><strong className="text-emerald-400">Endpoint:</strong> /api/webhooks/meta</div>
+            <div className="text-slate-400"><strong className="text-emerald-400">Verify Token:</strong> valor de META_WEBHOOK_VERIFY_TOKEN no ambiente</div>
+            <div className="text-slate-400"><strong className="text-emerald-400">Segurança:</strong> HMAC SHA-256 (X-Hub-Signature-256) com META_APP_SECRET</div>
           </div>
-          <div className="text-slate-400">
-            <strong className="text-emerald-400">Verify Token:</strong> valor de META_WEBHOOK_VERIFY_TOKEN no ambiente
-          </div>
-          <div className="text-slate-400">
-            <strong className="text-emerald-400">Segurança:</strong> HMAC SHA-256 (X-Hub-Signature-256) com META_APP_SECRET
+        </div>
+
+        <div className="space-y-1.5">
+          <p className="text-slate-400">Z-API — configure no painel da Z-API (Instância → Webhooks → &ldquo;Ao receber&rdquo;):</p>
+          <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 font-mono space-y-1 text-[11px]">
+            <div className="text-slate-400"><strong className="text-emerald-400">Endpoint:</strong> /api/webhooks/zapi?secret=SEU_ZAPI_WEBHOOK_SECRET</div>
+            <div className="text-slate-400"><strong className="text-emerald-400">Segurança:</strong> segredo próprio na URL (ZAPI_WEBHOOK_SECRET no ambiente) — a Z-API não assina webhooks</div>
           </div>
         </div>
       </Card>
@@ -303,12 +323,12 @@ export default function IntegracoesConfigPage() {
               setForm((prev) => ({
                 ...prev,
                 connectionMethod: method,
-                provider: method === 'qr_code' ? 'whatsapp_meta' : prev.provider,
+                provider: method === 'zapi' ? 'whatsapp_zapi' : 'whatsapp_meta',
               }))
             }}
             options={[
               { value: 'cloud_api', label: 'Cloud API Oficial (WhatsApp ou Instagram)' },
-              { value: 'qr_code', label: 'QR Code / WhatsApp Web (não-oficial — só WhatsApp)' },
+              { value: 'zapi', label: 'Z-API / WhatsApp Web (não-oficial, via z-api.io — só WhatsApp)' },
             ]}
           />
 
@@ -335,9 +355,9 @@ export default function IntegracoesConfigPage() {
           {form.connectionMethod === 'cloud_api' ? (
             <>
               <Input
-                label={form.provider === 'whatsapp_meta' ? 'Phone Number ID *' : 'Page ID (Instagram) *'}
+                label={form.provider === 'instagram_meta' ? 'Page ID (Instagram) *' : 'Phone Number ID *'}
                 required
-                placeholder={form.provider === 'whatsapp_meta' ? 'Ex: 109876543210987' : 'Ex: 178234567890123'}
+                placeholder={form.provider === 'instagram_meta' ? 'Ex: 178234567890123' : 'Ex: 109876543210987'}
                 value={form.externalIdentifier}
                 onChange={(e) => setForm({ ...form, externalIdentifier: e.target.value })}
               />
@@ -354,15 +374,36 @@ export default function IntegracoesConfigPage() {
               </div>
             </>
           ) : (
-            <div className="p-3 bg-amber-950/40 border border-amber-800/50 rounded-xl text-[11px] text-amber-300 space-y-1">
-              <p>
-                Depois de criar, esta conexão fica &ldquo;Inativa&rdquo; até o worker de QR Code (rodando no seu
-                servidor dedicado) escanear e conectar a sessão.
-              </p>
-              <p className="text-amber-400/80">
-                Risco de banimento do número pela Meta — uso não-oficial do WhatsApp Web.
-              </p>
-            </div>
+            <>
+              <Input
+                label="Instance ID *"
+                required
+                placeholder="ID da instância no painel da Z-API"
+                value={form.instanceId}
+                onChange={(e) => setForm({ ...form, instanceId: e.target.value })}
+              />
+              <Input
+                label="Instance Token *"
+                required
+                type="password"
+                placeholder="Token da instância no painel da Z-API"
+                value={form.instanceToken}
+                onChange={(e) => setForm({ ...form, instanceToken: e.target.value })}
+              />
+              <Input
+                label="Client-Token (opcional)"
+                type="password"
+                placeholder="Só se você ativou a segurança por Account Security Token"
+                value={form.clientToken}
+                onChange={(e) => setForm({ ...form, clientToken: e.target.value })}
+              />
+              <div className="p-3 bg-emerald-950/40 border border-emerald-800/50 rounded-xl text-[11px] text-emerald-300">
+                As credenciais são validadas direto com a Z-API (checa se o dispositivo está conectado) e criptografadas antes de salvar.
+              </div>
+              <div className="p-3 bg-amber-950/40 border border-amber-800/50 rounded-xl text-[11px] text-amber-300">
+                Risco de banimento do número pelo WhatsApp — automação não-oficial do WhatsApp Web, terceirizada pra Z-API.
+              </div>
+            </>
           )}
 
           <div className="flex justify-end gap-2 pt-2">

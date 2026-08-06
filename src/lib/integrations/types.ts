@@ -6,14 +6,16 @@ export interface OutgoingMessagePayload {
   recipientExternalId: string
   content: string
   mediaUrl?: string
-  /** Cloud API only: decrypted access token for this specific connection. */
+  /** Cloud API: decrypted access token. Z-API: decrypted Instance Token. */
   accessToken?: string
-  /** Cloud API only: our phone_number_id (WhatsApp) or Page ID (Instagram) sending the message. */
+  /** Cloud API: our phone_number_id/Page ID. Z-API: our Instance ID. */
   fromExternalId?: string
+  /** Z-API only: decrypted account-level Client-Token (optional security feature). */
+  secondaryToken?: string
 }
 
 export interface IncomingWebhookEvent {
-  provider: 'whatsapp_meta' | 'instagram_meta'
+  provider: 'whatsapp_meta' | 'whatsapp_zapi' | 'instagram_meta'
   externalEventId: string
   eventType: string
   senderId: string
