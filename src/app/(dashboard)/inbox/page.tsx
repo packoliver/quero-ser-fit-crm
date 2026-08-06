@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import {
   Search,
   Send,
@@ -28,6 +28,37 @@ import { EmptyState } from '@/components/ui/EmptyState'
 import { createClient } from '@/lib/supabase/client'
 import { useDemoStorage } from '@/lib/demo/useDemoStorage'
 
+interface UiMessage {
+  id: string
+  senderType: 'contact' | 'user' | 'system'
+  senderName: string
+  content: string
+  time: string
+}
+
+interface UiConversation {
+  id: string
+  contactName: string
+  contactPhone: string
+  channel: 'whatsapp' | 'instagram'
+  lastMessage: string
+  lastMessageTime: string
+  status: 'open' | 'assigned' | 'closed' | 'archived'
+  currentAssigneeId: string | null
+  currentAssigneeName: string | null
+  tags: string[]
+  notes: Array<{ id: string; author: string; text: string; date: string }>
+  messages: UiMessage[]
+}
+
+interface RealTeamMember {
+  id: string
+  fullName: string
+}
+
+const formatTime = (iso: string) =>
+  new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+
 export default function InboxPage() {
   const {
     conversations: storedConversations,
@@ -39,6 +70,12 @@ export default function InboxPage() {
   const [viewMode, setViewMode] = useState<'demo' | 'real'>(
     process.env.NEXT_PUBLIC_ENABLE_DEMO_MODE === 'true' ? 'demo' : 'real'
   )
+
+  // Real-mode data
+  const [realConversations, setRealConversations] = useState<UiConversation[]>([])
+  const [loadingReal, setLoadingReal] = useState(false)
+  const [realTeamMembers, setRealTeamMembers] = useState<RealTeamMember[]>([])
+  const [currentUserRealId, setCurrentUserRealId] = useState<string | null>(null)
 
   // Filters State
   const [selectedConvId, setSelectedConvId] = useState<string>('conv-1')
@@ -59,14 +96,137 @@ export default function InboxPage() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
   const currentUserId = 'att-1'
-  const conversations = storedConversations
 
+  const conversations: UiConversation[] = viewMode === 'real' ? realConversations : storedConversations
   const selectedConversation = conversations.find((c) => c.id === selectedConvId)
 
   const showToast = (msg: string) => {
     setToastMessage(msg)
     setTimeout(() => setToastMessage(null), 3500)
   }
+
+  // Fetch real conversations, their messages/notes, and who's currently logged in.
+  const fetchRealData = useCallback(async () => {
+    setLoadingReal(true)
+    try {
+      const supabase = createClient()
+      const typed = supabase as unknown as {
+        auth: { getUser: () => Promise<{ data: { user: { id: string } | null } }> }
+        from: (t: string) => {
+          select: (c: string) => {
+            order?: (col: string, opt: { ascending: boolean }) => Promise<{ data: unknown[] | null; error: unknown }>
+            eq?: (col: string, val: string) => { limit: (n: number) => { maybeSingle: () => Promise<{ data: unknown }> } }
+          } & Promise<{ data: unknown[] | null; error: unknown }>
+        }
+      }
+
+      const {
+        data: { user },
+      } = await typed.auth.getUser()
+      setCurrentUserRealId(user?.id || null)
+
+      const [convRes, msgRes, noteRes, membersRes] = await Promise.all([
+        typed
+          .from('conversations')
+          .select('id, status, channel_type, current_assignee_id, last_message_at, contact_id, contacts(name, phone), profiles(full_name)')
+          .order!('last_message_at', { ascending: false }),
+        typed.from('messages').select('id, conversation_id, sender_type, sender_id, content, created_at').order!('created_at', { ascending: true }),
+        typed.from('internal_notes').select('id, conversation_id, content, created_at, author_id, profiles(full_name)').order!('created_at', { ascending: false }),
+        typed.from('organization_members').select('user_id, profiles(full_name)').order!('created_at', { ascending: true }),
+      ])
+
+      const convData = (convRes.data || []) as Array<{
+        id: string
+        status: UiConversation['status']
+        channel_type: 'whatsapp' | 'instagram'
+        current_assignee_id: string | null
+        last_message_at: string
+        contact_id: string
+        contacts: { name: string | null; phone: string | null } | null
+        profiles: { full_name: string | null } | null
+      }>
+      const msgData = (msgRes.data || []) as Array<{
+        id: string
+        conversation_id: string
+        sender_type: 'contact' | 'user' | 'system'
+        sender_id: string | null
+        content: string
+        created_at: string
+      }>
+      const noteData = (noteRes.data || []) as Array<{
+        id: string
+        conversation_id: string
+        content: string
+        created_at: string
+        profiles: { full_name: string | null } | null
+      }>
+      const membersData = (membersRes.data || []) as Array<{
+        user_id: string
+        profiles: { full_name: string | null } | null
+      }>
+
+      setRealTeamMembers(membersData.map((m) => ({ id: m.user_id, fullName: m.profiles?.full_name || 'Membro' })))
+
+      const built: UiConversation[] = convData.map((conv) => {
+        const msgs = msgData
+          .filter((m) => m.conversation_id === conv.id)
+          .map<UiMessage>((m) => ({
+            id: m.id,
+            senderType: m.sender_type,
+            senderName:
+              m.sender_type === 'contact'
+                ? conv.contacts?.name || 'Cliente'
+                : m.sender_type === 'system'
+                ? 'Sistema'
+                : m.sender_id === user?.id
+                ? 'Você'
+                : membersData.find((mm) => mm.user_id === m.sender_id)?.profiles?.full_name || 'Atendente',
+            content: m.content,
+            time: formatTime(m.created_at),
+          }))
+
+        const notes = noteData
+          .filter((n) => n.conversation_id === conv.id)
+          .map((n) => ({
+            id: n.id,
+            author: n.profiles?.full_name || 'Equipe',
+            text: n.content,
+            date: new Date(n.created_at).toLocaleDateString('pt-BR'),
+          }))
+
+        const lastMsg = msgs[msgs.length - 1]
+
+        return {
+          id: conv.id,
+          contactName: conv.contacts?.name || 'Contato',
+          contactPhone: conv.contacts?.phone || '-',
+          channel: conv.channel_type,
+          lastMessage: lastMsg?.content || '(sem mensagens)',
+          lastMessageTime: lastMsg?.time || formatTime(conv.last_message_at),
+          status: conv.status,
+          currentAssigneeId: conv.current_assignee_id,
+          currentAssigneeName: conv.profiles?.full_name || null,
+          tags: [],
+          notes,
+          messages: msgs,
+        }
+      })
+
+      setRealConversations(built)
+    } catch {
+      setErrorMessage('Falha ao carregar conversas reais do Supabase.')
+    } finally {
+      setLoadingReal(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (viewMode !== 'real') return
+    const timer = setTimeout(() => {
+      void fetchRealData()
+    }, 0)
+    return () => clearTimeout(timer)
+  }, [viewMode, fetchRealData])
 
   // Handle Assume Conversation
   const handleAssume = async (convId: string) => {
@@ -85,12 +245,12 @@ export default function InboxPage() {
         }
 
         showToast('Conversa assumida com sucesso via RPC atômica!')
+        fetchRealData()
       } catch {
         setErrorMessage('Erro ao executar a atribuição no Supabase.')
         return
       }
     } else {
-      // Modo Demo Storage Adapter
       const currentUser = demoAttendants.find((a) => a.id === currentUserId)
       updateAssignee(convId, currentUserId, currentUser?.fullName || 'Você')
       showToast('Atendimento assumido!')
@@ -101,9 +261,9 @@ export default function InboxPage() {
   const handleTransfer = async () => {
     if (!selectedConversation) return
     setErrorMessage(null)
-    const targetAttendant = demoAttendants.find((a) => a.id === targetAttendantId)
 
     if (viewMode === 'real') {
+      const targetMember = realTeamMembers.find((m) => m.id === targetAttendantId)
       try {
         const supabase = createClient()
         const { data: success, error: rpcError } = await (supabase as unknown as {
@@ -119,11 +279,13 @@ export default function InboxPage() {
           return
         }
 
-        showToast(`Conversa transferida para ${targetAttendant?.fullName}`)
+        showToast(`Conversa transferida para ${targetMember?.fullName || 'o membro selecionado'}`)
+        fetchRealData()
       } catch {
         setErrorMessage('Erro na transferência.')
       }
     } else {
+      const targetAttendant = demoAttendants.find((a) => a.id === targetAttendantId)
       updateAssignee(selectedConversation.id, targetAttendantId, targetAttendant?.fullName || 'Atendente')
       showToast(`Conversa transferida para ${targetAttendant?.fullName}`)
     }
@@ -131,8 +293,8 @@ export default function InboxPage() {
     setTransferModalOpen(false)
   }
 
-  // Handle Send Message with Anti-Double Click Loading & Simulated Client Auto-Reply
-  const handleSendMessage = (e: React.FormEvent) => {
+  // Handle Send Message
+  const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!newMessageText.trim() || !selectedConversation || isSendingMessage) return
 
@@ -140,29 +302,43 @@ export default function InboxPage() {
     setNewMessageText('')
     setIsSendingMessage(true)
 
-    // Save outgoing message
-    addMessage(selectedConversation.id, textToSend, 'user', 'Patricia Silva (Você)')
-
-    if (viewMode === 'demo') {
-      // Simulate client response after 2.5 seconds
-      const targetId = selectedConversation.id
-      const clientName = selectedConversation.contactName
-
-      setTimeout(() => {
+    if (viewMode === 'real') {
+      try {
+        const res = await fetch('/api/messages/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ conversationId: selectedConversation.id, content: textToSend }),
+        })
+        const body = await res.json()
+        if (!res.ok) {
+          setErrorMessage(body.error || 'Falha ao enviar mensagem.')
+        }
+        fetchRealData()
+      } catch {
+        setErrorMessage('Erro de conexão ao enviar mensagem.')
+      } finally {
         setIsSendingMessage(false)
-        const replies = [
-          'Certo, entendi! Obrigado pelas informações.',
-          'Perfeito! Vou verificar os detalhes e te respondo por aqui.',
-          'Muito obrigada pelo atendimento rápido! Gostei bastante.',
-          'Excelente! Já escolhi as marmitas fit.',
-        ]
-        const randomReply = replies[Math.floor(Math.random() * replies.length)]
-        addMessage(targetId, randomReply, 'contact', clientName)
-        showToast(`Nova resposta recebida de ${clientName}`)
-      }, 2500)
-    } else {
-      setIsSendingMessage(false)
+      }
+      return
     }
+
+    // Demo mode
+    addMessage(selectedConversation.id, textToSend, 'user', 'Patricia Silva (Você)')
+    const targetId = selectedConversation.id
+    const clientName = selectedConversation.contactName
+
+    setTimeout(() => {
+      setIsSendingMessage(false)
+      const replies = [
+        'Certo, entendi! Obrigado pelas informações.',
+        'Perfeito! Vou verificar os detalhes e te respondo por aqui.',
+        'Muito obrigada pelo atendimento rápido! Gostei bastante.',
+        'Excelente! Já escolhi as marmitas fit.',
+      ]
+      const randomReply = replies[Math.floor(Math.random() * replies.length)]
+      addMessage(targetId, randomReply, 'contact', clientName)
+      showToast(`Nova resposta recebida de ${clientName}`)
+    }, 2500)
   }
 
   // Handle Add Internal Note
@@ -173,9 +349,9 @@ export default function InboxPage() {
     if (viewMode === 'real') {
       try {
         const supabase = createClient()
-        await (supabase as unknown as {
+        const { error } = await (supabase as unknown as {
           from: (t: string) => {
-            insert: (d: unknown) => Promise<unknown>
+            insert: (d: unknown) => Promise<{ error: { message: string } | null }>
           }
         })
           .from('internal_notes')
@@ -183,9 +359,18 @@ export default function InboxPage() {
             conversation_id: selectedConversation.id,
             content: newNoteText,
           })
+
+        if (error) {
+          setErrorMessage('Falha ao salvar nota interna no Supabase.')
+          return
+        }
+        showToast('Nota interna privada registrada.')
+        setNewNoteText('')
+        fetchRealData()
       } catch {
-        // Fallback ui
+        setErrorMessage('Erro ao salvar nota interna.')
       }
+      return
     }
 
     addInternalNote(selectedConversation.id, newNoteText, 'Patricia Silva')
@@ -195,21 +380,15 @@ export default function InboxPage() {
 
   // Apply Queue, Channel, and Search Filters
   const filteredConversations = conversations.filter((c) => {
-    // Queue Filter
-    const isMine = c.currentAssigneeId === currentUserId || c.currentAssigneeId === 'att-1'
+    const effectiveCurrentUserId = viewMode === 'real' ? currentUserRealId : currentUserId
+    const isMine = c.currentAssigneeId === effectiveCurrentUserId
     const isUnassigned = !c.currentAssigneeId || c.status === 'open'
 
     const matchesQueue =
-      filterQueue === 'all'
-        ? true
-        : filterQueue === 'mine'
-        ? isMine
-        : isUnassigned
+      filterQueue === 'all' ? true : filterQueue === 'mine' ? isMine : isUnassigned
 
-    // Channel Filter
     const matchesChannel = filterChannel === 'all' || c.channel === filterChannel
 
-    // Search Query Filter
     const matchesSearch =
       c.contactName.toLowerCase().includes(searchQuery.toLowerCase()) ||
       c.contactPhone.includes(searchQuery) ||
@@ -218,10 +397,13 @@ export default function InboxPage() {
     return matchesQueue && matchesChannel && matchesSearch
   })
 
+  const effectiveCurrentUserId = viewMode === 'real' ? currentUserRealId : currentUserId
   const isHandledByOther =
     selectedConversation &&
     selectedConversation.currentAssigneeId &&
-    selectedConversation.currentAssigneeId !== currentUserId
+    selectedConversation.currentAssigneeId !== effectiveCurrentUserId
+
+  const transferOptions = viewMode === 'real' ? realTeamMembers.map((m) => ({ id: m.id, fullName: m.fullName })) : demoAttendants
 
   return (
     <div className="flex flex-col h-[calc(100vh-4rem)] bg-[#0b1320] text-slate-100 overflow-hidden relative">
@@ -242,8 +424,9 @@ export default function InboxPage() {
             <>
               <Database className="w-4 h-4 text-emerald-400" />
               <span className="font-semibold text-emerald-200 uppercase tracking-wide">
-                Atribuições e Notas Conectadas ao Supabase
+                Conversas Conectadas ao Supabase
               </span>
+              {loadingReal && <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-400" />}
             </>
           )}
         </div>
@@ -257,7 +440,7 @@ export default function InboxPage() {
                   viewMode === 'real' ? 'bg-emerald-600 text-white font-semibold' : 'text-slate-400'
                 }`}
               >
-                Supabase RPC
+                Supabase Real
               </button>
               <button
                 onClick={() => setViewMode('demo')}
@@ -365,7 +548,11 @@ export default function InboxPage() {
                 <EmptyState
                   icon={<Search className="w-5 h-5" />}
                   title="Nenhuma conversa"
-                  description="Ajuste a busca ou troque o filtro de fila/canal."
+                  description={
+                    viewMode === 'real'
+                      ? 'Nenhuma conversa real ainda. Elas aparecem aqui assim que uma mensagem chegar por uma conexão configurada.'
+                      : 'Ajuste a busca ou troque o filtro de fila/canal.'
+                  }
                 />
               </div>
             ) : (
@@ -436,7 +623,7 @@ export default function InboxPage() {
               </div>
 
               <div className="flex items-center gap-2 shrink-0">
-                {selectedConversation.currentAssigneeId !== currentUserId && (
+                {selectedConversation.currentAssigneeId !== effectiveCurrentUserId && (
                   <Button onClick={() => handleAssume(selectedConversation.id)} size="sm" variant="primary">
                     <UserPlus className="w-3.5 h-3.5" />
                     <span>Assumir</span>
@@ -504,7 +691,9 @@ export default function InboxPage() {
                 <div className="flex justify-start my-2">
                   <div className="bg-slate-900 border border-slate-800 px-3.5 py-2 rounded-2xl text-slate-400 text-xs flex items-center gap-2">
                     <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-400" />
-                    <span>{selectedConversation.contactName} está digitando uma resposta...</span>
+                    <span>
+                      {viewMode === 'real' ? 'Enviando...' : `${selectedConversation.contactName} está digitando uma resposta...`}
+                    </span>
                   </div>
                 </div>
               )}
@@ -583,11 +772,15 @@ export default function InboxPage() {
                 <div>
                   <h3 className="text-slate-400 uppercase font-semibold text-[10px] tracking-wider mb-2">Tags</h3>
                   <div className="flex flex-wrap gap-1.5">
-                    {selectedConversation.tags.map((t, idx) => (
-                      <Badge key={idx} variant="emerald" icon={<Tag className="w-3 h-3" />}>
-                        {t}
-                      </Badge>
-                    ))}
+                    {selectedConversation.tags.length === 0 ? (
+                      <span className="text-slate-500 text-[11px]">Nenhuma tag.</span>
+                    ) : (
+                      selectedConversation.tags.map((t, idx) => (
+                        <Badge key={idx} variant="emerald" icon={<Tag className="w-3 h-3" />}>
+                          {t}
+                        </Badge>
+                      ))
+                    )}
                   </div>
                 </div>
               </div>
@@ -649,9 +842,9 @@ export default function InboxPage() {
             onChange={(e) => setTargetAttendantId(e.target.value)}
             className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
           >
-            {demoAttendants.map((att) => (
+            {transferOptions.map((att) => (
               <option key={att.id} value={att.id}>
-                {att.fullName} ({att.role === 'admin' ? 'Admin' : 'Atendente'})
+                {att.fullName}
               </option>
             ))}
           </select>
