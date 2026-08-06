@@ -38,6 +38,16 @@ export interface RealTask {
   created_at: string
 }
 
+const safeToISOString = (dateVal: string | null | undefined): string | null => {
+  if (!dateVal || !dateVal.trim()) return null
+  try {
+    const parsed = new Date(dateVal)
+    return isNaN(parsed.getTime()) ? null : parsed.toISOString()
+  } catch {
+    return null
+  }
+}
+
 export default function TarefasPage() {
   const {
     tasks: storedDemoTasks,
@@ -189,7 +199,7 @@ export default function TarefasPage() {
           .insert({
             title: newTask.title,
             description: newTask.description || null,
-            due_date: newTask.dueDate ? new Date(newTask.dueDate).toISOString() : null,
+            due_date: safeToISOString(newTask.dueDate),
             status: 'pending',
             priority: newTask.priority,
           })
@@ -275,7 +285,7 @@ export default function TarefasPage() {
           .update({
             title: editTaskData.title,
             description: editTaskData.description || null,
-            due_date: editTaskData.dueDate ? new Date(editTaskData.dueDate).toISOString() : null,
+            due_date: safeToISOString(editTaskData.dueDate),
             priority: editTaskData.priority,
           })
           .eq('id', editTaskData.id)
@@ -292,7 +302,7 @@ export default function TarefasPage() {
                   ...t,
                   title: editTaskData.title,
                   description: editTaskData.description || null,
-                  due_date: editTaskData.dueDate ? new Date(editTaskData.dueDate).toISOString() : null,
+                  due_date: safeToISOString(editTaskData.dueDate),
                   priority: editTaskData.priority,
                 }
               : t

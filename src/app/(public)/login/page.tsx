@@ -153,27 +153,38 @@ export default function LoginPage() {
           <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
           <span>Contas de demonstração rápida:</span>
         </p>
-        <div className="grid grid-cols-2 gap-2 text-[11px]">
+        <div className="grid grid-cols-3 gap-1.5 text-[11px]">
           <button
             type="button"
-            onClick={() => handleDemoFill('admin@queroserfit.com.br')}
-            className="p-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-200 flex flex-col items-center gap-1 transition"
+            onClick={() => handleDemoFill('comercial@queroserfit.com')}
+            className="p-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-200 flex flex-col items-center gap-1 transition"
           >
             <span className="font-semibold text-emerald-400 flex items-center gap-1">
               <CheckCircle2 className="w-3 h-3" /> Admin
             </span>
-            <span className="text-[10px] text-slate-400 truncate max-w-full">admin@queroserfit.com.br</span>
+            <span className="text-[10px] text-slate-400 truncate max-w-full">comercial@...</span>
           </button>
 
           <button
             type="button"
-            onClick={() => handleDemoFill('atendente@queroserfit.com.br')}
-            className="p-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-200 flex flex-col items-center gap-1 transition"
+            onClick={() => handleDemoFill('gerente@queroserfit.com.br')}
+            className="p-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-200 flex flex-col items-center gap-1 transition"
+          >
+            <span className="font-semibold text-indigo-400 flex items-center gap-1">
+              <CheckCircle2 className="w-3 h-3" /> Gerente
+            </span>
+            <span className="text-[10px] text-slate-400 truncate max-w-full">gerente@...</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => handleDemoFill('carlos@queroserfit.com.br')}
+            className="p-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-200 flex flex-col items-center gap-1 transition"
           >
             <span className="font-semibold text-teal-400 flex items-center gap-1">
               <CheckCircle2 className="w-3 h-3" /> Atendente
             </span>
-            <span className="text-[10px] text-slate-400 truncate max-w-full">atendente@queroserfit.com.br</span>
+            <span className="text-[10px] text-slate-400 truncate max-w-full">carlos@...</span>
           </button>
         </div>
       </div>
