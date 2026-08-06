@@ -11,6 +11,7 @@ import {
   QrCode,
   Cloud,
   Loader2,
+  RefreshCw,
 } from 'lucide-react'
 import { InstagramIcon as Instagram } from '@/components/icons/InstagramIcon'
 import { Badge } from '@/components/ui/Badge'
@@ -39,6 +40,7 @@ export default function IntegracoesConfigPage() {
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
 
+  const [verifyingId, setVerifyingId] = useState<string | null>(null)
   const [modalOpen, setModalOpen] = useState(false)
   const [saving, setSaving] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
@@ -176,6 +178,28 @@ export default function IntegracoesConfigPage() {
     }
   }
 
+  const handleVerify = async (conn: Connection) => {
+    setVerifyingId(conn.id)
+    try {
+      const res = await fetch(`/api/integrations/connections/${conn.id}/verify`, { method: 'POST' })
+      const body = await res.json()
+      if (!res.ok) {
+        showToast(body.error || 'Falha ao reverificar conexão.')
+        return
+      }
+      if (body.connection?.status === 'active') {
+        showToast(body.warning ? `Conexão "${conn.label}" ativa! ${body.warning}` : `Conexão "${conn.label}" está ativa!`)
+      } else {
+        showToast(body.warning || `Conexão "${conn.label}" ainda não confirmada.`)
+      }
+      fetchConnections()
+    } catch {
+      showToast('Erro de conexão ao reverificar.')
+    } finally {
+      setVerifyingId(null)
+    }
+  }
+
   const providerLabel = (p: Provider) => (p === 'instagram_meta' ? 'Instagram' : 'WhatsApp')
 
   return (
@@ -258,13 +282,25 @@ export default function IntegracoesConfigPage() {
                 <span className="text-[11px] text-slate-500">
                   Criada em {new Date(conn.created_at).toLocaleDateString('pt-BR')}
                 </span>
-                <button
-                  onClick={() => handleDelete(conn)}
-                  className="p-1.5 rounded-lg bg-slate-900 hover:bg-rose-950/60 border border-slate-700 hover:border-rose-800 text-slate-400 hover:text-rose-400 transition"
-                  title="Remover conexão"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
+                <div className="flex items-center gap-1.5">
+                  {conn.status !== 'active' && (
+                    <button
+                      onClick={() => handleVerify(conn)}
+                      disabled={verifyingId === conn.id}
+                      className="p-1.5 rounded-lg bg-slate-900 hover:bg-emerald-950/60 border border-slate-700 hover:border-emerald-800 text-slate-400 hover:text-emerald-400 transition disabled:opacity-50"
+                      title="Reverificar conexão (usa a credencial já salva)"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${verifyingId === conn.id ? 'animate-spin' : ''}`} />
+                    </button>
+                  )}
+                  <button
+                    onClick={() => handleDelete(conn)}
+                    className="p-1.5 rounded-lg bg-slate-900 hover:bg-rose-950/60 border border-slate-700 hover:border-rose-800 text-slate-400 hover:text-rose-400 transition"
+                    title="Remover conexão"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
               </CardBody>
             </Card>
           ))}

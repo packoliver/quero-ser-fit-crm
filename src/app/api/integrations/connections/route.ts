@@ -3,8 +3,7 @@ import { createConnectionSchema } from '@/lib/validations'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { encryptToken } from '@/lib/security/encryption'
-import { getServerEnv } from '@/lib/env'
-import { ZAPAPI_BASE_URL } from '@/lib/integrations/zapapi-whatsapp'
+import { verifyCloudApiConnection, verifyZapApiConnection } from '@/lib/integrations/verify-connection'
 
 interface ConnectionRow {
   id: string
@@ -142,19 +141,7 @@ export async function POST(request: NextRequest) {
 
   if (input.connectionMethod === 'cloud_api') {
     // Validate the token/identifier actually work against Meta's Graph API before saving.
-    let verifyOk = false
-    let verifyDetail = ''
-    try {
-      const verifyRes = await fetch(
-        `https://graph.facebook.com/v20.0/${encodeURIComponent(input.externalIdentifier)}?fields=id`,
-        { headers: { Authorization: `Bearer ${input.accessToken}` } }
-      )
-      const verifyBody = await verifyRes.json().catch(() => ({}))
-      verifyOk = verifyRes.ok
-      verifyDetail = verifyOk ? '' : verifyBody?.error?.message || `HTTP ${verifyRes.status}`
-    } catch (err) {
-      verifyDetail = err instanceof Error ? err.message : 'Falha de rede ao validar com a Meta.'
-    }
+    const { ok: verifyOk, detail: verifyDetail } = await verifyCloudApiConnection(input.externalIdentifier, input.accessToken)
 
     const { data: inserted, error: insertError } = await adminDb
       .from('integration_connections')
@@ -193,46 +180,11 @@ export async function POST(request: NextRequest) {
   // zapapi: validate the Instance ID/Token against zap-api.tech's own status endpoint,
   // then auto-register our webhook URL on that instance (signed with our shared secret)
   // so the admin doesn't have to configure anything manually on zap-api.tech's side.
-  let zapapiOk = false
-  let zapapiDetail = ''
-  try {
-    const statusRes = await fetch(`${ZAPAPI_BASE_URL}/instances/${encodeURIComponent(input.instanceId)}/status`, {
-      headers: { Authorization: `Bearer ${input.instanceToken}` },
-    })
-    const statusBody = await statusRes.json().catch(() => ({}))
-    zapapiOk = statusRes.ok && statusBody?.connected === true
-    zapapiDetail = zapapiOk
-      ? ''
-      : statusBody?.message || statusBody?.error || `HTTP ${statusRes.status} — instância não conectada ou credenciais inválidas`
-  } catch (err) {
-    zapapiDetail = err instanceof Error ? err.message : 'Falha de rede ao validar com a ZAP API.'
-  }
-
-  const env = getServerEnv()
-  let webhookWarning: string | undefined
-  if (zapapiOk) {
-    if (!env.ZAPAPI_WEBHOOK_SECRET) {
-      webhookWarning = 'Conexão validada, mas ZAPAPI_WEBHOOK_SECRET não está configurada no servidor — o webhook não foi registrado automaticamente.'
-    } else {
-      try {
-        const webhookUrl = `${request.nextUrl.origin}/api/webhooks/zapapi`
-        const registerRes = await fetch(
-          `${ZAPAPI_BASE_URL}/instances/${encodeURIComponent(input.instanceId)}/webhook`,
-          {
-            method: 'PUT',
-            headers: { Authorization: `Bearer ${input.instanceToken}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ url: webhookUrl, events: ['message.received'], secret: env.ZAPAPI_WEBHOOK_SECRET }),
-          }
-        )
-        if (!registerRes.ok) {
-          const registerBody = await registerRes.json().catch(() => ({}))
-          webhookWarning = `Conexão validada, mas falhou ao registrar o webhook automaticamente na ZAP API: ${registerBody?.message || registerBody?.error || `HTTP ${registerRes.status}`}.`
-        }
-      } catch (err) {
-        webhookWarning = `Conexão validada, mas falhou ao registrar o webhook automaticamente: ${err instanceof Error ? err.message : 'erro de rede'}.`
-      }
-    }
-  }
+  const { ok: zapapiOk, detail: zapapiDetail, webhookWarning } = await verifyZapApiConnection(
+    input.instanceId,
+    input.instanceToken,
+    request.nextUrl.origin
+  )
 
   const { data: inserted, error: insertError } = await adminDb
     .from('integration_connections')
