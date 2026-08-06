@@ -116,7 +116,7 @@ $$;
 CREATE OR REPLACE FUNCTION public.update_member_role_safe(
     p_org_id UUID,
     p_target_user_id UUID,
-    p_new_role public.user_role
+    p_new_role TEXT
 )
 RETURNS BOOLEAN
 LANGUAGE plpgsql SECURITY DEFINER
@@ -125,7 +125,7 @@ AS $$
 DECLARE
     v_caller_id UUID;
     v_is_caller_admin BOOLEAN;
-    v_current_target_role public.user_role;
+    v_current_target_role TEXT;
     v_active_admins_count INT;
 BEGIN
     v_caller_id := auth.uid();
@@ -172,9 +172,9 @@ $$;
 REVOKE EXECUTE ON FUNCTION public.normalize_phone(text) FROM PUBLIC, anon;
 REVOKE EXECUTE ON FUNCTION public.assume_conversation_atomic(UUID) FROM PUBLIC, anon;
 REVOKE EXECUTE ON FUNCTION public.transfer_conversation_atomic(UUID, UUID) FROM PUBLIC, anon;
-REVOKE EXECUTE ON FUNCTION public.update_member_role_safe(UUID, UUID, public.user_role) FROM PUBLIC, anon;
+REVOKE EXECUTE ON FUNCTION public.update_member_role_safe(UUID, UUID, TEXT) FROM PUBLIC, anon;
 
 GRANT EXECUTE ON FUNCTION public.normalize_phone(text) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.assume_conversation_atomic(UUID) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.transfer_conversation_atomic(UUID, UUID) TO authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public.update_member_role_safe(UUID, UUID, public.user_role) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.update_member_role_safe(UUID, UUID, TEXT) TO authenticated, service_role;
