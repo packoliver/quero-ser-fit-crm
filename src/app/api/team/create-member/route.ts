@@ -12,6 +12,17 @@ import { createAdminClient } from '@/lib/supabase/admin'
  * account menu if they want to.
  */
 export async function POST(request: NextRequest) {
+  try {
+    return await handlePost(request)
+  } catch (err) {
+    return NextResponse.json(
+      { error: err instanceof Error ? `Erro inesperado: ${err.message}` : 'Erro inesperado ao cadastrar membro.' },
+      { status: 500 }
+    )
+  }
+}
+
+async function handlePost(request: NextRequest) {
   let body: unknown
   try {
     body = await request.json()
@@ -112,7 +123,7 @@ export async function POST(request: NextRequest) {
 
   if (profileError) {
     await admin.auth.admin.deleteUser(newUserId)
-    return NextResponse.json({ error: 'Falha ao criar o perfil do membro.' }, { status: 500 })
+    return NextResponse.json({ error: `Falha ao criar o perfil do membro: ${profileError.message}` }, { status: 500 })
   }
 
   const { error: memberError } = await admin.from('organization_members').insert({
@@ -124,7 +135,7 @@ export async function POST(request: NextRequest) {
 
   if (memberError) {
     await admin.auth.admin.deleteUser(newUserId)
-    return NextResponse.json({ error: 'Falha ao vincular o membro à organização.' }, { status: 500 })
+    return NextResponse.json({ error: `Falha ao vincular o membro à organização: ${memberError.message}` }, { status: 500 })
   }
 
   return NextResponse.json(

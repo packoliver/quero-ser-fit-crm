@@ -45,6 +45,17 @@ type TypedSupabase = {
 }
 
 export async function POST(request: NextRequest) {
+  try {
+    return await handlePost(request)
+  } catch (err) {
+    return NextResponse.json(
+      { error: err instanceof Error ? `Erro inesperado: ${err.message}` : 'Erro inesperado ao enviar mensagem.' },
+      { status: 500 }
+    )
+  }
+}
+
+async function handlePost(request: NextRequest) {
   let body: unknown
   try {
     body = await request.json()
