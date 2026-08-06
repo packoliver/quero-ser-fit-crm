@@ -46,10 +46,40 @@ export const taskSchema = z.object({
   contactId: z.string().uuid().optional().or(z.literal('')),
 })
 
-export const memberInviteSchema = z.object({
+export const memberCreateSchema = z.object({
   email: z.string().email('E-mail inválido'),
   fullName: z.string().min(2, 'Nome deve ter no mínimo 2 caracteres'),
-  role: z.enum(['admin', 'attendant']),
+  role: z.enum(['admin', 'manager', 'attendant']),
+  password: z
+    .string()
+    .min(8, 'A senha temporária deve ter pelo menos 8 caracteres')
+    .max(72, 'A senha temporária deve ter no máximo 72 caracteres'),
+})
+
+export const createConnectionSchema = z.discriminatedUnion('connectionMethod', [
+  z.object({
+    connectionMethod: z.literal('cloud_api'),
+    provider: z.enum(['whatsapp_meta', 'instagram_meta']),
+    label: z.string().min(2, 'Dê um nome pra essa conexão (ex: Loja Centro)').max(60),
+    externalIdentifier: z
+      .string()
+      .min(3, 'Informe o Phone Number ID (WhatsApp) ou Page ID (Instagram)'),
+    accessToken: z.string().min(20, 'Token de acesso inválido ou incompleto'),
+  }),
+  z.object({
+    connectionMethod: z.literal('zapapi'),
+    provider: z.literal('whatsapp_zapapi'),
+    label: z.string().min(2, 'Dê um nome pra essa conexão (ex: Loja Centro)').max(60),
+    instanceId: z.string().min(3, 'Informe o Instance ID da ZAP API'),
+    instanceToken: z.string().min(10, 'Informe o Instance Token da ZAP API'),
+  }),
+])
+
+export const changePasswordSchema = z.object({
+  password: z
+    .string()
+    .min(8, 'A nova senha deve ter pelo menos 8 caracteres')
+    .max(72, 'A nova senha deve ter no máximo 72 caracteres'),
 })
 
 export type LoginInput = z.infer<typeof loginSchema>
@@ -57,4 +87,5 @@ export type RecoverPasswordInput = z.infer<typeof recoverPasswordSchema>
 export type ContactInput = z.infer<typeof contactSchema>
 export type TransferConversationInput = z.infer<typeof transferConversationSchema>
 export type TaskInput = z.infer<typeof taskSchema>
-export type MemberInviteInput = z.infer<typeof memberInviteSchema>
+export type MemberCreateInput = z.infer<typeof memberCreateSchema>
+export type ChangePasswordInput = z.infer<typeof changePasswordSchema>

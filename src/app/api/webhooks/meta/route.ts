@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { MetaWhatsAppProvider } from '@/lib/integrations/whatsapp-meta'
 import { MetaInstagramProvider } from '@/lib/integrations/instagram-meta'
-import { createClient } from '@/lib/supabase/server'
-import { Json } from '@/types/database'
+import { processInboundEvents } from '@/lib/integrations/persist-event'
+import { createAdminClient } from '@/lib/supabase/admin'
 import { getServerEnv } from '@/lib/env'
 import { timingSafeEqualString, verifyMetaHmacSignature } from '@/lib/security/webhook'
 import { z } from 'zod'
@@ -26,7 +26,6 @@ export async function GET(request: NextRequest) {
 
   const env = getServerEnv()
 
-  // Se o token de verificação da Meta não estiver configurado no ambiente, desabilitar a rota com erro controlado 503
   if (!env.META_WEBHOOK_VERIFY_TOKEN) {
     return NextResponse.json(
       { error: 'Serviço de webhook temporariamente indisponível.' },
@@ -49,13 +48,16 @@ export async function GET(request: NextRequest) {
 
 /**
  * POST Handler para recepção de eventos de Webhook da Meta.
- * Processamento defensivo com validação HMAC SHA-256 e suporte a ausência de chaves da Meta sem causar 500.
+ *
+ * Uses the service-role admin client (not the cookie-based user client) because Meta
+ * calls this endpoint server-to-server with no logged-in user session — under the
+ * regular client this request has the Postgres `anon` role, which (correctly) has no
+ * write access to these tables.
  */
 export async function POST(request: NextRequest) {
   try {
     const env = getServerEnv()
 
-    // Se o segredo do aplicativo Meta não estiver configurado no ambiente, desabilitar a rota com erro controlado 503
     if (!env.META_APP_SECRET) {
       return NextResponse.json(
         { error: 'Serviço de webhook temporariamente indisponível.' },
@@ -66,7 +68,6 @@ export async function POST(request: NextRequest) {
     const rawBody = await request.text()
     const signatureHeader = request.headers.get('x-hub-signature-256')
 
-    // Validação obrigatória da assinatura HMAC SHA-256 em tempo constante
     const isSignatureValid = verifyMetaHmacSignature(rawBody, signatureHeader, env.META_APP_SECRET)
     if (!isSignatureValid) {
       return NextResponse.json(
@@ -102,34 +103,16 @@ export async function POST(request: NextRequest) {
         ? whatsappProvider.parseWebhookPayload(jsonBody)
         : instagramProvider.parseWebhookPayload(jsonBody)
 
-    const supabase = await createClient()
-    const db = supabase as unknown as {
-      from: (table: string) => {
-        insert: (data: unknown) => Promise<{ error: { code?: string; message: string } | null }>
-      }
+    let admin
+    try {
+      admin = createAdminClient()
+    } catch {
+      // No SUPABASE_SERVICE_ROLE_KEY configured — accept the webhook (avoid Meta retry
+      // storms) but we can't persist anything without it.
+      return NextResponse.json({ status: 'accepted', processed: 0, warning: 'admin client unavailable' }, { status: 200 })
     }
 
-    let processedCount = 0
-
-    for (const event of events) {
-      // Inserção idempotente na tabela webhook_events
-      const { error: insertError } = await db.from('webhook_events').insert({
-        provider: event.provider,
-        external_event_id: event.externalEventId,
-        event_type: event.eventType,
-        payload: event.rawPayload as Json,
-        processed: true,
-        processed_at: new Date().toISOString(),
-      })
-
-      if (insertError) {
-        if (insertError.code === '23505') {
-          // Evento duplicado (idempotente) -> Sucesso sem duplicar dados
-          continue
-        }
-      }
-      processedCount++
-    }
+    const processedCount = await processInboundEvents(admin, events)
 
     return NextResponse.json(
       { status: 'success', processed: processedCount },

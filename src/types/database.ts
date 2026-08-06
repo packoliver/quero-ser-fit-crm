@@ -13,8 +13,9 @@ export type AssignmentStatus = 'active' | 'transferred' | 'released'
 export type SenderType = 'contact' | 'user' | 'system'
 export type MessageStatus = 'sent' | 'delivered' | 'read' | 'failed'
 export type TaskStatus = 'pending' | 'in_progress' | 'completed' | 'cancelled'
-export type IntegrationProvider = 'whatsapp_meta' | 'instagram_meta'
+export type IntegrationProvider = 'whatsapp_meta' | 'whatsapp_zapapi' | 'instagram_meta'
 export type IntegrationStatus = 'active' | 'inactive' | 'error'
+export type IntegrationConnectionMethod = 'cloud_api' | 'zapapi'
 
 export interface CustomPermissions {
   // Inbox / Atendimento
@@ -139,18 +140,22 @@ export interface Database {
           avatar_url: string | null
           status: 'active' | 'archived' | 'blocked'
           notes: string | null
+          tags: string[]
           created_at: string
           updated_at: string
         }
         Insert: {
           id?: string
-          organization_id: string
+          // Auto-filled from the caller's organization membership by a DB trigger when
+          // omitted — see trg_autofill_org_contacts in master_setup.sql.
+          organization_id?: string
           name: string
           email?: string | null
           phone?: string | null
           avatar_url?: string | null
           status?: 'active' | 'archived' | 'blocked'
           notes?: string | null
+          tags?: string[]
           created_at?: string
           updated_at?: string
         }
@@ -163,6 +168,7 @@ export interface Database {
           avatar_url?: string | null
           status?: 'active' | 'archived' | 'blocked'
           notes?: string | null
+          tags?: string[]
           created_at?: string
           updated_at?: string
         }
@@ -207,6 +213,7 @@ export interface Database {
           channel_type: ChannelType
           status: ConversationStatus
           current_assignee_id: string | null
+          integration_connection_id: string | null
           last_message_at: string
           created_at: string
           updated_at: string
@@ -218,6 +225,7 @@ export interface Database {
           channel_type: ChannelType
           status?: ConversationStatus
           current_assignee_id?: string | null
+          integration_connection_id?: string | null
           last_message_at?: string
           created_at?: string
           updated_at?: string
@@ -229,6 +237,7 @@ export interface Database {
           channel_type?: ChannelType
           status?: ConversationStatus
           current_assignee_id?: string | null
+          integration_connection_id?: string | null
           last_message_at?: string
           created_at?: string
           updated_at?: string
@@ -396,6 +405,7 @@ export interface Database {
           description: string | null
           due_date: string | null
           status: TaskStatus
+          priority: 'alta' | 'media' | 'baixa'
           assigned_to_id: string | null
           contact_id: string | null
           conversation_id: string | null
@@ -404,11 +414,14 @@ export interface Database {
         }
         Insert: {
           id?: string
-          organization_id: string
+          // Auto-filled from the caller's organization membership by a DB trigger when
+          // omitted — see trg_autofill_org_tasks in master_setup.sql.
+          organization_id?: string
           title: string
           description?: string | null
           due_date?: string | null
           status?: TaskStatus
+          priority?: 'alta' | 'media' | 'baixa'
           assigned_to_id?: string | null
           contact_id?: string | null
           conversation_id?: string | null
@@ -422,6 +435,7 @@ export interface Database {
           description?: string | null
           due_date?: string | null
           status?: TaskStatus
+          priority?: 'alta' | 'media' | 'baixa'
           assigned_to_id?: string | null
           contact_id?: string | null
           conversation_id?: string | null
@@ -469,6 +483,9 @@ export interface Database {
           id: string
           organization_id: string
           provider: IntegrationProvider
+          label: string
+          connection_method: IntegrationConnectionMethod
+          external_identifier: string | null
           status: IntegrationStatus
           encrypted_credentials: string | null
           settings: Json
@@ -479,6 +496,9 @@ export interface Database {
           id?: string
           organization_id: string
           provider: IntegrationProvider
+          label?: string
+          connection_method?: IntegrationConnectionMethod
+          external_identifier?: string | null
           status?: IntegrationStatus
           encrypted_credentials?: string | null
           settings?: Json
@@ -489,6 +509,9 @@ export interface Database {
           id?: string
           organization_id?: string
           provider?: IntegrationProvider
+          label?: string
+          connection_method?: IntegrationConnectionMethod
+          external_identifier?: string | null
           status?: IntegrationStatus
           encrypted_credentials?: string | null
           settings?: Json

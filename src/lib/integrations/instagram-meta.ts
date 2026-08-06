@@ -50,11 +50,36 @@ export class MetaInstagramProvider implements ICRMIntegrationProvider {
   async sendMessage(
     payload: OutgoingMessagePayload
   ): Promise<{ success: boolean; externalId?: string; error?: string }> {
-    // Fase 1: Interface preparada. Envio real aguarda adição de Tokens da Graph API nas configurações.
-    console.log('[MetaInstagramProvider] Simulação de envio Direct Graph API:', payload)
-    return {
-      success: true,
-      externalId: `ig_mid.simulated_${Date.now()}`,
+    if (!payload.accessToken || !payload.fromExternalId) {
+      return { success: false, error: 'Conexão sem token/Page ID configurado (Cloud API).' }
+    }
+
+    try {
+      const res = await fetch(
+        `https://graph.facebook.com/v20.0/${encodeURIComponent(payload.fromExternalId)}/messages`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${payload.accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            recipient: { id: payload.recipientExternalId },
+            message: { text: payload.content },
+          }),
+        }
+      )
+
+      const body = await res.json().catch(() => ({}))
+
+      if (!res.ok) {
+        return { success: false, error: body?.error?.message || `Falha HTTP ${res.status} ao enviar Direct do Instagram.` }
+      }
+
+      const externalId = body?.message_id as string | undefined
+      return { success: true, externalId }
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : 'Erro de rede ao enviar mensagem.' }
     }
   }
 }

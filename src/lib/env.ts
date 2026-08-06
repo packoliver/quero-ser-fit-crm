@@ -8,6 +8,10 @@ const serverEnvSchema = z.object({
   META_WEBHOOK_VERIFY_TOKEN: z.string().optional(),
   META_APP_SECRET: z.string().optional(),
   INTEGRATION_ENCRYPTION_KEY: z.string().optional(),
+  // Usado tanto para registrar o webhook em cada instância da zap-api.tech (campo
+  // `secret` de PUT /instances/{id}/webhook) quanto para verificar a assinatura
+  // HMAC-SHA256 (header x-zapapi-signature-256) das chamadas recebidas.
+  ZAPAPI_WEBHOOK_SECRET: z.string().optional(),
 })
 
 export type ServerEnv = z.infer<typeof serverEnvSchema>
@@ -19,10 +23,12 @@ export function getServerEnv(): ServerEnv {
 
   const isProduction = process.env.NODE_ENV === 'production'
   const envKey = process.env.INTEGRATION_ENCRYPTION_KEY
+  const KNOWN_FALLBACK_KEY = '12345678901234567890123456789012'
+  const isUnsafeKey = !envKey || envKey === KNOWN_FALLBACK_KEY
 
-  if (isProduction && (!envKey || envKey === '12345678901234567890123456789012')) {
+  if (isProduction && isUnsafeKey) {
     console.error(
-      '[CRÍTICO] SEGURANÇA DE PRODUÇÃO: A variável INTEGRATION_ENCRYPTION_KEY é obrigatória em ambiente de produção!'
+      '[CRÍTICO] SEGURANÇA DE PRODUÇÃO: A variável INTEGRATION_ENCRYPTION_KEY é obrigatória em ambiente de produção e não pode usar o valor padrão de desenvolvimento!'
     )
   }
 
@@ -33,7 +39,11 @@ export function getServerEnv(): ServerEnv {
     SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY || '',
     META_WEBHOOK_VERIFY_TOKEN: process.env.META_WEBHOOK_VERIFY_TOKEN || undefined,
     META_APP_SECRET: process.env.META_APP_SECRET || undefined,
-    INTEGRATION_ENCRYPTION_KEY: envKey || (isProduction ? undefined : '12345678901234567890123456789012'),
+    ZAPAPI_WEBHOOK_SECRET: process.env.ZAPAPI_WEBHOOK_SECRET || undefined,
+    // Em produção, uma chave ausente OU igual ao fallback conhecido de dev é tratada
+    // como "não configurada" (undefined), forçando getEncryptionKey() a lançar erro
+    // em vez de criptografar silenciosamente com uma chave pública e comprometida.
+    INTEGRATION_ENCRYPTION_KEY: isProduction ? (isUnsafeKey ? undefined : envKey) : (envKey || KNOWN_FALLBACK_KEY),
   }
 
   const result = serverEnvSchema.safeParse(rawEnv)
