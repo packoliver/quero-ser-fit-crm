@@ -14,12 +14,16 @@ import {
   Clock,
   Building,
   Shield,
+  KeyRound,
+  AlertCircle,
 } from 'lucide-react'
 import { UserRole } from '@/types/database'
 import { Modal } from '@/components/ui/Modal'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
+import { Input } from '@/components/ui/Input'
 import { useDemoStorage } from '@/lib/demo/useDemoStorage'
+import { changePasswordSchema } from '@/lib/validations'
 
 export interface HeaderProps {
   currentRole?: UserRole
@@ -33,6 +37,12 @@ export function Header({ currentRole = 'admin', onToggleRole }: HeaderProps) {
   const [menuOpen, setMenuOpen] = useState(false)
   const [notifOpen, setNotifOpen] = useState(false)
   const [profileModalOpen, setProfileModalOpen] = useState(false)
+  const [passwordModalOpen, setPasswordModalOpen] = useState(false)
+  const [newPassword, setNewPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [passwordError, setPasswordError] = useState<string | null>(null)
+  const [passwordSuccess, setPasswordSuccess] = useState(false)
+  const [changingPassword, setChangingPassword] = useState(false)
 
   const dropdownRef = useRef<HTMLDivElement>(null)
   const notifRef = useRef<HTMLDivElement>(null)
@@ -56,6 +66,48 @@ export function Header({ currentRole = 'admin', onToggleRole }: HeaderProps) {
     document.addEventListener('mousedown', handleClickOutside)
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
+
+  const openPasswordModal = () => {
+    setNewPassword('')
+    setConfirmPassword('')
+    setPasswordError(null)
+    setPasswordSuccess(false)
+    setPasswordModalOpen(true)
+  }
+
+  const handleChangePassword = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setPasswordError(null)
+
+    const validation = changePasswordSchema.safeParse({ password: newPassword })
+    if (!validation.success) {
+      setPasswordError(validation.error.issues[0]?.message || 'Senha inválida.')
+      return
+    }
+    if (newPassword !== confirmPassword) {
+      setPasswordError('As senhas não coincidem.')
+      return
+    }
+
+    setChangingPassword(true)
+    try {
+      const { createClient } = await import('@/lib/supabase/client')
+      const supabase = createClient()
+      const { error: updateError } = await supabase.auth.updateUser({ password: newPassword })
+
+      if (updateError) {
+        setPasswordError(updateError.message || 'Falha ao atualizar a senha.')
+        setChangingPassword(false)
+        return
+      }
+
+      setPasswordSuccess(true)
+    } catch {
+      setPasswordError('Erro de conexão ao tentar atualizar a senha.')
+    } finally {
+      setChangingPassword(false)
+    }
+  }
 
   const handleLogout = async () => {
     try {
@@ -235,6 +287,17 @@ export function Header({ currentRole = 'admin', onToggleRole }: HeaderProps) {
                   <UserIcon className="w-4 h-4 text-emerald-400" />
                   <span>Meu Perfil</span>
                 </button>
+
+                <button
+                  onClick={() => {
+                    setMenuOpen(false)
+                    openPasswordModal()
+                  }}
+                  className="w-full text-left px-4 py-2 text-slate-200 hover:bg-slate-800 flex items-center gap-2 transition"
+                >
+                  <KeyRound className="w-4 h-4 text-emerald-400" />
+                  <span>Trocar Senha</span>
+                </button>
               </div>
 
               <div className="pt-1 border-t border-slate-800">
@@ -300,6 +363,67 @@ export function Header({ currentRole = 'admin', onToggleRole }: HeaderProps) {
             </Button>
           </div>
         </div>
+      </Modal>
+
+      {/* Change Password Modal */}
+      <Modal
+        isOpen={passwordModalOpen}
+        onClose={() => setPasswordModalOpen(false)}
+        title="Trocar Senha"
+        icon={<KeyRound className="w-5 h-5" />}
+      >
+        {passwordSuccess ? (
+          <div className="text-center py-4 space-y-4 text-xs">
+            <div className="w-12 h-12 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center mx-auto border border-emerald-500/30">
+              <CheckCircle2 className="w-6 h-6" />
+            </div>
+            <h3 className="font-semibold text-slate-200 text-sm">Senha atualizada!</h3>
+            <p className="text-slate-400 leading-relaxed">
+              Sua senha foi trocada com sucesso. Use a nova senha no seu próximo login.
+            </p>
+            <Button variant="secondary" onClick={() => setPasswordModalOpen(false)}>
+              Fechar
+            </Button>
+          </div>
+        ) : (
+          <form onSubmit={handleChangePassword} className="space-y-3 text-xs">
+            {passwordError && (
+              <div className="p-3 rounded-xl bg-rose-950/40 border border-rose-800/50 text-rose-300 flex items-center gap-2.5">
+                <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
+                <span>{passwordError}</span>
+              </div>
+            )}
+
+            <Input
+              label="Nova Senha *"
+              type="password"
+              required
+              minLength={8}
+              placeholder="Mínimo 8 caracteres"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+            />
+
+            <Input
+              label="Confirmar Nova Senha *"
+              type="password"
+              required
+              minLength={8}
+              placeholder="Repita a nova senha"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+            />
+
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="secondary" type="button" onClick={() => setPasswordModalOpen(false)}>
+                Cancelar
+              </Button>
+              <Button variant="primary" type="submit" isLoading={changingPassword}>
+                Salvar Nova Senha
+              </Button>
+            </div>
+          </form>
+        )}
       </Modal>
     </header>
   )

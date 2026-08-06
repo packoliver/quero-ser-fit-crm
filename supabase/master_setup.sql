@@ -43,7 +43,8 @@ CREATE TABLE public.organization_members (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     organization_id UUID NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE,
     user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
-    role TEXT NOT NULL CHECK (role IN ('admin', 'attendant')),
+    role TEXT NOT NULL CHECK (role IN ('admin', 'manager', 'attendant')),
+    permissions JSONB,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(organization_id, user_id)

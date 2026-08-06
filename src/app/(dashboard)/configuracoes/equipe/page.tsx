@@ -70,11 +70,22 @@ export default function EquipeConfigPage() {
   const [error, setError] = useState<string | null>(null)
   const [toast, setToast] = useState<string | null>(null)
 
-  const [newMember, setNewMember] = useState({ fullName: '', email: '', role: 'attendant' as UserRole })
+  const [newMember, setNewMember] = useState({ fullName: '', email: '', role: 'attendant' as UserRole, password: '' })
+  const [creatingMember, setCreatingMember] = useState(false)
 
   const showToast = (msg: string) => {
     setToast(msg)
     setTimeout(() => setToast(null), 4000)
+  }
+
+  // Generates a readable-but-random temporary password (e.g. "Fit-83Kq47")
+  const generateTempPassword = () => {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789'
+    let random = ''
+    for (let i = 0; i < 8; i++) {
+      random += chars[Math.floor(Math.random() * chars.length)]
+    }
+    setNewMember((prev) => ({ ...prev, password: `Fit-${random}` }))
   }
 
   const fetchRealMembers = useCallback(async () => {
@@ -272,44 +283,58 @@ export default function EquipeConfigPage() {
     }))
   }
 
-  // Handle Invite Form Submit
-  const handleInviteSubmit = (e: React.FormEvent) => {
+  // Handle Create Member Form Submit — registers the member directly with a temporary
+  // password set by the admin, instead of sending an e-mail invite.
+  const handleCreateMemberSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!newMember.fullName || !newMember.email) return
-
-    const invitedObj: DemoTeamMember = {
-      id: `member-${Date.now()}`,
-      fullName: newMember.fullName,
-      email: newMember.email,
-      role: newMember.role,
-      status: 'invited',
-      joinedAt: new Date().toLocaleDateString('pt-BR'),
-      isDemo: true,
-    }
-
-    saveDemoMember(invitedObj)
+    setError(null)
+    if (!newMember.fullName || !newMember.email || !newMember.password) return
 
     if (viewMode === 'real') {
-      // Add to realMembers display state for instant visual feedback
-      setRealMembers((prev) => [
-        {
-          user_id: invitedObj.id,
-          organization_id: 'org-real',
-          role: newMember.role,
-          created_at: new Date().toISOString(),
-          profiles: {
-            full_name: newMember.fullName,
+      setCreatingMember(true)
+      try {
+        const response = await fetch('/api/team/create-member', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            fullName: newMember.fullName,
             email: newMember.email,
-          },
-        },
-        ...prev,
-      ])
-      showToast(`Convite registrado para ${newMember.email}!`)
+            role: newMember.role,
+            password: newMember.password,
+          }),
+        })
+
+        const result = await response.json()
+
+        if (!response.ok) {
+          setError(result.error || 'Falha ao cadastrar o membro.')
+          setCreatingMember(false)
+          return
+        }
+
+        showToast(`Membro ${newMember.fullName} cadastrado! Compartilhe a senha temporária com ele(a) de forma segura.`)
+        fetchRealMembers()
+      } catch {
+        setError('Erro de conexão ao cadastrar o membro.')
+        setCreatingMember(false)
+        return
+      }
+      setCreatingMember(false)
     } else {
-      showToast(`Convite enviado com sucesso para ${newMember.email}!`)
+      const invitedObj: DemoTeamMember = {
+        id: `member-${Date.now()}`,
+        fullName: newMember.fullName,
+        email: newMember.email,
+        role: newMember.role,
+        status: 'active',
+        joinedAt: new Date().toLocaleDateString('pt-BR'),
+        isDemo: true,
+      }
+      saveDemoMember(invitedObj)
+      showToast(`Membro ${newMember.fullName} cadastrado com senha temporária (modo demo)!`)
     }
 
-    setNewMember({ fullName: '', email: '', role: 'attendant' })
+    setNewMember({ fullName: '', email: '', role: 'attendant', password: '' })
     setInviteModalOpen(false)
   }
 
@@ -378,7 +403,7 @@ export default function EquipeConfigPage() {
 
           <Button onClick={() => setInviteModalOpen(true)} variant="primary">
             <UserPlus className="w-4 h-4" />
-            <span>Convidar Membro</span>
+            <span>Cadastrar Membro</span>
           </Button>
         </div>
       </div>
@@ -581,14 +606,14 @@ export default function EquipeConfigPage() {
         </CardBody>
       </Card>
 
-      {/* Modal Invite Member */}
+      {/* Modal Create Member */}
       <Modal
         isOpen={inviteModalOpen}
         onClose={() => setInviteModalOpen(false)}
-        title="Convidar Novo Membro"
+        title="Cadastrar Novo Membro"
         icon={<UserPlus className="w-5 h-5" />}
       >
-        <form onSubmit={handleInviteSubmit} className="space-y-3 text-xs">
+        <form onSubmit={handleCreateMemberSubmit} className="space-y-3 text-xs">
           <Input
             label="Nome Completo *"
             required
@@ -617,16 +642,36 @@ export default function EquipeConfigPage() {
             ]}
           />
 
+          <div>
+            <div className="flex items-end gap-2">
+              <div className="flex-1">
+                <Input
+                  label="Senha Temporária *"
+                  required
+                  minLength={8}
+                  placeholder="Mínimo 8 caracteres"
+                  value={newMember.password}
+                  onChange={(e) => setNewMember({ ...newMember, password: e.target.value })}
+                />
+              </div>
+              <Button variant="secondary" type="button" onClick={generateTempPassword} className="mb-0.5">
+                Gerar
+              </Button>
+            </div>
+          </div>
+
           <div className="p-3 bg-amber-950/40 border border-amber-800/50 rounded-xl text-[11px] text-amber-300">
-            O membro receberá o convite com o status inicial &ldquo;Pendente&rdquo; para ativação.
+            O membro já é cadastrado ativo e pode fazer login imediatamente com esta senha. Compartilhe-a com
+            ele(a) por um canal seguro — depois de entrar, a pessoa pode trocá-la a qualquer momento pelo menu
+            de perfil.
           </div>
 
           <div className="flex justify-end gap-2 pt-2">
             <Button variant="secondary" type="button" onClick={() => setInviteModalOpen(false)}>
               Cancelar
             </Button>
-            <Button variant="primary" type="submit">
-              Enviar Convite
+            <Button variant="primary" type="submit" isLoading={creatingMember}>
+              Cadastrar Membro
             </Button>
           </div>
         </form>
