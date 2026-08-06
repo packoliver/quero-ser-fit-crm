@@ -277,16 +277,36 @@ export default function EquipeConfigPage() {
     e.preventDefault()
     if (!newMember.fullName || !newMember.email) return
 
-    if (viewMode === 'demo') {
-      saveDemoMember({
-        fullName: newMember.fullName,
-        email: newMember.email,
-        role: newMember.role,
-        status: 'invited',
-      })
-      showToast(`Convite enviado com sucesso para ${newMember.email}!`)
+    const invitedObj: DemoTeamMember = {
+      id: `member-${Date.now()}`,
+      fullName: newMember.fullName,
+      email: newMember.email,
+      role: newMember.role,
+      status: 'invited',
+      joinedAt: new Date().toLocaleDateString('pt-BR'),
+      isDemo: true,
+    }
+
+    saveDemoMember(invitedObj)
+
+    if (viewMode === 'real') {
+      // Add to realMembers display state for instant visual feedback
+      setRealMembers((prev) => [
+        {
+          user_id: invitedObj.id,
+          organization_id: 'org-real',
+          role: newMember.role,
+          created_at: new Date().toISOString(),
+          profiles: {
+            full_name: newMember.fullName,
+            email: newMember.email,
+          },
+        },
+        ...prev,
+      ])
+      showToast(`Convite registrado para ${newMember.email}!`)
     } else {
-      showToast(`Convite registrado no Supabase para ${newMember.email}!`)
+      showToast(`Convite enviado com sucesso para ${newMember.email}!`)
     }
 
     setNewMember({ fullName: '', email: '', role: 'attendant' })
