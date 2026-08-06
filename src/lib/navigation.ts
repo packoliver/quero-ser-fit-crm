@@ -29,6 +29,10 @@ export function getNavItemsForRole(role: UserRole): NavItem[] {
   if (role === 'admin') {
     return allNavItems
   }
-  // Attendants only see non-admin items (Conversas, Clientes, Tarefas, Relatórios)
+  if (role === 'manager') {
+    // Managers can see everything except direct Integrations management
+    return allNavItems.filter((item) => item.href !== '/configuracoes/integracoes')
+  }
+  // Attendants see non-admin items (Conversas, Clientes, Tarefas, Relatórios)
   return allNavItems.filter((item) => !item.adminOnly)
 }

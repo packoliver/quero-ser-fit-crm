@@ -60,11 +60,11 @@ export async function updateSession(request: NextRequest) {
     return NextResponse.redirect(url)
   }
 
-  // Protection 3: Role-based URL protection for admin-only routes
-  const adminRoutes = ['/configuracoes/equipe', '/configuracoes/integracoes']
-  const isAdminRoute = adminRoutes.some((route) => pathname.startsWith(route))
+  // Protection 3: Role-based URL protection for admin & manager routes
+  const isIntegrationsRoute = pathname.startsWith('/configuracoes/integracoes')
+  const isEquipeRoute = pathname.startsWith('/configuracoes/equipe')
 
-  if (user && isAdminRoute) {
+  if (user && (isIntegrationsRoute || isEquipeRoute)) {
     const { data: member } = await (supabase as unknown as {
       from: (table: string) => {
         select: (cols: string) => {
@@ -79,8 +79,15 @@ export async function updateSession(request: NextRequest) {
       .eq('user_id', user.id)
       .single()
 
-    // If user is not an admin, deny direct URL access to settings and redirect to /inbox
-    if (member && member.role !== 'admin') {
+    const role = member?.role || 'attendant'
+
+    if (isIntegrationsRoute && role !== 'admin') {
+      const url = request.nextUrl.clone()
+      url.pathname = '/inbox'
+      return NextResponse.redirect(url)
+    }
+
+    if (isEquipeRoute && role !== 'admin' && role !== 'manager') {
       const url = request.nextUrl.clone()
       url.pathname = '/inbox'
       return NextResponse.redirect(url)

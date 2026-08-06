@@ -15,6 +15,11 @@ import {
   UserX,
   AlertTriangle,
   Lock,
+  SlidersHorizontal,
+  MessageSquare,
+  Users,
+  CheckSquare,
+  BarChart3,
 } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
@@ -22,15 +27,17 @@ import { Input } from '@/components/ui/Input'
 import { Select } from '@/components/ui/Select'
 import { Modal } from '@/components/ui/Modal'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
-import { UserRole } from '@/types/database'
+import { UserRole, CustomPermissions } from '@/types/database'
 import { createClient } from '@/lib/supabase/client'
 import { useDemoStorage } from '@/lib/demo/useDemoStorage'
 import { DemoTeamMember } from '@/lib/demo'
+import { getDefaultPermissionsForRole } from '@/lib/security/permissions'
 
 export interface RealMember {
   user_id: string
   organization_id: string
   role: UserRole
+  permissions?: CustomPermissions | null
   created_at: string
   profiles?: {
     full_name: string | null
@@ -53,7 +60,10 @@ export default function EquipeConfigPage() {
   // Modals state
   const [inviteModalOpen, setInviteModalOpen] = useState(false)
   const [deleteModalOpen, setDeleteModalOpen] = useState(false)
+  const [permissionsModalOpen, setPermissionsModalOpen] = useState(false)
   const [deletingMember, setDeletingMember] = useState<DemoTeamMember | null>(null)
+  const [selectedMemberForPerms, setSelectedMemberForPerms] = useState<RealMember | DemoTeamMember | null>(null)
+  const [editingPermissions, setEditingPermissions] = useState<CustomPermissions>({})
 
   // Feedback State
   const [loading, setLoading] = useState(false)
@@ -80,7 +90,7 @@ export default function EquipeConfigPage() {
         }
       })
         .from('organization_members')
-        .select('user_id, organization_id, role, created_at, profiles(full_name, email)')
+        .select('user_id, organization_id, role, permissions, created_at, profiles(full_name, email)')
         .order('created_at', { ascending: false })
 
       if (dbError) {
@@ -107,17 +117,23 @@ export default function EquipeConfigPage() {
   // Count active admins in Demo mode for visual safeguard
   const activeAdminCount = storedDemoMembers.filter((m) => m.role === 'admin' && m.status === 'active').length
 
-  // Toggle Role (Admin ↔ Attendant)
+  // Cycle Role: attendant -> manager -> admin -> attendant
+  const getNextRole = (currentRole: UserRole): UserRole => {
+    if (currentRole === 'attendant') return 'manager'
+    if (currentRole === 'manager') return 'admin'
+    return 'attendant'
+  }
+
+  // Toggle Role Demo
   const toggleRoleDemo = (member: DemoTeamMember) => {
     setError(null)
 
-    // Safeguard check
     if (member.role === 'admin' && member.status === 'active' && activeAdminCount <= 1) {
       setError('Operação negada: Não é possível alterar ou remover o único administrador ativo do sistema.')
       return
     }
 
-    const nextRole: UserRole = member.role === 'admin' ? 'attendant' : 'admin'
+    const nextRole = getNextRole(member.role)
     const updated = updateDemoMemberRole(member.id, nextRole)
 
     if (!updated) {
@@ -125,10 +141,11 @@ export default function EquipeConfigPage() {
       return
     }
 
-    showToast(`Perfil de ${updated.fullName} alterado para ${updated.role === 'admin' ? 'Administrador' : 'Atendente'}.`)
+    const roleName = nextRole === 'admin' ? 'Administrador' : nextRole === 'manager' ? 'Gerente' : 'Atendente'
+    showToast(`Perfil de ${updated.fullName} alterado para ${roleName}.`)
   }
 
-  // Toggle Status (Active ↔ Inactive)
+  // Toggle Status Demo
   const toggleStatusDemo = (member: DemoTeamMember) => {
     setError(null)
 
@@ -148,7 +165,7 @@ export default function EquipeConfigPage() {
     showToast(`Status de ${updated.fullName} alterado para ${updated.status === 'active' ? 'Ativo' : 'Inativo'}.`)
   }
 
-  // Delete Member
+  // Delete Member Demo
   const handleDeleteMemberConfirm = () => {
     if (!deletingMember) return
     setError(null)
@@ -172,12 +189,12 @@ export default function EquipeConfigPage() {
   // Handle Role Toggle in Real Mode
   const toggleRoleReal = async (member: RealMember) => {
     setError(null)
-    const nextRole: UserRole = member.role === 'admin' ? 'attendant' : 'admin'
+    const nextRole = getNextRole(member.role)
 
     try {
       const supabase = createClient()
       const { error: rpcError } = await (supabase as unknown as {
-        rpc: (fn: string, p: { p_org_id: string; p_target_user_id: string; p_new_role: UserRole }) => Promise<{ error: { message: string } | null }>
+        rpc: (fn: string, p: { p_org_id: string; p_target_user_id: string; p_new_role: string }) => Promise<{ error: { message: string } | null }>
       }).rpc('update_member_role_safe', {
         p_org_id: member.organization_id,
         p_target_user_id: member.user_id,
@@ -193,11 +210,66 @@ export default function EquipeConfigPage() {
         return
       }
 
-      showToast(`Perfil de ${member.profiles?.full_name || 'usuário'} alterado no Supabase.`)
+      const roleName = nextRole === 'admin' ? 'Administrador' : nextRole === 'manager' ? 'Gerente' : 'Atendente'
+      showToast(`Perfil de ${member.profiles?.full_name || 'usuário'} alterado para ${roleName}.`)
       fetchRealMembers()
     } catch {
       setError('Erro ao executar alteração no Supabase.')
     }
+  }
+
+  // Open Permissions Modal
+  const openPermissionsModal = (member: RealMember | DemoTeamMember) => {
+    setSelectedMemberForPerms(member)
+    const role = member.role
+    const currentPerms = ('permissions' in member && member.permissions) 
+      ? (member.permissions as CustomPermissions)
+      : getDefaultPermissionsForRole(role)
+    setEditingPermissions({ ...getDefaultPermissionsForRole(role), ...currentPerms })
+    setPermissionsModalOpen(true)
+  }
+
+  // Save Permissions
+  const handleSavePermissions = async () => {
+    if (!selectedMemberForPerms) return
+    setError(null)
+
+    if (viewMode === 'real' && 'user_id' in selectedMemberForPerms) {
+      try {
+        const supabase = createClient()
+        const { error: dbError } = await (supabase as unknown as {
+          from: (t: string) => {
+            update: (vals: { permissions: CustomPermissions }) => {
+              eq: (col: string, val: string) => Promise<{ error: { message: string } | null }>
+            }
+          }
+        })
+          .from('organization_members')
+          .update({ permissions: editingPermissions })
+          .eq('user_id', selectedMemberForPerms.user_id)
+
+        if (dbError) {
+          setError('Falha ao salvar permissões granulares no Supabase.')
+          return
+        }
+        showToast('Permissões granulares salvas no Supabase com sucesso!')
+        fetchRealMembers()
+      } catch {
+        setError('Erro ao salvar permissões.')
+      }
+    } else {
+      showToast('Permissões personalizadas atualizadas!')
+    }
+
+    setPermissionsModalOpen(false)
+  }
+
+  // Toggle Single Permission Switch
+  const togglePermission = (key: keyof CustomPermissions) => {
+    setEditingPermissions((prev) => ({
+      ...prev,
+      [key]: !prev[key],
+    }))
   }
 
   // Handle Invite Form Submit
@@ -243,7 +315,7 @@ export default function EquipeConfigPage() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">
-            <h1 className="text-xl font-bold text-slate-100">Gestão da Equipe</h1>
+            <h1 className="text-xl font-bold text-slate-100">Gestão da Equipe & Permissões</h1>
             {viewMode === 'real' ? (
               <Badge variant="emerald" icon={<Database className="w-3 h-3" />}>
                 Supabase Real
@@ -255,7 +327,7 @@ export default function EquipeConfigPage() {
             )}
           </div>
           <p className="text-xs text-slate-400 mt-1">
-            Gerencie os atendentes e administradores com salvaguarda para o único administrador ativo.
+            Gerencie Administradores, Gerentes e Atendentes com permissões granulares personalizadas.
           </p>
         </div>
 
@@ -291,23 +363,40 @@ export default function EquipeConfigPage() {
         </div>
       </div>
 
-      {/* Permissions Overview */}
+      {/* Hierarchical Roles Overview */}
       <Card className="p-4 text-xs space-y-2">
         <h2 className="font-semibold text-slate-200 flex items-center gap-1.5">
           <Shield className="w-4 h-4 text-emerald-400" />
-          <span>Regras de Acesso e Salvaguarda do Último Administrador</span>
+          <span>Matriz de Cargos & Níveis de Acesso</span>
         </h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
-          <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800">
-            <span className="font-bold text-emerald-400 uppercase tracking-wider text-[10px]">Administrador</span>
-            <p className="text-slate-400 text-[11px] mt-1">
-              Acesso total às configurações. O único administrador ativo é protegido e não pode ser rebaixado ou excluído.
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-1">
+          <div className="p-3 bg-slate-950/60 rounded-xl border border-emerald-900/40">
+            <div className="flex items-center gap-1.5 mb-1">
+              <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+              <span className="font-bold text-emerald-400 uppercase tracking-wider text-[10px]">Administrador</span>
+            </div>
+            <p className="text-slate-400 text-[11px]">
+              Acesso total às configurações, faturamento, integrações Meta e proteção contra remoção se for único.
             </p>
           </div>
-          <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800">
-            <span className="font-bold text-teal-400 uppercase tracking-wider text-[10px]">Atendente</span>
-            <p className="text-slate-400 text-[11px] mt-1">
-              Acessa conversas do inbox, carteira de clientes e gerenciador de tarefas da equipe.
+
+          <div className="p-3 bg-slate-950/60 rounded-xl border border-indigo-900/40">
+            <div className="flex items-center gap-1.5 mb-1">
+              <Shield className="w-3.5 h-3.5 text-indigo-400" />
+              <span className="font-bold text-indigo-400 uppercase tracking-wider text-[10px]">Gerente (Manager)</span>
+            </div>
+            <p className="text-slate-400 text-[11px]">
+              Supervisão gerencial da equipe, relatórios avançados, transferência de conversas e gestão de atendentes.
+            </p>
+          </div>
+
+          <div className="p-3 bg-slate-950/60 rounded-xl border border-teal-900/40">
+            <div className="flex items-center gap-1.5 mb-1">
+              <UserCheck className="w-3.5 h-3.5 text-teal-400" />
+              <span className="font-bold text-teal-400 uppercase tracking-wider text-[10px]">Atendente</span>
+            </div>
+            <p className="text-slate-400 text-[11px]">
+              Acesso operacional ajustável via switches de permissões personalizadas pelo Admin/Gerente.
             </p>
           </div>
         </div>
@@ -333,9 +422,9 @@ export default function EquipeConfigPage() {
                 <tr className="border-b border-slate-800 text-slate-400 bg-slate-900/60">
                   <th className="py-3 px-4">Usuário</th>
                   <th className="py-3 px-4">E-mail</th>
-                  <th className="py-3 px-4">Perfil</th>
+                  <th className="py-3 px-4">Cargo / Perfil</th>
                   <th className="py-3 px-4">Status</th>
-                  <th className="py-3 px-4 text-right">Ações</th>
+                  <th className="py-3 px-4 text-right">Ações & Permissões</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800 text-slate-200">
@@ -351,6 +440,10 @@ export default function EquipeConfigPage() {
                             <Badge variant="emerald" icon={<ShieldCheck className="w-3 h-3" />}>
                               Administrador
                             </Badge>
+                          ) : member.role === 'manager' ? (
+                            <Badge variant="indigo" icon={<Shield className="w-3 h-3" />}>
+                              Gerente
+                            </Badge>
                           ) : (
                             <Badge variant="teal" icon={<UserCheck className="w-3 h-3" />}>
                               Atendente
@@ -359,9 +452,21 @@ export default function EquipeConfigPage() {
                         </td>
                         <td className="py-3.5 px-4 text-emerald-400 font-medium">Ativo</td>
                         <td className="py-3.5 px-4 text-right">
-                          <Button variant="secondary" size="sm" onClick={() => toggleRoleReal(member)}>
-                            Alterar Perfil
-                          </Button>
+                          <div className="flex items-center justify-end gap-1.5">
+                            <Button variant="secondary" size="sm" onClick={() => toggleRoleReal(member)}>
+                              Alternar Cargo
+                            </Button>
+
+                            <button
+                              type="button"
+                              onClick={() => openPermissionsModal(member)}
+                              className="px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-200 text-[11px] font-medium flex items-center gap-1 transition"
+                              title="Personalizar permissões granulares"
+                            >
+                              <SlidersHorizontal className="w-3.5 h-3.5 text-emerald-400" />
+                              <span>Permissões</span>
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))
@@ -376,6 +481,10 @@ export default function EquipeConfigPage() {
                             {member.role === 'admin' ? (
                               <Badge variant="emerald" icon={<ShieldCheck className="w-3 h-3" />}>
                                 Administrador
+                              </Badge>
+                            ) : member.role === 'manager' ? (
+                              <Badge variant="indigo" icon={<Shield className="w-3 h-3" />}>
+                                Gerente
                               </Badge>
                             ) : (
                               <Badge variant="teal" icon={<UserCheck className="w-3 h-3" />}>
@@ -394,7 +503,6 @@ export default function EquipeConfigPage() {
                           </td>
                           <td className="py-3.5 px-4 text-right">
                             <div className="flex items-center justify-end gap-1.5">
-                              {/* Visual Safeguard for Sole Admin */}
                               {isSoleAdmin ? (
                                 <span
                                   title="Não é possível alterar ou remover o único administrador ativo do sistema."
@@ -406,8 +514,18 @@ export default function EquipeConfigPage() {
                               ) : (
                                 <>
                                   <Button variant="secondary" size="sm" onClick={() => toggleRoleDemo(member)}>
-                                    {member.role === 'admin' ? 'Tornar Atendente' : 'Tornar Admin'}
+                                    Alternar Cargo
                                   </Button>
+
+                                  <button
+                                    type="button"
+                                    onClick={() => openPermissionsModal(member)}
+                                    className="px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-200 text-[11px] font-medium flex items-center gap-1 transition"
+                                    title="Personalizar permissões granulares"
+                                  >
+                                    <SlidersHorizontal className="w-3.5 h-3.5 text-emerald-400" />
+                                    <span>Permissões</span>
+                                  </button>
 
                                   <button
                                     type="button"
@@ -454,7 +572,7 @@ export default function EquipeConfigPage() {
           <Input
             label="Nome Completo *"
             required
-            placeholder="Ex: Fernanda Vendas"
+            placeholder="Ex: Carlos Gerente"
             value={newMember.fullName}
             onChange={(e) => setNewMember({ ...newMember, fullName: e.target.value })}
           />
@@ -463,18 +581,19 @@ export default function EquipeConfigPage() {
             label="E-mail Corporativo *"
             type="email"
             required
-            placeholder="fernanda@queroserfit.com.br"
+            placeholder="carlos@queroserfit.com.br"
             value={newMember.email}
             onChange={(e) => setNewMember({ ...newMember, email: e.target.value })}
           />
 
           <Select
-            label="Perfil de Acesso *"
+            label="Cargo Inicial *"
             value={newMember.role}
             onChange={(e) => setNewMember({ ...newMember, role: e.target.value as UserRole })}
             options={[
-              { value: 'attendant', label: 'Atendente' },
-              { value: 'admin', label: 'Administrador' },
+              { value: 'attendant', label: 'Atendente / Vendedor' },
+              { value: 'manager', label: 'Gerente (Manager)' },
+              { value: 'admin', label: 'Administrador (Admin)' },
             ]}
           />
 
@@ -491,6 +610,230 @@ export default function EquipeConfigPage() {
             </Button>
           </div>
         </form>
+      </Modal>
+
+      {/* Modal Granular Custom Permissions */}
+      <Modal
+        isOpen={permissionsModalOpen}
+        onClose={() => setPermissionsModalOpen(false)}
+        title={`Matriz de Permissões — ${
+          selectedMemberForPerms
+            ? 'profiles' in selectedMemberForPerms && selectedMemberForPerms.profiles
+              ? selectedMemberForPerms.profiles.full_name
+              : 'fullName' in selectedMemberForPerms
+              ? selectedMemberForPerms.fullName
+              : 'Membro'
+            : 'Membro'
+        }`}
+        icon={<SlidersHorizontal className="w-5 h-5 text-emerald-400" />}
+      >
+        <div className="space-y-5 text-xs max-h-[70vh] overflow-y-auto pr-1">
+          <p className="text-slate-400">
+            Ative ou desative as opções personalizadas que este membro terá permissão para executar no sistema:
+          </p>
+
+          {/* Categorized Permissions Grid */}
+          <div className="space-y-4">
+            {/* Category: Atendimento / Inbox */}
+            <div className="p-3 bg-slate-900/80 rounded-xl border border-slate-800 space-y-2.5">
+              <div className="flex items-center gap-2 font-bold text-slate-200">
+                <MessageSquare className="w-4 h-4 text-emerald-400" />
+                <span>Central de Conversas (Inbox)</span>
+              </div>
+
+              <div className="space-y-2 pt-1">
+                <label className="flex items-center justify-between cursor-pointer p-1.5 rounded-lg hover:bg-slate-800/60 transition">
+                  <span className="text-slate-300 font-medium">Ver conversas da equipe inteira</span>
+                  <input
+                    type="checkbox"
+                    checked={!!editingPermissions.view_all_conversations}
+                    onChange={() => togglePermission('view_all_conversations')}
+                    className="w-4 h-4 accent-emerald-500 rounded cursor-pointer"
+                  />
+                </label>
+
+                <label className="flex items-center justify-between cursor-pointer p-1.5 rounded-lg hover:bg-slate-800/60 transition">
+                  <span className="text-slate-300 font-medium">Assumir conversas da fila pública</span>
+                  <input
+                    type="checkbox"
+                    checked={!!editingPermissions.assume_conversations}
+                    onChange={() => togglePermission('assume_conversations')}
+                    className="w-4 h-4 accent-emerald-500 rounded cursor-pointer"
+                  />
+                </label>
+
+                <label className="flex items-center justify-between cursor-pointer p-1.5 rounded-lg hover:bg-slate-800/60 transition">
+                  <span className="text-slate-300 font-medium">Transferir conversas para colegas</span>
+                  <input
+                    type="checkbox"
+                    checked={!!editingPermissions.transfer_conversations}
+                    onChange={() => togglePermission('transfer_conversations')}
+                    className="w-4 h-4 accent-emerald-500 rounded cursor-pointer"
+                  />
+                </label>
+
+                <label className="flex items-center justify-between cursor-pointer p-1.5 rounded-lg hover:bg-slate-800/60 transition">
+                  <span className="text-slate-300 font-medium">Encerrar e arquivar atendimentos</span>
+                  <input
+                    type="checkbox"
+                    checked={!!editingPermissions.close_conversations}
+                    onChange={() => togglePermission('close_conversations')}
+                    className="w-4 h-4 accent-emerald-500 rounded cursor-pointer"
+                  />
+                </label>
+
+                <label className="flex items-center justify-between cursor-pointer p-1.5 rounded-lg hover:bg-slate-800/60 transition">
+                  <span className="text-slate-300 font-medium">Excluir mensagens ou notas internas</span>
+                  <input
+                    type="checkbox"
+                    checked={!!editingPermissions.delete_messages}
+                    onChange={() => togglePermission('delete_messages')}
+                    className="w-4 h-4 accent-emerald-500 rounded cursor-pointer"
+                  />
+                </label>
+              </div>
+            </div>
+
+            {/* Category: Clientes */}
+            <div className="p-3 bg-slate-900/80 rounded-xl border border-slate-800 space-y-2.5">
+              <div className="flex items-center gap-2 font-bold text-slate-200">
+                <Users className="w-4 h-4 text-teal-400" />
+                <span>Gestão de Clientes (Leads)</span>
+              </div>
+
+              <div className="space-y-2 pt-1">
+                <label className="flex items-center justify-between cursor-pointer p-1.5 rounded-lg hover:bg-slate-800/60 transition">
+                  <span className="text-slate-300 font-medium">Cadastrar novos clientes</span>
+                  <input
+                    type="checkbox"
+                    checked={!!editingPermissions.create_clients}
+                    onChange={() => togglePermission('create_clients')}
+                    className="w-4 h-4 accent-emerald-500 rounded cursor-pointer"
+                  />
+                </label>
+
+                <label className="flex items-center justify-between cursor-pointer p-1.5 rounded-lg hover:bg-slate-800/60 transition">
+                  <span className="text-slate-300 font-medium">Editar dados de clientes</span>
+                  <input
+                    type="checkbox"
+                    checked={!!editingPermissions.edit_clients}
+                    onChange={() => togglePermission('edit_clients')}
+                    className="w-4 h-4 accent-emerald-500 rounded cursor-pointer"
+                  />
+                </label>
+
+                <label className="flex items-center justify-between cursor-pointer p-1.5 rounded-lg hover:bg-slate-800/60 transition text-rose-300">
+                  <span className="font-medium">Excluir clientes do CRM</span>
+                  <input
+                    type="checkbox"
+                    checked={!!editingPermissions.delete_clients}
+                    onChange={() => togglePermission('delete_clients')}
+                    className="w-4 h-4 accent-rose-500 rounded cursor-pointer"
+                  />
+                </label>
+
+                <label className="flex items-center justify-between cursor-pointer p-1.5 rounded-lg hover:bg-slate-800/60 transition text-amber-300">
+                  <span className="font-medium">Exportar lista de clientes (CSV/Excel)</span>
+                  <input
+                    type="checkbox"
+                    checked={!!editingPermissions.export_clients}
+                    onChange={() => togglePermission('export_clients')}
+                    className="w-4 h-4 accent-amber-500 rounded cursor-pointer"
+                  />
+                </label>
+              </div>
+            </div>
+
+            {/* Category: Tarefas */}
+            <div className="p-3 bg-slate-900/80 rounded-xl border border-slate-800 space-y-2.5">
+              <div className="flex items-center gap-2 font-bold text-slate-200">
+                <CheckSquare className="w-4 h-4 text-indigo-400" />
+                <span>Gestão de Tarefas</span>
+              </div>
+
+              <div className="space-y-2 pt-1">
+                <label className="flex items-center justify-between cursor-pointer p-1.5 rounded-lg hover:bg-slate-800/60 transition">
+                  <span className="text-slate-300 font-medium">Criar tarefas</span>
+                  <input
+                    type="checkbox"
+                    checked={!!editingPermissions.create_tasks}
+                    onChange={() => togglePermission('create_tasks')}
+                    className="w-4 h-4 accent-emerald-500 rounded cursor-pointer"
+                  />
+                </label>
+
+                <label className="flex items-center justify-between cursor-pointer p-1.5 rounded-lg hover:bg-slate-800/60 transition">
+                  <span className="text-slate-300 font-medium">Atribuir tarefas para outros membros</span>
+                  <input
+                    type="checkbox"
+                    checked={!!editingPermissions.assign_tasks_to_others}
+                    onChange={() => togglePermission('assign_tasks_to_others')}
+                    className="w-4 h-4 accent-emerald-500 rounded cursor-pointer"
+                  />
+                </label>
+
+                <label className="flex items-center justify-between cursor-pointer p-1.5 rounded-lg hover:bg-slate-800/60 transition">
+                  <span className="text-slate-300 font-medium">Excluir tarefas do sistema</span>
+                  <input
+                    type="checkbox"
+                    checked={!!editingPermissions.delete_tasks}
+                    onChange={() => togglePermission('delete_tasks')}
+                    className="w-4 h-4 accent-emerald-500 rounded cursor-pointer"
+                  />
+                </label>
+              </div>
+            </div>
+
+            {/* Category: Relatórios & Equipe */}
+            <div className="p-3 bg-slate-900/80 rounded-xl border border-slate-800 space-y-2.5">
+              <div className="flex items-center gap-2 font-bold text-slate-200">
+                <BarChart3 className="w-4 h-4 text-purple-400" />
+                <span>Relatórios & Configurações</span>
+              </div>
+
+              <div className="space-y-2 pt-1">
+                <label className="flex items-center justify-between cursor-pointer p-1.5 rounded-lg hover:bg-slate-800/60 transition">
+                  <span className="text-slate-300 font-medium">Acessar dashboard de Relatórios</span>
+                  <input
+                    type="checkbox"
+                    checked={!!editingPermissions.view_reports}
+                    onChange={() => togglePermission('view_reports')}
+                    className="w-4 h-4 accent-emerald-500 rounded cursor-pointer"
+                  />
+                </label>
+
+                <label className="flex items-center justify-between cursor-pointer p-1.5 rounded-lg hover:bg-slate-800/60 transition">
+                  <span className="text-slate-300 font-medium">Gerenciar atendentes da equipe</span>
+                  <input
+                    type="checkbox"
+                    checked={!!editingPermissions.manage_attendants}
+                    onChange={() => togglePermission('manage_attendants')}
+                    className="w-4 h-4 accent-emerald-500 rounded cursor-pointer"
+                  />
+                </label>
+
+                <label className="flex items-center justify-between cursor-pointer p-1.5 rounded-lg hover:bg-slate-800/60 transition">
+                  <span className="text-slate-300 font-medium">Gerenciar Integrações Meta (WhatsApp / Instagram)</span>
+                  <input
+                    type="checkbox"
+                    checked={!!editingPermissions.manage_integrations}
+                    onChange={() => togglePermission('manage_integrations')}
+                    className="w-4 h-4 accent-emerald-500 rounded cursor-pointer"
+                  />
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex justify-end gap-2 pt-3 border-t border-slate-800">
+            <Button variant="secondary" type="button" onClick={() => setPermissionsModalOpen(false)}>
+              Cancelar
+            </Button>
+            <Button variant="primary" type="button" onClick={handleSavePermissions}>
+              Salvar Permissões
+            </Button>
+          </div>
+        </div>
       </Modal>
 
       {/* Modal Confirm Delete Member */}

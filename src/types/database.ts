@@ -6,7 +6,7 @@ export type Json =
   | { [key: string]: Json | undefined }
   | Json[]
 
-export type UserRole = 'admin' | 'attendant'
+export type UserRole = 'admin' | 'manager' | 'attendant'
 export type ChannelType = 'whatsapp' | 'instagram'
 export type ConversationStatus = 'open' | 'assigned' | 'closed' | 'archived'
 export type AssignmentStatus = 'active' | 'transferred' | 'released'
@@ -15,6 +15,35 @@ export type MessageStatus = 'sent' | 'delivered' | 'read' | 'failed'
 export type TaskStatus = 'pending' | 'in_progress' | 'completed' | 'cancelled'
 export type IntegrationProvider = 'whatsapp_meta' | 'instagram_meta'
 export type IntegrationStatus = 'active' | 'inactive' | 'error'
+
+export interface CustomPermissions {
+  // Inbox / Atendimento
+  view_all_conversations?: boolean
+  assume_conversations?: boolean
+  transfer_conversations?: boolean
+  close_conversations?: boolean
+  delete_messages?: boolean
+
+  // Clientes
+  create_clients?: boolean
+  edit_clients?: boolean
+  delete_clients?: boolean
+  export_clients?: boolean
+  view_client_notes?: boolean
+
+  // Tarefas
+  create_tasks?: boolean
+  assign_tasks_to_others?: boolean
+  delete_tasks?: boolean
+
+  // Relatórios
+  view_reports?: boolean
+  export_reports?: boolean
+
+  // Equipe & Configurações
+  manage_attendants?: boolean
+  manage_integrations?: boolean
+}
 
 export interface Database {
   public: {
@@ -77,6 +106,7 @@ export interface Database {
           organization_id: string
           user_id: string
           role: UserRole
+          permissions: Json
           created_at: string
           updated_at: string
         }
@@ -85,6 +115,7 @@ export interface Database {
           organization_id: string
           user_id: string
           role: UserRole
+          permissions?: Json
           created_at?: string
           updated_at?: string
         }
@@ -93,6 +124,7 @@ export interface Database {
           organization_id?: string
           user_id?: string
           role?: UserRole
+          permissions?: Json
           created_at?: string
           updated_at?: string
         }
