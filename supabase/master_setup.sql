@@ -179,17 +179,30 @@ CREATE TABLE public.audit_logs (
 );
 
 -- 14. Integration Connections
+-- Multiple connections per (organization, provider) are allowed on purpose — an
+-- organization can register several WhatsApp numbers and/or Instagram pages.
+-- `connection_method` distinguishes the official Cloud API (token-based, serverless-
+-- friendly) from an unofficial QR Code / WhatsApp Web session (requires a dedicated
+-- always-on worker process). `external_identifier` is the routing key from inbound
+-- webhook payloads (phone_number_id / WhatsApp number / Page ID) used to map an
+-- incoming message to the right connection.
 CREATE TABLE public.integration_connections (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     organization_id UUID NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE,
     provider TEXT NOT NULL CHECK (provider IN ('whatsapp_meta', 'instagram_meta')),
+    label TEXT NOT NULL DEFAULT 'Conexão Principal',
+    connection_method TEXT NOT NULL DEFAULT 'cloud_api' CHECK (connection_method IN ('cloud_api', 'qr_code')),
+    external_identifier TEXT,
     status TEXT NOT NULL DEFAULT 'inactive' CHECK (status IN ('active', 'inactive', 'error')),
     encrypted_credentials TEXT,
     settings JSONB DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE(organization_id, provider)
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE UNIQUE INDEX integration_connections_org_provider_identifier_key
+    ON public.integration_connections (organization_id, provider, external_identifier)
+    WHERE external_identifier IS NOT NULL;
 
 -- 15. Webhook Events (Idempotent)
 CREATE TABLE public.webhook_events (

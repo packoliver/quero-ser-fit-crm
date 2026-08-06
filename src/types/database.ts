@@ -15,6 +15,7 @@ export type MessageStatus = 'sent' | 'delivered' | 'read' | 'failed'
 export type TaskStatus = 'pending' | 'in_progress' | 'completed' | 'cancelled'
 export type IntegrationProvider = 'whatsapp_meta' | 'instagram_meta'
 export type IntegrationStatus = 'active' | 'inactive' | 'error'
+export type IntegrationConnectionMethod = 'cloud_api' | 'qr_code'
 
 export interface CustomPermissions {
   // Inbox / Atendimento
@@ -469,6 +470,9 @@ export interface Database {
           id: string
           organization_id: string
           provider: IntegrationProvider
+          label: string
+          connection_method: IntegrationConnectionMethod
+          external_identifier: string | null
           status: IntegrationStatus
           encrypted_credentials: string | null
           settings: Json
@@ -479,6 +483,9 @@ export interface Database {
           id?: string
           organization_id: string
           provider: IntegrationProvider
+          label?: string
+          connection_method?: IntegrationConnectionMethod
+          external_identifier?: string | null
           status?: IntegrationStatus
           encrypted_credentials?: string | null
           settings?: Json
@@ -489,6 +496,9 @@ export interface Database {
           id?: string
           organization_id?: string
           provider?: IntegrationProvider
+          label?: string
+          connection_method?: IntegrationConnectionMethod
+          external_identifier?: string | null
           status?: IntegrationStatus
           encrypted_credentials?: string | null
           settings?: Json
