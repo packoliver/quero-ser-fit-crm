@@ -33,12 +33,17 @@ export class MetaWhatsAppProvider implements ICRMIntegrationProvider {
             const textObj = msg.text as { body?: string } | undefined
             const content = textObj?.body || '[Mídia/Outro]'
 
+            // phone_number_id (not display_phone_number) is the stable routing key Meta
+            // uses to identify which of our registered numbers received this message —
+            // it's what we store as integration_connections.external_identifier.
+            const metadata = value.metadata as { phone_number_id?: string } | undefined
+
             events.push({
               provider: 'whatsapp_meta',
               externalEventId: externalId,
               eventType: 'messages',
               senderId,
-              recipientId: (value.metadata as { display_phone_number?: string })?.display_phone_number || '',
+              recipientId: metadata?.phone_number_id || '',
               content,
               timestamp: new Date().toISOString(),
               rawPayload: msg,
@@ -56,11 +61,38 @@ export class MetaWhatsAppProvider implements ICRMIntegrationProvider {
   async sendMessage(
     payload: OutgoingMessagePayload
   ): Promise<{ success: boolean; externalId?: string; error?: string }> {
-    // Fase 1: Interface preparada. Envio real aguarda adição de Tokens da Meta Cloud API nas configurações.
-    console.log('[MetaWhatsAppProvider] Simulação de envio oficial Cloud API:', payload)
-    return {
-      success: true,
-      externalId: `wamid.simulated_${Date.now()}`,
+    if (!payload.accessToken || !payload.fromExternalId) {
+      return { success: false, error: 'Conexão sem token/phone_number_id configurado (Cloud API).' }
+    }
+
+    try {
+      const res = await fetch(
+        `https://graph.facebook.com/v20.0/${encodeURIComponent(payload.fromExternalId)}/messages`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${payload.accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            messaging_product: 'whatsapp',
+            to: payload.recipientExternalId,
+            type: 'text',
+            text: { body: payload.content },
+          }),
+        }
+      )
+
+      const body = await res.json().catch(() => ({}))
+
+      if (!res.ok) {
+        return { success: false, error: body?.error?.message || `Falha HTTP ${res.status} ao enviar via WhatsApp Cloud API.` }
+      }
+
+      const externalId = body?.messages?.[0]?.id as string | undefined
+      return { success: true, externalId }
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : 'Erro de rede ao enviar mensagem.' }
     }
   }
 }

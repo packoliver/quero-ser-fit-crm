@@ -204,6 +204,13 @@ CREATE UNIQUE INDEX integration_connections_org_provider_identifier_key
     ON public.integration_connections (organization_id, provider, external_identifier)
     WHERE external_identifier IS NOT NULL;
 
+-- Links a conversation back to the specific WhatsApp number / Instagram page it came in
+-- through, so outbound replies know which connection's credentials to send with.
+ALTER TABLE public.conversations
+    ADD COLUMN integration_connection_id UUID REFERENCES public.integration_connections(id) ON DELETE SET NULL;
+
+CREATE INDEX idx_conversations_integration_connection ON public.conversations(integration_connection_id);
+
 -- 15. Webhook Events (Idempotent)
 CREATE TABLE public.webhook_events (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

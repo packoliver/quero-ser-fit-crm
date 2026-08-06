@@ -56,6 +56,23 @@ export const memberCreateSchema = z.object({
     .max(72, 'A senha temporária deve ter no máximo 72 caracteres'),
 })
 
+export const createConnectionSchema = z.discriminatedUnion('connectionMethod', [
+  z.object({
+    connectionMethod: z.literal('cloud_api'),
+    provider: z.enum(['whatsapp_meta', 'instagram_meta']),
+    label: z.string().min(2, 'Dê um nome pra essa conexão (ex: Loja Centro)').max(60),
+    externalIdentifier: z
+      .string()
+      .min(3, 'Informe o Phone Number ID (WhatsApp) ou Page ID (Instagram)'),
+    accessToken: z.string().min(20, 'Token de acesso inválido ou incompleto'),
+  }),
+  z.object({
+    connectionMethod: z.literal('qr_code'),
+    provider: z.literal('whatsapp_meta'),
+    label: z.string().min(2, 'Dê um nome pra essa conexão (ex: Loja Centro)').max(60),
+  }),
+])
+
 export const changePasswordSchema = z.object({
   password: z
     .string()

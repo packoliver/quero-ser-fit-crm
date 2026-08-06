@@ -208,6 +208,7 @@ export interface Database {
           channel_type: ChannelType
           status: ConversationStatus
           current_assignee_id: string | null
+          integration_connection_id: string | null
           last_message_at: string
           created_at: string
           updated_at: string
@@ -219,6 +220,7 @@ export interface Database {
           channel_type: ChannelType
           status?: ConversationStatus
           current_assignee_id?: string | null
+          integration_connection_id?: string | null
           last_message_at?: string
           created_at?: string
           updated_at?: string
@@ -230,6 +232,7 @@ export interface Database {
           channel_type?: ChannelType
           status?: ConversationStatus
           current_assignee_id?: string | null
+          integration_connection_id?: string | null
           last_message_at?: string
           created_at?: string
           updated_at?: string

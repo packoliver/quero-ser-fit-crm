@@ -6,6 +6,10 @@ export interface OutgoingMessagePayload {
   recipientExternalId: string
   content: string
   mediaUrl?: string
+  /** Cloud API only: decrypted access token for this specific connection. */
+  accessToken?: string
+  /** Cloud API only: our phone_number_id (WhatsApp) or Page ID (Instagram) sending the message. */
+  fromExternalId?: string
 }
 
 export interface IncomingWebhookEvent {
