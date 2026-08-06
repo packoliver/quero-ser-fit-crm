@@ -1,0 +1,293 @@
+'use client'
+
+import { useState, useRef, useEffect } from 'react'
+import { useRouter } from 'next/navigation'
+import {
+  Dumbbell,
+  LogOut,
+  UserCheck,
+  ShieldCheck,
+  ChevronDown,
+  Bell,
+  User as UserIcon,
+  CheckCircle2,
+  Clock,
+  Building,
+  Shield,
+} from 'lucide-react'
+import { UserRole } from '@/types/database'
+import { Modal } from '@/components/ui/Modal'
+import { Badge } from '@/components/ui/Badge'
+import { Button } from '@/components/ui/Button'
+import { useDemoStorage } from '@/lib/demo/useDemoStorage'
+
+export interface HeaderProps {
+  currentRole?: UserRole
+  onToggleRole?: () => void
+}
+
+export function Header({ currentRole = 'admin', onToggleRole }: HeaderProps) {
+  const router = useRouter()
+  const { tasks } = useDemoStorage()
+
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [notifOpen, setNotifOpen] = useState(false)
+  const [profileModalOpen, setProfileModalOpen] = useState(false)
+
+  const dropdownRef = useRef<HTMLDivElement>(null)
+  const notifRef = useRef<HTMLDivElement>(null)
+
+  const pendingTasks = tasks.filter((t) => t.status === 'pending')
+
+  const userName = currentRole === 'admin' ? 'Patricia Silva (Admin)' : 'Carlos Atendimento'
+  const userEmail = currentRole === 'admin' ? 'admin@queroserfit.com.br' : 'carlos@queroserfit.com.br'
+
+  // Close dropdowns when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setMenuOpen(false)
+      }
+      if (notifRef.current && !notifRef.current.contains(e.target as Node)) {
+        setNotifOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
+
+  const handleLogout = () => {
+    if (typeof document !== 'undefined') {
+      document.cookie = 'crm_demo_session=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;'
+    }
+    router.push('/login')
+    router.refresh()
+  }
+
+  return (
+    <header className="h-16 border-b border-slate-800 bg-[#0f172a]/90 backdrop-blur-md sticky top-0 z-40 px-4 lg:px-6 flex items-center justify-between select-none">
+      {/* Left side brand info */}
+      <div className="flex items-center gap-3">
+        <div className="lg:hidden flex items-center gap-2">
+          <div className="w-8 h-8 rounded-lg bg-emerald-600 flex items-center justify-center text-white shadow-md">
+            <Dumbbell className="w-4 h-4" />
+          </div>
+          <span className="font-bold text-sm text-slate-100">Quero Ser Fit</span>
+        </div>
+        <div className="hidden lg:flex items-center gap-2 text-xs text-slate-400">
+          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+          <span>CRM Operacional Conectado</span>
+        </div>
+      </div>
+
+      {/* Right side notification bell, role switcher & profile dropdown */}
+      <div className="flex items-center gap-3">
+        {/* Role Switcher Button */}
+        {onToggleRole && (
+          <button
+            onClick={onToggleRole}
+            title="Alternar Perfil Simulado (Admin vs Atendente)"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-slate-800 hover:bg-slate-700 text-xs text-slate-300 border border-slate-700 transition focus:outline-none focus:ring-2 focus:ring-emerald-500"
+          >
+            {currentRole === 'admin' ? (
+              <>
+                <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                <span>Admin</span>
+              </>
+            ) : (
+              <>
+                <UserCheck className="w-4 h-4 text-teal-400" />
+                <span>Atendente</span>
+              </>
+            )}
+            <span className="text-[10px] text-slate-500 ml-1 hidden sm:inline">(Alternar Perfil)</span>
+          </button>
+        )}
+
+        {/* Notifications Dropdown */}
+        <div className="relative" ref={notifRef}>
+          <button
+            onClick={() => {
+              setNotifOpen(!notifOpen)
+              setMenuOpen(false)
+            }}
+            aria-label="Notificações e Pendências"
+            className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 transition relative focus:outline-none focus:ring-2 focus:ring-emerald-500"
+            title="Notificações e Lembretes"
+          >
+            <Bell className="w-4 h-4" />
+            {pendingTasks.length > 0 && (
+              <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-rose-600 text-white font-bold text-[10px] flex items-center justify-center animate-pulse">
+                {pendingTasks.length}
+              </span>
+            )}
+          </button>
+
+          {notifOpen && (
+            <div className="absolute right-0 mt-2 w-80 bg-[#131f37] border border-slate-700 rounded-2xl shadow-2xl py-3 z-50 text-xs animate-in fade-in zoom-in-95">
+              <div className="px-4 pb-2 border-b border-slate-800 flex items-center justify-between">
+                <span className="font-bold text-slate-100 flex items-center gap-1.5">
+                  <Bell className="w-3.5 h-3.5 text-emerald-400" />
+                  Notificações & Lembretes
+                </span>
+                <Badge variant="amber">{pendingTasks.length} Pendente(s)</Badge>
+              </div>
+
+              <div className="max-h-64 overflow-y-auto divide-y divide-slate-800/60 my-1">
+                {pendingTasks.length === 0 ? (
+                  <div className="p-4 text-center text-slate-400 text-xs">
+                    Nenhuma tarefa ou pendência no momento! 🎉
+                  </div>
+                ) : (
+                  pendingTasks.slice(0, 5).map((task) => (
+                    <div
+                      key={task.id}
+                      onClick={() => {
+                        setNotifOpen(false)
+                        router.push('/tarefas')
+                      }}
+                      className="p-3 hover:bg-slate-800/60 transition cursor-pointer space-y-1"
+                    >
+                      <div className="flex justify-between items-start">
+                        <p className="font-semibold text-slate-200 line-clamp-1">{task.title}</p>
+                        <span className="text-[10px] text-amber-400 flex items-center gap-0.5 shrink-0 font-mono">
+                          <Clock className="w-3 h-3" />
+                          {task.dueDate}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-400 line-clamp-1">{task.description}</p>
+                    </div>
+                  ))
+                )}
+              </div>
+
+              <div className="pt-2 px-3 border-t border-slate-800 text-center">
+                <button
+                  onClick={() => {
+                    setNotifOpen(false)
+                    router.push('/tarefas')
+                  }}
+                  className="text-[11px] text-emerald-400 hover:underline font-semibold"
+                >
+                  Ver todas as tarefas no painel →
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* User Profile Dropdown */}
+        <div className="relative" ref={dropdownRef}>
+          <button
+            onClick={() => {
+              setMenuOpen(!menuOpen)
+              setNotifOpen(false)
+            }}
+            aria-expanded={menuOpen}
+            aria-label="Menu do Usuário"
+            className="flex items-center gap-2 p-1.5 rounded-xl hover:bg-slate-800 transition focus:outline-none focus:ring-2 focus:ring-emerald-500"
+          >
+            <div className="w-8 h-8 rounded-full bg-emerald-600 text-white font-bold text-xs flex items-center justify-center border border-emerald-400/40 shadow-sm">
+              {userName.charAt(0)}
+            </div>
+            <div className="hidden sm:block text-left">
+              <p className="text-xs font-semibold text-slate-200">{userName}</p>
+              <p className="text-[10px] text-slate-400">
+                {currentRole === 'admin' ? 'Administrador' : 'Atendente'}
+              </p>
+            </div>
+            <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
+          </button>
+
+          {menuOpen && (
+            <div className="absolute right-0 mt-2 w-60 bg-[#131f37] border border-slate-700 rounded-2xl shadow-2xl py-2 z-50 text-xs animate-in fade-in zoom-in-95">
+              <div className="px-4 py-3 border-b border-slate-800">
+                <p className="font-bold text-slate-100">{userName}</p>
+                <p className="text-slate-400 text-[11px] truncate">{userEmail}</p>
+                <div className="mt-1.5">
+                  <Badge variant={currentRole === 'admin' ? 'emerald' : 'teal'}>
+                    {currentRole === 'admin' ? 'Administrador' : 'Atendente'}
+                  </Badge>
+                </div>
+              </div>
+
+              <div className="py-1">
+                <button
+                  onClick={() => {
+                    setMenuOpen(false)
+                    setProfileModalOpen(true)
+                  }}
+                  className="w-full text-left px-4 py-2 text-slate-200 hover:bg-slate-800 flex items-center gap-2 transition"
+                >
+                  <UserIcon className="w-4 h-4 text-emerald-400" />
+                  <span>Meu Perfil</span>
+                </button>
+              </div>
+
+              <div className="pt-1 border-t border-slate-800">
+                <button
+                  onClick={handleLogout}
+                  className="w-full text-left px-4 py-2.5 text-rose-400 hover:bg-rose-950/40 flex items-center gap-2 font-medium transition"
+                >
+                  <LogOut className="w-4 h-4" />
+                  <span>Sair da Conta (Logout)</span>
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* User Profile Modal */}
+      <Modal
+        isOpen={profileModalOpen}
+        onClose={() => setProfileModalOpen(false)}
+        title="Perfil do Usuário"
+        icon={<UserIcon className="w-5 h-5" />}
+      >
+        <div className="space-y-4 text-xs">
+          <div className="flex items-center gap-3.5 p-3.5 bg-slate-900 rounded-xl border border-slate-800">
+            <div className="w-12 h-12 rounded-full bg-emerald-600 text-white font-extrabold text-base flex items-center justify-center shadow-lg">
+              {userName.charAt(0)}
+            </div>
+            <div>
+              <h3 className="font-bold text-sm text-slate-100">{userName}</h3>
+              <p className="text-slate-400">{userEmail}</p>
+            </div>
+          </div>
+
+          <div className="space-y-2.5 pt-1">
+            <div className="flex items-center justify-between p-2.5 bg-slate-900/60 rounded-xl border border-slate-800/60">
+              <span className="text-slate-400 flex items-center gap-1.5">
+                <Building className="w-4 h-4 text-emerald-400" /> Organização Ativa:
+              </span>
+              <span className="font-bold text-slate-100">Quero Ser Fit</span>
+            </div>
+
+            <div className="flex items-center justify-between p-2.5 bg-slate-900/60 rounded-xl border border-slate-800/60">
+              <span className="text-slate-400 flex items-center gap-1.5">
+                <Shield className="w-4 h-4 text-teal-400" /> Nível de Permissão:
+              </span>
+              <Badge variant={currentRole === 'admin' ? 'emerald' : 'teal'}>
+                {currentRole === 'admin' ? 'Administrador Total' : 'Atendimento Operacional'}
+              </Badge>
+            </div>
+
+            <div className="flex items-center justify-between p-2.5 bg-slate-900/60 rounded-xl border border-slate-800/60">
+              <span className="text-slate-400 flex items-center gap-1.5">
+                <CheckCircle2 className="w-4 h-4 text-emerald-400" /> Status da Conta:
+              </span>
+              <span className="text-emerald-400 font-semibold">Ativa e Autenticada</span>
+            </div>
+          </div>
+
+          <div className="flex justify-end pt-2">
+            <Button variant="secondary" onClick={() => setProfileModalOpen(false)}>
+              Fechar
+            </Button>
+          </div>
+        </div>
+      </Modal>
+    </header>
+  )
+}
