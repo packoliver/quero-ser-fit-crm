@@ -19,10 +19,12 @@ export function getServerEnv(): ServerEnv {
 
   const isProduction = process.env.NODE_ENV === 'production'
   const envKey = process.env.INTEGRATION_ENCRYPTION_KEY
+  const KNOWN_FALLBACK_KEY = '12345678901234567890123456789012'
+  const isUnsafeKey = !envKey || envKey === KNOWN_FALLBACK_KEY
 
-  if (isProduction && (!envKey || envKey === '12345678901234567890123456789012')) {
+  if (isProduction && isUnsafeKey) {
     console.error(
-      '[CRÍTICO] SEGURANÇA DE PRODUÇÃO: A variável INTEGRATION_ENCRYPTION_KEY é obrigatória em ambiente de produção!'
+      '[CRÍTICO] SEGURANÇA DE PRODUÇÃO: A variável INTEGRATION_ENCRYPTION_KEY é obrigatória em ambiente de produção e não pode usar o valor padrão de desenvolvimento!'
     )
   }
 
@@ -33,7 +35,10 @@ export function getServerEnv(): ServerEnv {
     SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY || '',
     META_WEBHOOK_VERIFY_TOKEN: process.env.META_WEBHOOK_VERIFY_TOKEN || undefined,
     META_APP_SECRET: process.env.META_APP_SECRET || undefined,
-    INTEGRATION_ENCRYPTION_KEY: envKey || (isProduction ? undefined : '12345678901234567890123456789012'),
+    // Em produção, uma chave ausente OU igual ao fallback conhecido de dev é tratada
+    // como "não configurada" (undefined), forçando getEncryptionKey() a lançar erro
+    // em vez de criptografar silenciosamente com uma chave pública e comprometida.
+    INTEGRATION_ENCRYPTION_KEY: isProduction ? (isUnsafeKey ? undefined : envKey) : (envKey || KNOWN_FALLBACK_KEY),
   }
 
   const result = serverEnvSchema.safeParse(rawEnv)
