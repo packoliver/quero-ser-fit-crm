@@ -28,6 +28,14 @@ export interface RealMetrics {
   openConversations: number
 }
 
+export interface RealAttendantPerformance {
+  id: string
+  name: string
+  role: 'admin' | 'manager' | 'attendant'
+  assignedConvs: number
+  completedTasks: number
+}
+
 export default function RelatoriosPage() {
   const { db, isLoaded } = useDemoStorage()
   const [viewMode, setViewMode] = useState<'demo' | 'real'>('real')
@@ -37,6 +45,7 @@ export default function RelatoriosPage() {
     completedTasks: 0,
     openConversations: 0,
   })
+  const [realAttendantPerformance, setRealAttendantPerformance] = useState<RealAttendantPerformance[]>([])
   const [loading, setLoading] = useState(false)
 
   // Calculations extracted directly from db in real-time
@@ -91,6 +100,38 @@ export default function RelatoriosPage() {
         completedTasks: completedTasksRes.count || 0,
         openConversations: convRes.count || 0,
       })
+
+      // Real per-attendant performance: org members joined with their assigned
+      // conversations and completed tasks, computed client-side (small org sizes).
+      const typed = supabase as unknown as {
+        from: (t: string) => {
+          select: (c: string) => Promise<{ data: unknown[] | null }>
+        }
+      }
+
+      const [membersRes, allConvRes, completedTaskRowsRes] = await Promise.all([
+        typed.from('organization_members').select('user_id, role, profiles(full_name)'),
+        typed.from('conversations').select('current_assignee_id'),
+        typed.from('tasks').select('assigned_to_id, status'),
+      ])
+
+      const membersData = (membersRes.data || []) as Array<{
+        user_id: string
+        role: 'admin' | 'manager' | 'attendant'
+        profiles: { full_name: string | null } | null
+      }>
+      const convData = (allConvRes.data || []) as Array<{ current_assignee_id: string | null }>
+      const taskData = (completedTaskRowsRes.data || []) as Array<{ assigned_to_id: string | null; status: string }>
+
+      setRealAttendantPerformance(
+        membersData.map((m) => ({
+          id: m.user_id,
+          name: m.profiles?.full_name || 'Membro',
+          role: m.role,
+          assignedConvs: convData.filter((c) => c.current_assignee_id === m.user_id).length,
+          completedTasks: taskData.filter((t) => t.assigned_to_id === m.user_id && t.status === 'completed').length,
+        }))
+      )
     } catch {
       setViewMode('demo')
     } finally {
@@ -308,7 +349,9 @@ export default function RelatoriosPage() {
             <Award className="w-4 h-4 text-emerald-400" />
             <span>Desempenho por Atendente da Equipe (Dinâmico)</span>
           </h2>
-          <Badge variant="slate">Atualizado via DemoStorage</Badge>
+          <Badge variant={viewMode === 'real' ? 'emerald' : 'slate'} icon={viewMode === 'real' ? <Database className="w-3 h-3" /> : undefined}>
+            {viewMode === 'real' ? 'Atualizado via Supabase' : 'Atualizado via DemoStorage'}
+          </Badge>
         </CardHeader>
 
         <CardBody className="p-0">
@@ -318,31 +361,44 @@ export default function RelatoriosPage() {
                 <tr className="border-b border-slate-800 text-slate-400 bg-slate-900/60">
                   <th className="py-3 px-4">Atendente</th>
                   <th className="py-3 px-4">Perfil</th>
-                  <th className="py-3 px-4">Status</th>
+                  {viewMode === 'demo' && <th className="py-3 px-4">Status</th>}
                   <th className="py-3 px-4">Conversas Atribuídas</th>
                   <th className="py-3 px-4">Tarefas Concluídas</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/60 text-slate-200">
-                {attendantPerformance.map((att) => (
-                  <tr key={att.id} className="hover:bg-slate-800/40 transition">
-                    <td className="py-3.5 px-4 font-semibold text-slate-100">{att.name}</td>
-                    <td className="py-3.5 px-4">
-                      <Badge variant={att.role === 'admin' ? 'emerald' : 'teal'}>
-                        {att.role === 'admin' ? 'Admin' : 'Atendente'}
-                      </Badge>
-                    </td>
-                    <td className="py-3.5 px-4">
-                      {att.status === 'active' ? (
-                        <span className="text-emerald-400 font-semibold">Ativo</span>
-                      ) : (
-                        <span className="text-amber-400 font-semibold">Pendente</span>
-                      )}
-                    </td>
-                    <td className="py-3.5 px-4 font-semibold text-slate-200">{att.assignedConvs}</td>
-                    <td className="py-3.5 px-4 font-bold text-emerald-400">{att.completedTasks}</td>
-                  </tr>
-                ))}
+                {viewMode === 'real'
+                  ? realAttendantPerformance.map((att) => (
+                      <tr key={att.id} className="hover:bg-slate-800/40 transition">
+                        <td className="py-3.5 px-4 font-semibold text-slate-100">{att.name}</td>
+                        <td className="py-3.5 px-4">
+                          <Badge variant={att.role === 'admin' ? 'emerald' : att.role === 'manager' ? 'indigo' : 'teal'}>
+                            {att.role === 'admin' ? 'Admin' : att.role === 'manager' ? 'Gerente' : 'Atendente'}
+                          </Badge>
+                        </td>
+                        <td className="py-3.5 px-4 font-semibold text-slate-200">{att.assignedConvs}</td>
+                        <td className="py-3.5 px-4 font-bold text-emerald-400">{att.completedTasks}</td>
+                      </tr>
+                    ))
+                  : attendantPerformance.map((att) => (
+                      <tr key={att.id} className="hover:bg-slate-800/40 transition">
+                        <td className="py-3.5 px-4 font-semibold text-slate-100">{att.name}</td>
+                        <td className="py-3.5 px-4">
+                          <Badge variant={att.role === 'admin' ? 'emerald' : 'teal'}>
+                            {att.role === 'admin' ? 'Admin' : 'Atendente'}
+                          </Badge>
+                        </td>
+                        <td className="py-3.5 px-4">
+                          {att.status === 'active' ? (
+                            <span className="text-emerald-400 font-semibold">Ativo</span>
+                          ) : (
+                            <span className="text-amber-400 font-semibold">Pendente</span>
+                          )}
+                        </td>
+                        <td className="py-3.5 px-4 font-semibold text-slate-200">{att.assignedConvs}</td>
+                        <td className="py-3.5 px-4 font-bold text-emerald-400">{att.completedTasks}</td>
+                      </tr>
+                    ))}
               </tbody>
             </table>
           </div>
