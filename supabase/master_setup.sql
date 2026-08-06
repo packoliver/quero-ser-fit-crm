@@ -60,6 +60,7 @@ CREATE TABLE public.contacts (
     avatar_url TEXT,
     status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'archived', 'blocked')),
     notes TEXT,
+    tags TEXT[] NOT NULL DEFAULT '{}',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -158,6 +159,7 @@ CREATE TABLE public.tasks (
     description TEXT,
     due_date TIMESTAMPTZ,
     status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'in_progress', 'completed', 'cancelled')),
+    priority TEXT NOT NULL DEFAULT 'media' CHECK (priority IN ('alta', 'media', 'baixa')),
     assigned_to_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
     contact_id UUID REFERENCES public.contacts(id) ON DELETE CASCADE,
     conversation_id UUID REFERENCES public.conversations(id) ON DELETE SET NULL,
@@ -226,6 +228,62 @@ CREATE TABLE public.webhook_events (
 );
 
 -- Helper Functions
+
+-- Auto-fills organization_id on INSERT when the client didn't supply it (every real
+-- CRUD page inserts directly from the browser without an explicit org_id — this derives
+-- it from the caller's own membership so those inserts don't fail NOT NULL). No-ops when
+-- an org_id was already provided, e.g. every server-side admin-client insert.
+CREATE OR REPLACE FUNCTION public.set_organization_id_from_caller()
+RETURNS TRIGGER
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+    v_org_id UUID;
+BEGIN
+    IF NEW.organization_id IS NULL THEN
+        SELECT organization_id INTO v_org_id
+        FROM public.organization_members
+        WHERE user_id = auth.uid()
+        LIMIT 1;
+
+        IF v_org_id IS NULL THEN
+            RAISE EXCEPTION 'USUÁRIO NÃO POSSUI ORGANIZAÇÃO ASSOCIADA — não é possível determinar organization_id automaticamente.';
+        END IF;
+
+        NEW.organization_id := v_org_id;
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+-- internal_notes needs both organization_id (derived from its conversation) and
+-- author_id (the writing user) auto-filled — the Inbox "Notas Internas" insert supplies
+-- neither.
+CREATE OR REPLACE FUNCTION public.set_internal_note_defaults()
+RETURNS TRIGGER
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = ''
+AS $$
+BEGIN
+    IF NEW.author_id IS NULL THEN
+        NEW.author_id := auth.uid();
+    END IF;
+
+    IF NEW.organization_id IS NULL THEN
+        SELECT organization_id INTO NEW.organization_id
+        FROM public.conversations
+        WHERE id = NEW.conversation_id;
+
+        IF NEW.organization_id IS NULL THEN
+            RAISE EXCEPTION 'CONVERSA NÃO ENCONTRADA — não é possível determinar organization_id da nota interna.';
+        END IF;
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION public.get_user_org_ids()
 RETURNS SETOF UUID
 LANGUAGE sql SECURITY DEFINER STABLE
@@ -418,6 +476,32 @@ BEGIN
     RETURN TRUE;
 END;
 $$;
+
+-- Auto-fill triggers (organization_id / author_id) for tables real pages insert into
+-- directly from the browser.
+CREATE TRIGGER trg_autofill_org_contacts
+    BEFORE INSERT ON public.contacts
+    FOR EACH ROW EXECUTE FUNCTION public.set_organization_id_from_caller();
+
+CREATE TRIGGER trg_autofill_org_tasks
+    BEFORE INSERT ON public.tasks
+    FOR EACH ROW EXECUTE FUNCTION public.set_organization_id_from_caller();
+
+CREATE TRIGGER trg_autofill_org_contact_channels
+    BEFORE INSERT ON public.contact_channels
+    FOR EACH ROW EXECUTE FUNCTION public.set_organization_id_from_caller();
+
+CREATE TRIGGER trg_autofill_org_conversations
+    BEFORE INSERT ON public.conversations
+    FOR EACH ROW EXECUTE FUNCTION public.set_organization_id_from_caller();
+
+CREATE TRIGGER trg_autofill_org_messages
+    BEFORE INSERT ON public.messages
+    FOR EACH ROW EXECUTE FUNCTION public.set_organization_id_from_caller();
+
+CREATE TRIGGER trg_autofill_internal_notes
+    BEFORE INSERT ON public.internal_notes
+    FOR EACH ROW EXECUTE FUNCTION public.set_internal_note_defaults();
 
 -- Enable Row Level Security
 ALTER TABLE public.organizations ENABLE ROW LEVEL SECURITY;

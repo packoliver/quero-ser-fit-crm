@@ -34,6 +34,7 @@ interface UiMessage {
   senderName: string
   content: string
   time: string
+  status?: 'sent' | 'delivered' | 'read' | 'failed'
 }
 
 interface UiConversation {
@@ -130,7 +131,7 @@ export default function InboxPage() {
           .from('conversations')
           .select('id, status, channel_type, current_assignee_id, last_message_at, contact_id, contacts(name, phone), profiles(full_name)')
           .order!('last_message_at', { ascending: false }),
-        typed.from('messages').select('id, conversation_id, sender_type, sender_id, content, created_at').order!('created_at', { ascending: true }),
+        typed.from('messages').select('id, conversation_id, sender_type, sender_id, content, status, created_at').order!('created_at', { ascending: true }),
         typed.from('internal_notes').select('id, conversation_id, content, created_at, author_id, profiles(full_name)').order!('created_at', { ascending: false }),
         typed.from('organization_members').select('user_id, profiles(full_name)').order!('created_at', { ascending: true }),
       ])
@@ -151,6 +152,7 @@ export default function InboxPage() {
         sender_type: 'contact' | 'user' | 'system'
         sender_id: string | null
         content: string
+        status: 'sent' | 'delivered' | 'read' | 'failed' | null
         created_at: string
       }>
       const noteData = (noteRes.data || []) as Array<{
@@ -183,6 +185,7 @@ export default function InboxPage() {
                 : membersData.find((mm) => mm.user_id === m.sender_id)?.profiles?.full_name || 'Atendente',
             content: m.content,
             time: formatTime(m.created_at),
+            status: m.status || undefined,
           }))
 
         const notes = noteData
@@ -661,6 +664,7 @@ export default function InboxPage() {
                 }
 
                 const isMe = msg.senderType === 'user'
+                const isFailed = msg.status === 'failed'
 
                 return (
                   <div
@@ -672,16 +676,24 @@ export default function InboxPage() {
                     <span className="text-[10px] text-slate-500 mb-1 px-1">{msg.senderName}</span>
                     <div
                       className={`p-3 rounded-2xl text-xs leading-relaxed ${
-                        isMe
+                        isFailed
+                          ? 'bg-rose-950/50 text-rose-100 border border-rose-800/70 rounded-tr-none'
+                          : isMe
                           ? 'bg-gradient-to-r from-emerald-600 to-teal-700 text-white rounded-tr-none shadow-md'
                           : 'bg-[#131f37] text-slate-200 border border-slate-700/80 rounded-tl-none'
                       }`}
                     >
                       <p className="whitespace-pre-wrap">{msg.content}</p>
-                      <span className={`text-[9px] block text-right mt-1.5 ${isMe ? 'text-emerald-200' : 'text-slate-400'}`}>
+                      <span className={`text-[9px] block text-right mt-1.5 ${isFailed ? 'text-rose-300' : isMe ? 'text-emerald-200' : 'text-slate-400'}`}>
                         {msg.time}
                       </span>
                     </div>
+                    {isFailed && (
+                      <span className="text-[10px] text-rose-400 flex items-center gap-1 mt-1 px-1">
+                        <AlertCircle className="w-3 h-3" />
+                        Falha ao enviar
+                      </span>
+                    )}
                   </div>
                 )
               })}

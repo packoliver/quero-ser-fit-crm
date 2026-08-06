@@ -34,7 +34,7 @@ export interface RealTask {
   due_date: string | null
   status: TaskStatus
   priority: 'alta' | 'media' | 'baixa' | null
-  assigned_to: string | null
+  assigned_to_id: string | null
   created_at: string
 }
 
@@ -118,7 +118,7 @@ export default function TarefasPage() {
         }
       })
         .from('tasks')
-        .select('id, title, description, due_date, status, priority, assigned_to, created_at')
+        .select('id, title, description, due_date, status, priority, assigned_to_id, created_at')
         .order('created_at', { ascending: false })
 
       if (dbError) {
