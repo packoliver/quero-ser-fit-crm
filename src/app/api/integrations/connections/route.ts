@@ -3,6 +3,8 @@ import { createConnectionSchema } from '@/lib/validations'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { encryptToken } from '@/lib/security/encryption'
+import { getServerEnv } from '@/lib/env'
+import { ZAPAPI_BASE_URL } from '@/lib/integrations/zapapi-whatsapp'
 
 interface ConnectionRow {
   id: string
@@ -188,36 +190,61 @@ export async function POST(request: NextRequest) {
     )
   }
 
-  // zapi: validate the Instance ID/Token by asking Z-API for the connected device before saving.
-  let zapiOk = false
-  let zapiDetail = ''
+  // zapapi: validate the Instance ID/Token against zap-api.tech's own status endpoint,
+  // then auto-register our webhook URL on that instance (signed with our shared secret)
+  // so the admin doesn't have to configure anything manually on zap-api.tech's side.
+  let zapapiOk = false
+  let zapapiDetail = ''
   try {
-    const deviceRes = await fetch(
-      `https://api.z-api.io/instances/${encodeURIComponent(input.instanceId)}/token/${encodeURIComponent(input.instanceToken)}/device`,
-      {
-        headers: input.clientToken ? { 'Client-Token': input.clientToken } : undefined,
-      }
-    )
-    const deviceBody = await deviceRes.json().catch(() => ({}))
-    zapiOk = deviceRes.ok && !!deviceBody?.phone
-    zapiDetail = zapiOk
+    const statusRes = await fetch(`${ZAPAPI_BASE_URL}/instances/${encodeURIComponent(input.instanceId)}/status`, {
+      headers: { Authorization: `Bearer ${input.instanceToken}` },
+    })
+    const statusBody = await statusRes.json().catch(() => ({}))
+    zapapiOk = statusRes.ok && statusBody?.connected === true
+    zapapiDetail = zapapiOk
       ? ''
-      : deviceBody?.error || deviceBody?.message || `HTTP ${deviceRes.status} — instância não conectada ou credenciais inválidas`
+      : statusBody?.message || statusBody?.error || `HTTP ${statusRes.status} — instância não conectada ou credenciais inválidas`
   } catch (err) {
-    zapiDetail = err instanceof Error ? err.message : 'Falha de rede ao validar com a Z-API.'
+    zapapiDetail = err instanceof Error ? err.message : 'Falha de rede ao validar com a ZAP API.'
+  }
+
+  const env = getServerEnv()
+  let webhookWarning: string | undefined
+  if (zapapiOk) {
+    if (!env.ZAPAPI_WEBHOOK_SECRET) {
+      webhookWarning = 'Conexão validada, mas ZAPAPI_WEBHOOK_SECRET não está configurada no servidor — o webhook não foi registrado automaticamente.'
+    } else {
+      try {
+        const webhookUrl = `${request.nextUrl.origin}/api/webhooks/zapapi`
+        const registerRes = await fetch(
+          `${ZAPAPI_BASE_URL}/instances/${encodeURIComponent(input.instanceId)}/webhook`,
+          {
+            method: 'PUT',
+            headers: { Authorization: `Bearer ${input.instanceToken}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: webhookUrl, events: ['message.received'], secret: env.ZAPAPI_WEBHOOK_SECRET }),
+          }
+        )
+        if (!registerRes.ok) {
+          const registerBody = await registerRes.json().catch(() => ({}))
+          webhookWarning = `Conexão validada, mas falhou ao registrar o webhook automaticamente na ZAP API: ${registerBody?.message || registerBody?.error || `HTTP ${registerRes.status}`}.`
+        }
+      } catch (err) {
+        webhookWarning = `Conexão validada, mas falhou ao registrar o webhook automaticamente: ${err instanceof Error ? err.message : 'erro de rede'}.`
+      }
+    }
   }
 
   const { data: inserted, error: insertError } = await adminDb
     .from('integration_connections')
     .insert({
       organization_id: organizationId,
-      provider: 'whatsapp_zapi',
+      provider: 'whatsapp_zapapi',
       label: input.label,
-      connection_method: 'zapi',
+      connection_method: 'zapapi',
       external_identifier: input.instanceId,
-      encrypted_credentials: encryptToken(JSON.stringify({ instanceToken: input.instanceToken, clientToken: input.clientToken || '' })),
-      status: zapiOk ? 'active' : 'error',
-      settings: zapiOk ? {} : { last_verify_error: zapiDetail },
+      encrypted_credentials: encryptToken(input.instanceToken),
+      status: zapapiOk ? 'active' : 'error',
+      settings: zapapiOk ? {} : { last_verify_error: zapapiDetail },
     })
     .select(SAFE_SELECT)
     .single()
@@ -233,9 +260,9 @@ export async function POST(request: NextRequest) {
   return NextResponse.json(
     {
       connection: inserted,
-      warning: zapiOk
-        ? undefined
-        : `Conexão salva, mas a Z-API não confirmou o dispositivo conectado: ${zapiDetail}. Escaneie o QR Code no painel da Z-API e tente novamente.`,
+      warning: zapapiOk
+        ? webhookWarning
+        : `Conexão salva, mas a ZAP API não confirmou o dispositivo conectado: ${zapapiDetail}. Escaneie o QR Code no painel da ZAP API e tente novamente.`,
     },
     { status: 201 }
   )

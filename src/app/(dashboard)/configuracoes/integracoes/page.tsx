@@ -20,8 +20,8 @@ import { Input } from '@/components/ui/Input'
 import { Select } from '@/components/ui/Select'
 import { Modal } from '@/components/ui/Modal'
 
-type Provider = 'whatsapp_meta' | 'whatsapp_zapi' | 'instagram_meta'
-type ConnectionMethod = 'cloud_api' | 'zapi'
+type Provider = 'whatsapp_meta' | 'whatsapp_zapapi' | 'instagram_meta'
+type ConnectionMethod = 'cloud_api' | 'zapapi'
 
 interface Connection {
   id: string
@@ -53,7 +53,6 @@ export default function IntegracoesConfigPage() {
     accessToken: '',
     instanceId: '',
     instanceToken: '',
-    clientToken: '',
   })
 
   const showToast = (msg: string) => {
@@ -96,7 +95,6 @@ export default function IntegracoesConfigPage() {
       accessToken: '',
       instanceId: '',
       instanceToken: '',
-      clientToken: '',
     })
     setFormError(null)
     setFormWarning(null)
@@ -123,12 +121,11 @@ export default function IntegracoesConfigPage() {
             accessToken: form.accessToken,
           }
         : {
-            connectionMethod: 'zapi',
-            provider: 'whatsapp_zapi',
+            connectionMethod: 'zapapi',
+            provider: 'whatsapp_zapapi',
             label: form.label,
             instanceId: form.instanceId,
             instanceToken: form.instanceToken,
-            clientToken: form.clientToken,
           }
 
     try {
@@ -243,7 +240,7 @@ export default function IntegracoesConfigPage() {
                       {conn.status === 'active' ? 'Ativa' : conn.status === 'error' ? 'Erro' : 'Inativa'}
                     </Badge>
                     <Badge variant="indigo" icon={conn.connection_method === 'cloud_api' ? <Cloud className="w-3 h-3" /> : <QrCode className="w-3 h-3" />}>
-                      {conn.connection_method === 'cloud_api' ? 'Cloud API' : 'Z-API'}
+                      {conn.connection_method === 'cloud_api' ? 'Cloud API' : 'ZAP API'}
                     </Badge>
                   </div>
                 </div>
@@ -291,10 +288,10 @@ export default function IntegracoesConfigPage() {
         </div>
 
         <div className="space-y-1.5">
-          <p className="text-slate-400">Z-API — configure no painel da Z-API (Instância → Webhooks → &ldquo;Ao receber&rdquo;):</p>
+          <p className="text-slate-400">ZAP API — o webhook é registrado automaticamente na instância assim que você cadastra a conexão abaixo, não precisa configurar nada manualmente no painel deles:</p>
           <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 font-mono space-y-1 text-[11px]">
-            <div className="text-slate-400"><strong className="text-emerald-400">Endpoint:</strong> /api/webhooks/zapi?secret=SEU_ZAPI_WEBHOOK_SECRET</div>
-            <div className="text-slate-400"><strong className="text-emerald-400">Segurança:</strong> segredo próprio na URL (ZAPI_WEBHOOK_SECRET no ambiente) — a Z-API não assina webhooks</div>
+            <div className="text-slate-400"><strong className="text-emerald-400">Endpoint:</strong> /api/webhooks/zapapi</div>
+            <div className="text-slate-400"><strong className="text-emerald-400">Segurança:</strong> assinatura HMAC-SHA256 real (header x-zapapi-signature-256) com ZAPAPI_WEBHOOK_SECRET</div>
           </div>
         </div>
       </Card>
@@ -323,12 +320,12 @@ export default function IntegracoesConfigPage() {
               setForm((prev) => ({
                 ...prev,
                 connectionMethod: method,
-                provider: method === 'zapi' ? 'whatsapp_zapi' : 'whatsapp_meta',
+                provider: method === 'zapapi' ? 'whatsapp_zapapi' : 'whatsapp_meta',
               }))
             }}
             options={[
               { value: 'cloud_api', label: 'Cloud API Oficial (WhatsApp ou Instagram)' },
-              { value: 'zapi', label: 'Z-API / WhatsApp Web (não-oficial, via z-api.io — só WhatsApp)' },
+              { value: 'zapapi', label: 'ZAP API / WhatsApp Web (não-oficial, via zap-api.tech — só WhatsApp)' },
             ]}
           />
 
@@ -378,7 +375,7 @@ export default function IntegracoesConfigPage() {
               <Input
                 label="Instance ID *"
                 required
-                placeholder="ID da instância no painel da Z-API"
+                placeholder="Ex: inst_abc123"
                 value={form.instanceId}
                 onChange={(e) => setForm({ ...form, instanceId: e.target.value })}
               />
@@ -386,22 +383,16 @@ export default function IntegracoesConfigPage() {
                 label="Instance Token *"
                 required
                 type="password"
-                placeholder="Token da instância no painel da Z-API"
+                placeholder="Ex: tk_..."
                 value={form.instanceToken}
                 onChange={(e) => setForm({ ...form, instanceToken: e.target.value })}
               />
-              <Input
-                label="Client-Token (opcional)"
-                type="password"
-                placeholder="Só se você ativou a segurança por Account Security Token"
-                value={form.clientToken}
-                onChange={(e) => setForm({ ...form, clientToken: e.target.value })}
-              />
               <div className="p-3 bg-emerald-950/40 border border-emerald-800/50 rounded-xl text-[11px] text-emerald-300">
-                As credenciais são validadas direto com a Z-API (checa se o dispositivo está conectado) e criptografadas antes de salvar.
+                As credenciais são validadas direto com a ZAP API (checa se o dispositivo está conectado), o webhook é
+                registrado automaticamente na instância, e o token fica criptografado antes de salvar.
               </div>
               <div className="p-3 bg-amber-950/40 border border-amber-800/50 rounded-xl text-[11px] text-amber-300">
-                Risco de banimento do número pelo WhatsApp — automação não-oficial do WhatsApp Web, terceirizada pra Z-API.
+                Risco de banimento do número pelo WhatsApp — automação não-oficial do WhatsApp Web, terceirizada pra ZAP API.
               </div>
             </>
           )}

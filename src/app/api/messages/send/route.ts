@@ -5,11 +5,11 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { decryptToken } from '@/lib/security/encryption'
 import { MetaWhatsAppProvider } from '@/lib/integrations/whatsapp-meta'
 import { MetaInstagramProvider } from '@/lib/integrations/instagram-meta'
-import { ZApiWhatsAppProvider } from '@/lib/integrations/zapi-whatsapp'
+import { ZapApiWhatsAppProvider } from '@/lib/integrations/zapapi-whatsapp'
 
 const whatsappProvider = new MetaWhatsAppProvider()
 const instagramProvider = new MetaInstagramProvider()
-const zapiProvider = new ZApiWhatsAppProvider()
+const zapapiProvider = new ZapApiWhatsAppProvider()
 
 const sendSchema = z.object({
   conversationId: z.string().uuid('ID de conversa inválido'),
@@ -26,7 +26,7 @@ interface ConversationRow {
 
 interface ConnectionRow {
   id: string
-  connection_method: 'cloud_api' | 'zapi'
+  connection_method: 'cloud_api' | 'zapapi'
   external_identifier: string | null
   encrypted_credentials: string | null
   status: string
@@ -129,28 +129,21 @@ export async function POST(request: NextRequest) {
 
   let result: { success: boolean; externalId?: string; error?: string }
 
-  if (connection.connection_method === 'zapi') {
+  if (connection.connection_method === 'zapapi') {
     let instanceToken: string
-    let clientToken: string | undefined
     try {
-      const decoded = JSON.parse(decryptToken(connection.encrypted_credentials)) as {
-        instanceToken: string
-        clientToken?: string
-      }
-      instanceToken = decoded.instanceToken
-      clientToken = decoded.clientToken || undefined
+      instanceToken = decryptToken(connection.encrypted_credentials)
     } catch {
-      return NextResponse.json({ error: 'Falha ao decifrar as credenciais da conexão Z-API.' }, { status: 500 })
+      return NextResponse.json({ error: 'Falha ao decifrar as credenciais da conexão ZAP API.' }, { status: 500 })
     }
 
-    result = await zapiProvider.sendMessage({
+    result = await zapapiProvider.sendMessage({
       organizationId: conversation.organization_id,
       conversationId: conversation.id,
       recipientExternalId,
       content: parsed.data.content,
       accessToken: instanceToken,
       fromExternalId: connection.external_identifier,
-      secondaryToken: clientToken,
     })
   } else {
     let accessToken: string

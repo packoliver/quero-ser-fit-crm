@@ -1,45 +1,46 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { ZApiWhatsAppProvider } from '@/lib/integrations/zapi-whatsapp'
+import { ZapApiWhatsAppProvider } from '@/lib/integrations/zapapi-whatsapp'
 import { processInboundEvents } from '@/lib/integrations/persist-event'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { getServerEnv } from '@/lib/env'
-import { timingSafeEqualString } from '@/lib/security/webhook'
+import { verifyHmacSha256Signature } from '@/lib/security/webhook'
 
-const zapiProvider = new ZApiWhatsAppProvider()
+const zapapiProvider = new ZapApiWhatsAppProvider()
 
 /**
- * POST /api/webhooks/zapi
+ * POST /api/webhooks/zapapi
  *
- * Receives "message received" callbacks from z-api.io. Register this URL (with the
- * ?secret=... query param below) in the Z-API dashboard for each instance, under
- * Webhooks → "Ao receber". Z-API does not sign its webhook payloads (no HMAC), so this
- * shared secret in the URL is what proves the call is legitimate — set
- * ZAPI_WEBHOOK_SECRET to a long random value and configure the same URL+secret in Z-API.
+ * Receives "message.received" callbacks from zap-api.tech. The webhook URL is
+ * registered automatically for each instance when its connection is created (see
+ * POST /api/integrations/connections), using ZAPAPI_WEBHOOK_SECRET as the signing
+ * secret — so the same value must verify the x-zapapi-signature-256 header here.
  */
 export async function POST(request: NextRequest) {
   try {
     const env = getServerEnv()
 
-    if (!env.ZAPI_WEBHOOK_SECRET) {
+    if (!env.ZAPAPI_WEBHOOK_SECRET) {
       return NextResponse.json(
         { error: 'Serviço de webhook temporariamente indisponível.' },
         { status: 503 }
       )
     }
 
-    const secret = request.nextUrl.searchParams.get('secret')
-    if (!timingSafeEqualString(secret, env.ZAPI_WEBHOOK_SECRET)) {
-      return NextResponse.json({ error: 'Segredo de webhook inválido ou ausente.' }, { status: 401 })
+    const rawBody = await request.text()
+    const signatureHeader = request.headers.get('x-zapapi-signature-256')
+
+    if (!verifyHmacSha256Signature(rawBody, signatureHeader, env.ZAPAPI_WEBHOOK_SECRET)) {
+      return NextResponse.json({ error: 'Assinatura de segurança inválida ou ausente.' }, { status: 401 })
     }
 
     let jsonBody: Record<string, unknown>
     try {
-      jsonBody = (await request.json()) as Record<string, unknown>
+      jsonBody = JSON.parse(rawBody) as Record<string, unknown>
     } catch {
       return NextResponse.json({ error: 'Formato de payload inválido.' }, { status: 400 })
     }
 
-    const events = zapiProvider.parseWebhookPayload(jsonBody)
+    const events = zapapiProvider.parseWebhookPayload(jsonBody)
 
     let admin
     try {

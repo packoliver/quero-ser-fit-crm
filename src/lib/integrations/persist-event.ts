@@ -33,7 +33,7 @@ type AdminDb = {
 }
 
 /**
- * Processes one parsed inbound event (from any provider — Meta or Z-API): finds which of
+ * Processes one parsed inbound event (from any provider — Meta or ZAP API): finds which of
  * our registered numbers/pages it belongs to, then finds-or-creates the contact, the
  * conversation, and the message row. Returns false (without throwing) when no matching
  * connection is registered yet, so the caller can skip it — this happens for messages
@@ -148,7 +148,7 @@ export async function persistInboundEvent(
 
 /**
  * Idempotently logs + persists a batch of parsed inbound events. Shared by every
- * webhook route (Meta, Z-API, ...): logs each event to webhook_events first (skipping
+ * webhook route (Meta, ZAP API, ...): logs each event to webhook_events first (skipping
  * ones already processed, e.g. a provider retrying delivery), then calls
  * persistInboundEvent for the new ones. Returns how many were newly persisted.
  */
