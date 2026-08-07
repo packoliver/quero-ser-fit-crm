@@ -183,18 +183,22 @@ CREATE TABLE public.audit_logs (
 -- 14. Integration Connections
 -- Multiple connections per (organization, provider) are allowed on purpose — an
 -- organization can register several WhatsApp numbers and/or Instagram pages.
--- `connection_method` distinguishes the official Cloud API (token-based, serverless-
--- friendly) from an unofficial QR Code / WhatsApp Web session (requires a dedicated
--- always-on worker process). `external_identifier` is the routing key from inbound
--- webhook payloads (phone_number_id / WhatsApp number / Page ID) used to map an
--- incoming message to the right connection.
+-- `connection_method` distinguishes between connector types: the official Cloud API
+-- (fixed API host, token-based) vs uazapi (unofficial WhatsApp Web session, per-account
+-- subdomain — see `api_base_url`). `external_identifier` is the routing key from
+-- inbound webhook payloads (phone_number_id / Page ID / uazapi instance id) used to
+-- map an incoming message to the right connection. `webhook_secret` is only used by
+-- providers that can't sign their webhooks with HMAC (uazapi) — the secret is embedded
+-- in the webhook URL's path instead of a signature header.
 CREATE TABLE public.integration_connections (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     organization_id UUID NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE,
-    provider TEXT NOT NULL CHECK (provider IN ('whatsapp_meta', 'whatsapp_zapapi', 'instagram_meta')),
+    provider TEXT NOT NULL CHECK (provider IN ('whatsapp_meta', 'instagram_meta', 'whatsapp_uazapi')),
     label TEXT NOT NULL DEFAULT 'Conexão Principal',
-    connection_method TEXT NOT NULL DEFAULT 'cloud_api' CHECK (connection_method IN ('cloud_api', 'zapapi')),
+    connection_method TEXT NOT NULL DEFAULT 'cloud_api' CHECK (connection_method IN ('cloud_api', 'uazapi')),
     external_identifier TEXT,
+    api_base_url TEXT,
+    webhook_secret TEXT,
     status TEXT NOT NULL DEFAULT 'inactive' CHECK (status IN ('active', 'inactive', 'error')),
     encrypted_credentials TEXT,
     settings JSONB DEFAULT '{}'::jsonb,
@@ -205,6 +209,10 @@ CREATE TABLE public.integration_connections (
 CREATE UNIQUE INDEX integration_connections_org_provider_identifier_key
     ON public.integration_connections (organization_id, provider, external_identifier)
     WHERE external_identifier IS NOT NULL;
+
+CREATE UNIQUE INDEX integration_connections_webhook_secret_key
+    ON public.integration_connections (webhook_secret)
+    WHERE webhook_secret IS NOT NULL;
 
 -- Links a conversation back to the specific WhatsApp number / Instagram page it came in
 -- through, so outbound replies know which connection's credentials to send with.

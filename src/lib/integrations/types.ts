@@ -6,14 +6,16 @@ export interface OutgoingMessagePayload {
   recipientExternalId: string
   content: string
   mediaUrl?: string
-  /** Decrypted access token for this connection (Cloud API access token / ZAP API instance token). */
+  /** Decrypted access token for this connection (Cloud API access token / uazapi instance token). */
   accessToken?: string
-  /** Our identifier for the connection sending this message (phone_number_id / Page ID / ZAP API instance id). */
+  /** Our identifier for the connection sending this message (phone_number_id / Page ID). */
   fromExternalId?: string
+  /** Per-account API host, only used by providers without a fixed base URL (e.g. uazapi's subdomain). */
+  apiBaseUrl?: string
 }
 
 export interface IncomingWebhookEvent {
-  provider: 'whatsapp_meta' | 'whatsapp_zapapi' | 'instagram_meta'
+  provider: 'whatsapp_meta' | 'instagram_meta' | 'whatsapp_uazapi'
   externalEventId: string
   eventType: string
   senderId: string

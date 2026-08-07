@@ -49,7 +49,7 @@ export function verifyMetaHmacSignature(
 
 /**
  * Generic alias for verifyMetaHmacSignature — the sha256=<hex> HMAC scheme isn't
- * Meta-specific, other providers (e.g. zap-api.tech) use the exact same format with a
- * different header name.
+ * Meta-specific, other providers may use the exact same format with a different
+ * header name.
  */
 export const verifyHmacSha256Signature = verifyMetaHmacSignature

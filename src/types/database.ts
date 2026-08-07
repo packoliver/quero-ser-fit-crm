@@ -13,9 +13,9 @@ export type AssignmentStatus = 'active' | 'transferred' | 'released'
 export type SenderType = 'contact' | 'user' | 'system'
 export type MessageStatus = 'sent' | 'delivered' | 'read' | 'failed'
 export type TaskStatus = 'pending' | 'in_progress' | 'completed' | 'cancelled'
-export type IntegrationProvider = 'whatsapp_meta' | 'whatsapp_zapapi' | 'instagram_meta'
+export type IntegrationProvider = 'whatsapp_meta' | 'instagram_meta' | 'whatsapp_uazapi'
 export type IntegrationStatus = 'active' | 'inactive' | 'error'
-export type IntegrationConnectionMethod = 'cloud_api' | 'zapapi'
+export type IntegrationConnectionMethod = 'cloud_api' | 'uazapi'
 
 export interface CustomPermissions {
   // Inbox / Atendimento

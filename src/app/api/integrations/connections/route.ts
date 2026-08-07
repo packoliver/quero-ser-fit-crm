@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { randomBytes } from 'crypto'
 import { createConnectionSchema } from '@/lib/validations'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { encryptToken } from '@/lib/security/encryption'
-import { verifyCloudApiConnection, verifyZapApiConnection } from '@/lib/integrations/verify-connection'
+import { verifyCloudApiConnection, verifyUazapiConnection } from '@/lib/integrations/verify-connection'
 
 interface ConnectionRow {
   id: string
@@ -11,6 +12,7 @@ interface ConnectionRow {
   label: string
   connection_method: string
   external_identifier: string | null
+  api_base_url: string | null
   status: string
   settings: Record<string, unknown> | null
   created_at: string
@@ -68,8 +70,10 @@ async function getCallerOrganizationId(
   return { organizationId: membership.organization_id }
 }
 
-// Fields returned to the client — encrypted_credentials is intentionally never included.
-const SAFE_SELECT = 'id, provider, label, connection_method, external_identifier, status, settings, created_at'
+// Fields returned to the client — encrypted_credentials and webhook_secret are
+// intentionally never included (the latter doubles as a bearer credential embedded in
+// the webhook URL, since uazapi has no HMAC signing to authenticate it another way).
+const SAFE_SELECT = 'id, provider, label, connection_method, external_identifier, api_base_url, status, settings, created_at'
 
 function isDuplicateError(error: { message?: string; code?: string } | null | undefined): boolean {
   if (!error) return false
@@ -196,26 +200,31 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // zapapi: validate the Instance ID/Token against zap-api.tech's own status endpoint,
-    // then auto-register our webhook URL on that instance (signed with our shared secret)
-    // so the admin doesn't have to configure anything manually on zap-api.tech's side.
-    const { ok: zapapiOk, detail: zapapiDetail, webhookWarning } = await verifyZapApiConnection(
-      input.instanceId,
+    // uazapi: each account has its own subdomain, so we validate the base URL/token
+    // against that instance's own /instance/status, then register our webhook (the
+    // secret embedded in its URL path is generated here, once, and reused on every
+    // future re-verify — see verify-connection.ts for why).
+    const webhookSecret = randomBytes(24).toString('hex')
+    const { ok: uazapiOk, detail: uazapiDetail, webhookWarning, resolvedExternalId } = await verifyUazapiConnection(
+      input.apiBaseUrl,
       input.instanceToken,
-      request.nextUrl.origin
+      request.nextUrl.origin,
+      webhookSecret
     )
 
     const { data: inserted, error: insertError } = await adminDb
       .from('integration_connections')
       .insert({
         organization_id: organizationId,
-        provider: 'whatsapp_zapapi',
+        provider: 'whatsapp_uazapi',
         label: input.label,
-        connection_method: 'zapapi',
-        external_identifier: input.instanceId,
+        connection_method: 'uazapi',
+        external_identifier: resolvedExternalId || null,
+        api_base_url: input.apiBaseUrl,
+        webhook_secret: webhookSecret,
         encrypted_credentials: encryptToken(input.instanceToken),
-        status: zapapiOk ? 'active' : 'error',
-        settings: zapapiOk ? {} : { last_verify_error: zapapiDetail },
+        status: uazapiOk ? 'active' : 'error',
+        settings: uazapiOk ? {} : { last_verify_error: uazapiDetail },
       })
       .select(SAFE_SELECT)
       .single()
@@ -225,7 +234,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         {
           error: isDuplicate
-            ? 'Essa Instance ID já está cadastrada nesta organização.'
+            ? 'Essa instância já está cadastrada nesta organização.'
             : `Falha ao salvar a conexão: ${insertError?.message || 'erro desconhecido'}`,
         },
         { status: isDuplicate ? 409 : 500 }
@@ -235,9 +244,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(
       {
         connection: inserted,
-        warning: zapapiOk
+        warning: uazapiOk
           ? webhookWarning
-          : `Conexão salva, mas a ZAP API não confirmou o dispositivo conectado: ${zapapiDetail}. Escaneie o QR Code no painel da ZAP API e tente novamente.`,
+          : `Conexão salva, mas o WhatsApp ainda não está conectado nessa instância (${uazapiDetail}). Clique em "Conectar" no card da conexão pra escanear o QR Code.`,
       },
       { status: 201 }
     )

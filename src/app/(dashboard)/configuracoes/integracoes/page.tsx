@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Phone,
   Info,
@@ -8,8 +8,8 @@ import {
   Plus,
   Trash2,
   CheckCircle2,
-  QrCode,
   Cloud,
+  QrCode,
   Loader2,
   RefreshCw,
 } from 'lucide-react'
@@ -21,8 +21,8 @@ import { Input } from '@/components/ui/Input'
 import { Select } from '@/components/ui/Select'
 import { Modal } from '@/components/ui/Modal'
 
-type Provider = 'whatsapp_meta' | 'whatsapp_zapapi' | 'instagram_meta'
-type ConnectionMethod = 'cloud_api' | 'zapapi'
+type Provider = 'whatsapp_meta' | 'instagram_meta' | 'whatsapp_uazapi'
+type ConnectionMethod = 'cloud_api' | 'uazapi'
 
 interface Connection {
   id: string
@@ -30,10 +30,14 @@ interface Connection {
   label: string
   connection_method: ConnectionMethod
   external_identifier: string | null
+  api_base_url: string | null
   status: 'active' | 'inactive' | 'error'
   settings: Record<string, unknown> | null
   created_at: string
 }
+
+const QR_POLL_INTERVAL_MS = 3000
+const QR_TIMEOUT_MS = 2 * 60 * 1000
 
 export default function IntegracoesConfigPage() {
   const [connections, setConnections] = useState<Connection[]>([])
@@ -48,14 +52,23 @@ export default function IntegracoesConfigPage() {
   const [toast, setToast] = useState<string | null>(null)
 
   const [form, setForm] = useState({
-    provider: 'whatsapp_meta' as Provider,
     connectionMethod: 'cloud_api' as ConnectionMethod,
+    provider: 'whatsapp_meta' as Provider,
     label: '',
     externalIdentifier: '',
     accessToken: '',
-    instanceId: '',
+    apiBaseUrl: '',
     instanceToken: '',
   })
+
+  // QR Code modal (uazapi only)
+  const [qrModal, setQrModal] = useState<{ connId: string; label: string } | null>(null)
+  const [qrImage, setQrImage] = useState<string | null>(null)
+  const [paircode, setPaircode] = useState<string | null>(null)
+  const [qrConnected, setQrConnected] = useState(false)
+  const [qrTimedOut, setQrTimedOut] = useState(false)
+  const [qrError, setQrError] = useState<string | null>(null)
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const showToast = (msg: string) => {
     setToast(msg)
@@ -88,14 +101,20 @@ export default function IntegracoesConfigPage() {
     return () => clearTimeout(timer)
   }, [fetchConnections])
 
+  useEffect(() => {
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current)
+    }
+  }, [])
+
   const resetForm = () => {
     setForm({
-      provider: 'whatsapp_meta',
       connectionMethod: 'cloud_api',
+      provider: 'whatsapp_meta',
       label: '',
       externalIdentifier: '',
       accessToken: '',
-      instanceId: '',
+      apiBaseUrl: '',
       instanceToken: '',
     })
     setFormError(null)
@@ -123,10 +142,10 @@ export default function IntegracoesConfigPage() {
             accessToken: form.accessToken,
           }
         : {
-            connectionMethod: 'zapapi',
-            provider: 'whatsapp_zapapi',
+            connectionMethod: 'uazapi',
+            provider: 'whatsapp_uazapi',
             label: form.label,
-            instanceId: form.instanceId,
+            apiBaseUrl: form.apiBaseUrl,
             instanceToken: form.instanceToken,
           }
 
@@ -200,7 +219,86 @@ export default function IntegracoesConfigPage() {
     }
   }
 
+  const stopPolling = () => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current)
+      pollRef.current = null
+    }
+  }
+
+  const closeQrModal = () => {
+    stopPolling()
+    setQrModal(null)
+    setQrImage(null)
+    setPaircode(null)
+    setQrConnected(false)
+    setQrTimedOut(false)
+    setQrError(null)
+  }
+
+  const pollQrStatus = useCallback(
+    async (connId: string, deadline: number) => {
+      try {
+        const res = await fetch(`/api/integrations/connections/${connId}/connect`)
+        const body = await res.json()
+        if (!res.ok) {
+          setQrError(body.error || 'Falha ao consultar status da conexão.')
+          return
+        }
+        if (body.qrcode) setQrImage(body.qrcode)
+        if (body.paircode) setPaircode(body.paircode)
+        if (body.connected) {
+          setQrConnected(true)
+          stopPolling()
+          showToast('WhatsApp conectado com sucesso!')
+          fetchConnections()
+          return
+        }
+        if (Date.now() > deadline) {
+          setQrTimedOut(true)
+          stopPolling()
+        }
+      } catch {
+        setQrError('Erro de conexão ao consultar status.')
+      }
+    },
+    [fetchConnections]
+  )
+
+  const handleOpenQr = useCallback(async (conn: Connection) => {
+    setQrModal({ connId: conn.id, label: conn.label })
+    setQrImage(null)
+    setPaircode(null)
+    setQrConnected(false)
+    setQrTimedOut(false)
+    setQrError(null)
+
+    try {
+      const res = await fetch(`/api/integrations/connections/${conn.id}/connect`, { method: 'POST' })
+      const body = await res.json()
+      if (!res.ok) {
+        setQrError(body.error || 'Falha ao iniciar conexão.')
+        return
+      }
+      if (body.qrcode) setQrImage(body.qrcode)
+      if (body.paircode) setPaircode(body.paircode)
+      if (body.connected) {
+        setQrConnected(true)
+        fetchConnections()
+        return
+      }
+
+      const deadline = Date.now() + QR_TIMEOUT_MS
+      pollRef.current = setInterval(() => {
+        void pollQrStatus(conn.id, deadline)
+      }, QR_POLL_INTERVAL_MS)
+    } catch {
+      setQrError('Erro de conexão ao iniciar o processo de conexão.')
+    }
+  }, [pollQrStatus, fetchConnections])
+
   const providerLabel = (p: Provider) => (p === 'instagram_meta' ? 'Instagram' : 'WhatsApp')
+  const methodLabel = (m: ConnectionMethod) => (m === 'cloud_api' ? 'Cloud API' : 'uazapi')
 
   return (
     <div className="p-4 lg:p-8 space-y-6 max-w-7xl mx-auto">
@@ -264,7 +362,7 @@ export default function IntegracoesConfigPage() {
                       {conn.status === 'active' ? 'Ativa' : conn.status === 'error' ? 'Erro' : 'Inativa'}
                     </Badge>
                     <Badge variant="indigo" icon={conn.connection_method === 'cloud_api' ? <Cloud className="w-3 h-3" /> : <QrCode className="w-3 h-3" />}>
-                      {conn.connection_method === 'cloud_api' ? 'Cloud API' : 'ZAP API'}
+                      {methodLabel(conn.connection_method)}
                     </Badge>
                   </div>
                 </div>
@@ -283,6 +381,15 @@ export default function IntegracoesConfigPage() {
                   Criada em {new Date(conn.created_at).toLocaleDateString('pt-BR')}
                 </span>
                 <div className="flex items-center gap-1.5">
+                  {conn.connection_method === 'uazapi' && conn.status !== 'active' && (
+                    <button
+                      onClick={() => handleOpenQr(conn)}
+                      className="p-1.5 rounded-lg bg-slate-900 hover:bg-emerald-950/60 border border-slate-700 hover:border-emerald-800 text-slate-400 hover:text-emerald-400 transition"
+                      title="Conectar via QR Code"
+                    >
+                      <QrCode className="w-3.5 h-3.5" />
+                    </button>
+                  )}
                   {conn.status !== 'active' && (
                     <button
                       onClick={() => handleVerify(conn)}
@@ -324,10 +431,10 @@ export default function IntegracoesConfigPage() {
         </div>
 
         <div className="space-y-1.5">
-          <p className="text-slate-400">ZAP API — o webhook é registrado automaticamente na instância assim que você cadastra a conexão abaixo, não precisa configurar nada manualmente no painel deles:</p>
+          <p className="text-slate-400">uazapi — o webhook é registrado automaticamente na instância assim que você cadastra a conexão (ou clica em Reverificar), não precisa configurar nada manualmente no painel deles:</p>
           <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 font-mono space-y-1 text-[11px]">
-            <div className="text-slate-400"><strong className="text-emerald-400">Endpoint:</strong> /api/webhooks/zapapi</div>
-            <div className="text-slate-400"><strong className="text-emerald-400">Segurança:</strong> assinatura HMAC-SHA256 real (header x-zapapi-signature-256) com ZAPAPI_WEBHOOK_SECRET</div>
+            <div className="text-slate-400"><strong className="text-emerald-400">Endpoint:</strong> /api/webhooks/uazapi/&#123;segredo&#125;</div>
+            <div className="text-slate-400"><strong className="text-emerald-400">Segurança:</strong> a uazapi não assina webhooks (sem HMAC) — um segredo aleatório único por conexão fica embutido no próprio caminho da URL</div>
           </div>
         </div>
       </Card>
@@ -356,12 +463,12 @@ export default function IntegracoesConfigPage() {
               setForm((prev) => ({
                 ...prev,
                 connectionMethod: method,
-                provider: method === 'zapapi' ? 'whatsapp_zapapi' : 'whatsapp_meta',
+                provider: method === 'uazapi' ? 'whatsapp_uazapi' : 'whatsapp_meta',
               }))
             }}
             options={[
               { value: 'cloud_api', label: 'Cloud API Oficial (WhatsApp ou Instagram)' },
-              { value: 'zapapi', label: 'ZAP API / WhatsApp Web (não-oficial, via zap-api.tech — só WhatsApp)' },
+              { value: 'uazapi', label: 'uazapi / WhatsApp Web (não-oficial — só WhatsApp)' },
             ]}
           />
 
@@ -409,26 +516,28 @@ export default function IntegracoesConfigPage() {
           ) : (
             <>
               <Input
-                label="Instance ID *"
+                label="Base URL da Instância *"
                 required
-                placeholder="Ex: inst_abc123"
-                value={form.instanceId}
-                onChange={(e) => setForm({ ...form, instanceId: e.target.value })}
+                placeholder="Ex: https://minhaempresa.uazapi.com"
+                value={form.apiBaseUrl}
+                onChange={(e) => setForm({ ...form, apiBaseUrl: e.target.value })}
               />
               <Input
-                label="Instance Token *"
+                label="Token da Instância *"
                 required
                 type="password"
-                placeholder="Ex: tk_..."
+                placeholder="Token gerado ao criar a instância na uazapi"
                 value={form.instanceToken}
                 onChange={(e) => setForm({ ...form, instanceToken: e.target.value })}
               />
               <div className="p-3 bg-emerald-950/40 border border-emerald-800/50 rounded-xl text-[11px] text-emerald-300">
-                As credenciais são validadas direto com a ZAP API (checa se o dispositivo está conectado), o webhook é
-                registrado automaticamente na instância, e o token fica criptografado antes de salvar.
+                Crie a instância no painel/API da sua conta uazapi primeiro (ela te dá a Base URL e o Token). Depois de
+                salvar aqui, clique no ícone de QR Code no card da conexão pra escanear e conectar o WhatsApp — sem
+                precisar sair do CRM.
               </div>
               <div className="p-3 bg-amber-950/40 border border-amber-800/50 rounded-xl text-[11px] text-amber-300">
-                Risco de banimento do número pelo WhatsApp — automação não-oficial do WhatsApp Web, terceirizada pra ZAP API.
+                Risco de banimento do número pelo WhatsApp — automação não-oficial do WhatsApp Web. A uazapi recomenda
+                usar contas WhatsApp Business.
               </div>
             </>
           )}
@@ -442,6 +551,56 @@ export default function IntegracoesConfigPage() {
             </Button>
           </div>
         </form>
+      </Modal>
+
+      {/* QR Code Modal (uazapi) */}
+      <Modal isOpen={!!qrModal} onClose={closeQrModal} title={`Conectar "${qrModal?.label || ''}"`} icon={<QrCode className="w-5 h-5" />}>
+        <div className="space-y-3 text-xs text-center">
+          {qrError && (
+            <div className="p-3 rounded-xl bg-rose-950/40 border border-rose-800/50 text-rose-300 flex items-center gap-2.5 text-left">
+              <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
+              <span>{qrError}</span>
+            </div>
+          )}
+
+          {qrConnected ? (
+            <div className="p-6 rounded-xl bg-emerald-950/40 border border-emerald-800/50 text-emerald-300 flex flex-col items-center gap-2">
+              <CheckCircle2 className="w-8 h-8 text-emerald-400" />
+              <span className="font-semibold">WhatsApp conectado com sucesso!</span>
+            </div>
+          ) : qrTimedOut ? (
+            <div className="p-6 rounded-xl bg-amber-950/40 border border-amber-800/50 text-amber-300 flex flex-col items-center gap-3">
+              <AlertCircle className="w-8 h-8 text-amber-400" />
+              <span>O QR Code expirou sem confirmação. Feche e clique no ícone de QR Code de novo pra gerar um novo.</span>
+            </div>
+          ) : qrImage ? (
+            <>
+              <p className="text-slate-400">Abra o WhatsApp no celular → Aparelhos conectados → Conectar um aparelho, e escaneie:</p>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={qrImage} alt="QR Code para conectar o WhatsApp" className="mx-auto rounded-xl border border-slate-700 w-56 h-56 object-contain bg-white p-2" />
+              {paircode && (
+                <p className="text-slate-400">
+                  Ou use o código de pareamento: <span className="font-mono text-slate-200">{paircode}</span>
+                </p>
+              )}
+              <p className="text-slate-500 flex items-center justify-center gap-1.5">
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                Aguardando leitura...
+              </p>
+            </>
+          ) : (
+            <div className="flex items-center justify-center py-10 text-slate-400 gap-2">
+              <Loader2 className="w-4 h-4 animate-spin" />
+              Gerando QR Code...
+            </div>
+          )}
+
+          <div className="flex justify-end pt-2">
+            <Button variant="secondary" type="button" onClick={closeQrModal}>
+              Fechar
+            </Button>
+          </div>
+        </div>
       </Modal>
     </div>
   )

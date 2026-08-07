@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { decryptToken } from '@/lib/security/encryption'
-import { verifyCloudApiConnection, verifyZapApiConnection } from '@/lib/integrations/verify-connection'
+import { verifyCloudApiConnection, verifyUazapiConnection } from '@/lib/integrations/verify-connection'
 
 interface ConnectionRow {
   id: string
@@ -10,13 +10,15 @@ interface ConnectionRow {
   label: string
   connection_method: string
   external_identifier: string | null
+  api_base_url: string | null
+  webhook_secret: string | null
   status: string
   settings: Record<string, unknown> | null
   created_at: string
   encrypted_credentials: string | null
 }
 
-const SAFE_SELECT = 'id, provider, label, connection_method, external_identifier, status, settings, created_at'
+const SAFE_SELECT = 'id, provider, label, connection_method, external_identifier, api_base_url, status, settings, created_at'
 
 /**
  * POST /api/integrations/connections/[id]/verify
@@ -93,7 +95,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
 
     const { data: connection } = await adminDb
       .from('integration_connections')
-      .select('id, provider, label, connection_method, external_identifier, status, settings, created_at, encrypted_credentials')
+      .select('id, provider, label, connection_method, external_identifier, api_base_url, webhook_secret, status, settings, created_at, encrypted_credentials')
       .eq('id', id)
       .eq('organization_id', membership.organization_id)
       .maybeSingle()
@@ -101,7 +103,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
     if (!connection) {
       return NextResponse.json({ error: 'Conexão não encontrada.' }, { status: 404 })
     }
-    if (!connection.encrypted_credentials || !connection.external_identifier) {
+    if (!connection.encrypted_credentials) {
       return NextResponse.json({ error: 'Conexão sem credenciais salvas — remova e cadastre novamente.' }, { status: 422 })
     }
 
@@ -115,13 +117,21 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
     let ok: boolean
     let detail: string
     let webhookWarning: string | undefined
+    let resolvedExternalId: string | undefined
 
-    if (connection.connection_method === 'zapapi') {
-      const result = await verifyZapApiConnection(connection.external_identifier, token, request.nextUrl.origin)
+    if (connection.connection_method === 'uazapi') {
+      if (!connection.api_base_url || !connection.webhook_secret) {
+        return NextResponse.json({ error: 'Conexão sem Base URL/segredo de webhook salvos — remova e cadastre novamente.' }, { status: 422 })
+      }
+      const result = await verifyUazapiConnection(connection.api_base_url, token, request.nextUrl.origin, connection.webhook_secret)
       ok = result.ok
       detail = result.detail
       webhookWarning = result.webhookWarning
+      resolvedExternalId = result.resolvedExternalId
     } else {
+      if (!connection.external_identifier) {
+        return NextResponse.json({ error: 'Conexão sem credenciais salvas — remova e cadastre novamente.' }, { status: 422 })
+      }
       const result = await verifyCloudApiConnection(connection.external_identifier, token)
       ok = result.ok
       detail = result.detail
@@ -132,6 +142,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
       .update({
         status: ok ? 'active' : 'error',
         settings: ok ? {} : { last_verify_error: detail },
+        ...(resolvedExternalId ? { external_identifier: resolvedExternalId } : {}),
       })
       .eq('id', id)
       .select(SAFE_SELECT)
