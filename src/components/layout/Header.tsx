@@ -24,15 +24,28 @@ import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { useDemoStorage } from '@/lib/demo/useDemoStorage'
 import { changePasswordSchema } from '@/lib/validations'
+import { createClient } from '@/lib/supabase/client'
 
 export interface HeaderProps {
   currentRole?: UserRole
   onToggleRole?: () => void
+  /** The real authenticated user's name/email — when present, this is a real session and
+   * every bit of demo/placeholder identity (name, email, notification tasks) is replaced
+   * by the genuine thing instead. Absent only in local demo/preview usage. */
+  realUser?: { fullName: string; email: string } | null
 }
 
-export function Header({ currentRole = 'admin', onToggleRole }: HeaderProps) {
+interface RealPendingTask {
+  id: string
+  title: string
+  description: string | null
+  due_date: string | null
+}
+
+export function Header({ currentRole = 'admin', onToggleRole, realUser }: HeaderProps) {
   const router = useRouter()
-  const { tasks } = useDemoStorage()
+  const { tasks: demoTasks } = useDemoStorage()
+  const [realPendingTasks, setRealPendingTasks] = useState<RealPendingTask[]>([])
 
   const [menuOpen, setMenuOpen] = useState(false)
   const [notifOpen, setNotifOpen] = useState(false)
@@ -47,11 +60,58 @@ export function Header({ currentRole = 'admin', onToggleRole }: HeaderProps) {
   const dropdownRef = useRef<HTMLDivElement>(null)
   const notifRef = useRef<HTMLDivElement>(null)
 
-  const pendingTasks = tasks.filter((t) => t.status === 'pending')
+  // Numa sessão real, o sino tem que mostrar as tarefas pendentes de verdade da
+  // organização — nunca os dados de demonstração salvos no localStorage (que sobrevivem
+  // entre sessões e não têm nada a ver com o que essa conta realmente tem pendente).
+  useEffect(() => {
+    let cancelled = false
+
+    const fetchPendingTasks = async () => {
+      if (!realUser) {
+        if (!cancelled) setRealPendingTasks([])
+        return
+      }
+      try {
+        const supabase = createClient()
+        const { data } = await (supabase as unknown as {
+          from: (t: string) => {
+            select: (c: string) => {
+              eq: (col: string, val: string) => {
+                order: (col: string, opt: { ascending: boolean }) => { limit: (n: number) => Promise<{ data: RealPendingTask[] | null }> }
+              }
+            }
+          }
+        })
+          .from('tasks')
+          .select('id, title, description, due_date')
+          .eq('status', 'pending')
+          .order('due_date', { ascending: true })
+          .limit(5)
+
+        if (!cancelled) setRealPendingTasks(data || [])
+      } catch {
+        if (!cancelled) setRealPendingTasks([])
+      }
+    }
+
+    void fetchPendingTasks()
+    return () => {
+      cancelled = true
+    }
+  }, [realUser])
+
+  const pendingTasks = realUser
+    ? realPendingTasks.map((t) => ({
+        id: t.id,
+        title: t.title,
+        description: t.description || 'Sem descrição.',
+        dueDate: t.due_date ? new Date(t.due_date).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : 'Sem prazo',
+      }))
+    : demoTasks.filter((t) => t.status === 'pending')
 
   const roleLabel = currentRole === 'admin' ? 'Administrador' : currentRole === 'manager' ? 'Gerente' : 'Atendente'
-  const userName = currentRole === 'admin' ? 'Patricia Silva (Admin)' : currentRole === 'manager' ? 'Patricia Silva (Gerente)' : 'Carlos Atendimento'
-  const userEmail = currentRole === 'admin' ? 'comercial@queroserfit.com' : currentRole === 'manager' ? 'comercial@queroserfit.com' : 'carlos@queroserfit.com.br'
+  const userName = realUser ? realUser.fullName : currentRole === 'admin' ? 'Patricia Silva (Admin, demo)' : currentRole === 'manager' ? 'Patricia Silva (Gerente, demo)' : 'Carlos Atendimento (demo)'
+  const userEmail = realUser ? realUser.email : currentRole === 'admin' ? 'comercial@queroserfit.com' : currentRole === 'manager' ? 'comercial@queroserfit.com' : 'carlos@queroserfit.com.br'
 
   // Close dropdowns when clicking outside
   useEffect(() => {

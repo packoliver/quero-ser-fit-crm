@@ -35,7 +35,29 @@ export interface RealTask {
   status: TaskStatus
   priority: 'alta' | 'media' | 'baixa' | null
   assigned_to_id: string | null
+  contact_id: string | null
+  /** Flattened from the joined `profiles`/`contacts` rows at fetch time — never sent back on write. */
+  assignee_name: string | null
+  contact_name: string | null
   created_at: string
+}
+
+interface RealTeamMemberOption {
+  id: string
+  fullName: string
+}
+
+interface RealContactOption {
+  id: string
+  name: string
+}
+
+function getAssigneeDisplay(task: RealTask | DemoTask): string {
+  return 'assigneeName' in task ? task.assigneeName : task.assignee_name || 'Sem responsável'
+}
+
+function getClientDisplay(task: RealTask | DemoTask): string | null {
+  return 'clientName' in task ? task.clientName : task.contact_name
 }
 
 const safeToISOString = (dateVal: string | null | undefined): string | null => {
@@ -60,6 +82,8 @@ export default function TarefasPage() {
 
   const [viewMode, setViewMode] = useState<'demo' | 'real'>('real')
   const [realTasks, setRealTasks] = useState<RealTask[]>([])
+  const [realTeamMembers, setRealTeamMembers] = useState<RealTeamMemberOption[]>([])
+  const [realContacts, setRealContacts] = useState<RealContactOption[]>([])
 
   // Filters State
   const [filterStatus, setFilterStatus] = useState<'all' | 'pending' | 'in_progress' | 'completed'>('all')
@@ -80,14 +104,17 @@ export default function TarefasPage() {
   const [error, setError] = useState<string | null>(null)
   const [toastMessage, setToastMessage] = useState<string | null>(null)
 
-  // Forms State
+  // Forms State — clientName/assigneeName are free text, used only in demo mode;
+  // contactId/assigneeId are real foreign keys, used only in real (Supabase) mode.
   const [newTask, setNewTask] = useState({
     title: '',
     description: '',
     clientName: '',
+    contactId: '',
     dueDate: '',
     priority: 'media' as 'alta' | 'media' | 'baixa',
     assigneeName: 'Patricia Silva',
+    assigneeId: '',
   })
 
   const [editTaskData, setEditTaskData] = useState({
@@ -95,9 +122,11 @@ export default function TarefasPage() {
     title: '',
     description: '',
     clientName: '',
+    contactId: '',
     dueDate: '',
     priority: 'media' as 'alta' | 'media' | 'baixa',
     assigneeName: '',
+    assigneeId: '',
   })
 
   const showToast = (msg: string) => {
@@ -110,22 +139,63 @@ export default function TarefasPage() {
     setError(null)
     try {
       const supabase = createClient()
-      const { data, error: dbError } = await (supabase as unknown as {
+      const typed = supabase as unknown as {
         from: (t: string) => {
           select: (c: string) => {
-            order: (col: string, opt: { ascending: boolean }) => Promise<{ data: RealTask[] | null; error: { message: string } | null }>
-          }
+            order: (col: string, opt: { ascending: boolean }) => Promise<{ data: unknown[] | null; error: { message: string } | null }>
+          } & Promise<{ data: unknown[] | null; error: unknown }>
         }
-      })
-        .from('tasks')
-        .select('id, title, description, due_date, status, priority, assigned_to_id, created_at')
-        .order('created_at', { ascending: false })
-
-      if (dbError) {
-        setViewMode('demo')
-      } else if (data) {
-        setRealTasks(data)
       }
+
+      const [tasksRes, membersRes, contactsRes] = await Promise.all([
+        typed
+          .from('tasks')
+          .select('id, title, description, due_date, status, priority, assigned_to_id, contact_id, created_at, contacts(name), profiles(full_name)')
+          .order('created_at', { ascending: false }),
+        typed.from('organization_members').select('user_id, profiles(full_name)'),
+        typed.from('contacts').select('id, name').order('name', { ascending: true }),
+      ])
+
+      if (tasksRes.error) {
+        setViewMode('demo')
+        return
+      }
+
+      const rawTasks = (tasksRes.data || []) as Array<{
+        id: string
+        title: string
+        description: string | null
+        due_date: string | null
+        status: TaskStatus
+        priority: 'alta' | 'media' | 'baixa' | null
+        assigned_to_id: string | null
+        contact_id: string | null
+        created_at: string
+        contacts: { name: string | null } | null
+        profiles: { full_name: string | null } | null
+      }>
+
+      setRealTasks(
+        rawTasks.map((t) => ({
+          id: t.id,
+          title: t.title,
+          description: t.description,
+          due_date: t.due_date,
+          status: t.status,
+          priority: t.priority,
+          assigned_to_id: t.assigned_to_id,
+          contact_id: t.contact_id,
+          assignee_name: t.profiles?.full_name || null,
+          contact_name: t.contacts?.name || null,
+          created_at: t.created_at,
+        }))
+      )
+
+      const membersData = (membersRes.data || []) as Array<{ user_id: string; profiles: { full_name: string | null } | null }>
+      setRealTeamMembers(membersData.map((m) => ({ id: m.user_id, fullName: m.profiles?.full_name || 'Membro' })))
+
+      const contactsData = (contactsRes.data || []) as Array<{ id: string; name: string }>
+      setRealContacts(contactsData)
     } catch {
       setViewMode('demo')
     } finally {
@@ -189,8 +259,13 @@ export default function TarefasPage() {
         const { data: created, error: insertError } = await (supabase as unknown as {
           from: (t: string) => {
             insert: (d: unknown) => {
-              select: () => {
-                single: () => Promise<{ data: RealTask | null; error: { message: string } | null }>
+              select: (c: string) => {
+                single: () => Promise<{
+                  data:
+                    | { id: string; title: string; description: string | null; due_date: string | null; status: TaskStatus; priority: 'alta' | 'media' | 'baixa' | null; assigned_to_id: string | null; contact_id: string | null; created_at: string; contacts: { name: string | null } | null; profiles: { full_name: string | null } | null }
+                    | null
+                  error: { message: string } | null
+                }>
               }
             }
           }
@@ -202,8 +277,10 @@ export default function TarefasPage() {
             due_date: safeToISOString(newTask.dueDate),
             status: 'pending',
             priority: newTask.priority,
+            contact_id: newTask.contactId || null,
+            assigned_to_id: newTask.assigneeId || null,
           })
-          .select()
+          .select('id, title, description, due_date, status, priority, assigned_to_id, contact_id, created_at, contacts(name), profiles(full_name)')
           .single()
 
         if (insertError) {
@@ -212,7 +289,22 @@ export default function TarefasPage() {
         }
 
         if (created) {
-          setRealTasks([created, ...realTasks])
+          setRealTasks([
+            {
+              id: created.id,
+              title: created.title,
+              description: created.description,
+              due_date: created.due_date,
+              status: created.status,
+              priority: created.priority,
+              assigned_to_id: created.assigned_to_id,
+              contact_id: created.contact_id,
+              assignee_name: created.profiles?.full_name || null,
+              contact_name: created.contacts?.name || null,
+              created_at: created.created_at,
+            },
+            ...realTasks,
+          ])
           showToast('Tarefa criada no Supabase!')
         }
       } catch {
@@ -233,7 +325,7 @@ export default function TarefasPage() {
       showToast('Nova tarefa criada com sucesso!')
     }
 
-    setNewTask({ title: '', description: '', clientName: '', dueDate: '', priority: 'media', assigneeName: 'Patricia Silva' })
+    setNewTask({ title: '', description: '', clientName: '', contactId: '', dueDate: '', priority: 'media', assigneeName: 'Patricia Silva', assigneeId: '' })
     setCreateModalOpen(false)
   }
 
@@ -245,18 +337,19 @@ export default function TarefasPage() {
         : task.dueDate || ''
 
     const taskPriority = (task.priority as 'alta' | 'media' | 'baixa') || 'media'
-    const taskAssignee = 'assigneeName' in task ? task.assigneeName : 'Atendente da Organização'
-    const taskClient = 'clientName' in task ? task.clientName : ''
+    const isReal = 'created_at' in task
 
     setEditingTask(task)
     setEditTaskData({
       id: task.id,
       title: task.title,
       description: task.description || '',
-      clientName: taskClient,
+      clientName: 'clientName' in task ? task.clientName : '',
+      contactId: isReal ? (task as RealTask).contact_id || '' : '',
       dueDate: rawDueDate,
       priority: taskPriority,
-      assigneeName: taskAssignee,
+      assigneeName: 'assigneeName' in task ? task.assigneeName : '',
+      assigneeId: isReal ? (task as RealTask).assigned_to_id || '' : '',
     })
     setError(null)
     setEditModalOpen(true)
@@ -287,6 +380,8 @@ export default function TarefasPage() {
             description: editTaskData.description || null,
             due_date: safeToISOString(editTaskData.dueDate),
             priority: editTaskData.priority,
+            contact_id: editTaskData.contactId || null,
+            assigned_to_id: editTaskData.assigneeId || null,
           })
           .eq('id', editTaskData.id)
 
@@ -304,6 +399,10 @@ export default function TarefasPage() {
                   description: editTaskData.description || null,
                   due_date: safeToISOString(editTaskData.dueDate),
                   priority: editTaskData.priority,
+                  contact_id: editTaskData.contactId || null,
+                  assigned_to_id: editTaskData.assigneeId || null,
+                  contact_name: realContacts.find((c) => c.id === editTaskData.contactId)?.name || null,
+                  assignee_name: realTeamMembers.find((m) => m.id === editTaskData.assigneeId)?.fullName || null,
                 }
               : t
           )
@@ -369,20 +468,13 @@ export default function TarefasPage() {
   const activeTaskList: Array<RealTask | DemoTask> = viewMode === 'real' ? realTasks : storedDemoTasks
 
   // Unique assignees for filter
-  const allAssignees = Array.from(
-    new Set(
-      activeTaskList
-        .map((t) => ('assigneeName' in t ? t.assigneeName : 'Atendente da Organização'))
-        .filter(Boolean)
-    )
-  )
+  const allAssignees = Array.from(new Set(activeTaskList.map(getAssigneeDisplay).filter(Boolean)))
 
   // Apply Status, Priority, and Assignee Filters
   const filteredTasks = activeTaskList.filter((t: RealTask | DemoTask) => {
     const matchesStatus = filterStatus === 'all' ? true : t.status === filterStatus
     const matchesPriority = filterPriority === 'all' ? true : t.priority === filterPriority
-    const taskAssignee = 'assigneeName' in t ? t.assigneeName : 'Atendente da Organização'
-    const matchesAssignee = filterAssignee === 'all' ? true : taskAssignee === filterAssignee
+    const matchesAssignee = filterAssignee === 'all' ? true : getAssigneeDisplay(t) === filterAssignee
 
     return matchesStatus && matchesPriority && matchesAssignee
   })
@@ -570,8 +662,8 @@ export default function TarefasPage() {
                   : 'Sem prazo'
                 : task.dueDate
 
-            const assigneeDisplay = 'assigneeName' in task ? task.assigneeName : 'Atendente da Organização'
-            const clientDisplay = 'clientName' in task ? task.clientName : null
+            const assigneeDisplay = getAssigneeDisplay(task)
+            const clientDisplay = getClientDisplay(task)
 
             return (
               <div
@@ -666,12 +758,30 @@ export default function TarefasPage() {
             onChange={(e) => setNewTask({ ...newTask, title: e.target.value })}
           />
 
-          <Input
-            label="Cliente Associado"
-            placeholder="Nome do cliente (opcional)"
-            value={newTask.clientName}
-            onChange={(e) => setNewTask({ ...newTask, clientName: e.target.value })}
-          />
+          {viewMode === 'real' ? (
+            <div>
+              <label className="block text-slate-300 font-medium mb-1">Cliente Associado</label>
+              <select
+                value={newTask.contactId}
+                onChange={(e) => setNewTask({ ...newTask, contactId: e.target.value })}
+                className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-slate-100 focus:outline-none focus:border-emerald-500 text-xs"
+              >
+                <option value="">Nenhum (opcional)</option>
+                {realContacts.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : (
+            <Input
+              label="Cliente Associado"
+              placeholder="Nome do cliente (opcional)"
+              value={newTask.clientName}
+              onChange={(e) => setNewTask({ ...newTask, clientName: e.target.value })}
+            />
+          )}
 
           <Input
             label="Data de Vencimento"
@@ -695,17 +805,32 @@ export default function TarefasPage() {
 
           <div>
             <label className="block text-slate-300 font-medium mb-1">Responsável</label>
-            <select
-              value={newTask.assigneeName}
-              onChange={(e) => setNewTask({ ...newTask, assigneeName: e.target.value })}
-              className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-slate-100 focus:outline-none focus:border-emerald-500 text-xs"
-            >
-              {storedDemoMembers.map((m) => (
-                <option key={m.id} value={m.fullName}>
-                  {m.fullName}
-                </option>
-              ))}
-            </select>
+            {viewMode === 'real' ? (
+              <select
+                value={newTask.assigneeId}
+                onChange={(e) => setNewTask({ ...newTask, assigneeId: e.target.value })}
+                className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-slate-100 focus:outline-none focus:border-emerald-500 text-xs"
+              >
+                <option value="">Sem responsável definido</option>
+                {realTeamMembers.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.fullName}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <select
+                value={newTask.assigneeName}
+                onChange={(e) => setNewTask({ ...newTask, assigneeName: e.target.value })}
+                className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-slate-100 focus:outline-none focus:border-emerald-500 text-xs"
+              >
+                {storedDemoMembers.map((m) => (
+                  <option key={m.id} value={m.fullName}>
+                    {m.fullName}
+                  </option>
+                ))}
+              </select>
+            )}
           </div>
 
           <div>
@@ -746,12 +871,30 @@ export default function TarefasPage() {
             onChange={(e) => setEditTaskData({ ...editTaskData, title: e.target.value })}
           />
 
-          <Input
-            label="Cliente Associado"
-            placeholder="Nome do cliente"
-            value={editTaskData.clientName}
-            onChange={(e) => setEditTaskData({ ...editTaskData, clientName: e.target.value })}
-          />
+          {viewMode === 'real' ? (
+            <div>
+              <label className="block text-slate-300 font-medium mb-1">Cliente Associado</label>
+              <select
+                value={editTaskData.contactId}
+                onChange={(e) => setEditTaskData({ ...editTaskData, contactId: e.target.value })}
+                className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-slate-100 focus:outline-none focus:border-emerald-500 text-xs"
+              >
+                <option value="">Nenhum</option>
+                {realContacts.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : (
+            <Input
+              label="Cliente Associado"
+              placeholder="Nome do cliente"
+              value={editTaskData.clientName}
+              onChange={(e) => setEditTaskData({ ...editTaskData, clientName: e.target.value })}
+            />
+          )}
 
           <Input
             label="Data de Vencimento"
@@ -775,17 +918,32 @@ export default function TarefasPage() {
 
           <div>
             <label className="block text-slate-300 font-medium mb-1">Responsável</label>
-            <select
-              value={editTaskData.assigneeName}
-              onChange={(e) => setEditTaskData({ ...editTaskData, assigneeName: e.target.value })}
-              className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-slate-100 focus:outline-none focus:border-emerald-500 text-xs"
-            >
-              {storedDemoMembers.map((m) => (
-                <option key={m.id} value={m.fullName}>
-                  {m.fullName}
-                </option>
-              ))}
-            </select>
+            {viewMode === 'real' ? (
+              <select
+                value={editTaskData.assigneeId}
+                onChange={(e) => setEditTaskData({ ...editTaskData, assigneeId: e.target.value })}
+                className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-slate-100 focus:outline-none focus:border-emerald-500 text-xs"
+              >
+                <option value="">Sem responsável definido</option>
+                {realTeamMembers.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.fullName}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <select
+                value={editTaskData.assigneeName}
+                onChange={(e) => setEditTaskData({ ...editTaskData, assigneeName: e.target.value })}
+                className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-slate-100 focus:outline-none focus:border-emerald-500 text-xs"
+              >
+                {storedDemoMembers.map((m) => (
+                  <option key={m.id} value={m.fullName}>
+                    {m.fullName}
+                  </option>
+                ))}
+              </select>
+            )}
           </div>
 
           <div>
