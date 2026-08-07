@@ -32,12 +32,12 @@ export async function POST(request: NextRequest, context: { params: Promise<{ se
     const { data: connection } = await (admin as unknown as {
       from: (t: string) => {
         select: (c: string) => {
-          eq: (c: string, v: string) => { maybeSingle: () => Promise<{ data: { id: string } | null }> }
+          eq: (c: string, v: string) => { maybeSingle: () => Promise<{ data: { id: string; external_identifier: string | null } | null }> }
         }
       }
     })
       .from('integration_connections')
-      .select('id')
+      .select('id, external_identifier')
       .eq('webhook_secret', secret)
       .maybeSingle()
 
@@ -53,7 +53,17 @@ export async function POST(request: NextRequest, context: { params: Promise<{ se
     }
 
     const events = uazapiProvider.parseWebhookPayload(jsonBody)
-    const processedCount = await processInboundEvents(admin, events)
+
+    // O segredo na URL já identifica a conexão com certeza — sobrescrevemos o
+    // recipientId (que o parser só preenche com um valor de fallback, o nome da
+    // instância) pelo external_identifier real salvo no banco, que é o que
+    // persistInboundEvent usa pra casar o evento com a conexão certa. Evita depender de
+    // qualquer campo de identificação inconsistente que a uazapi mande no payload.
+    const eventsWithConnection = connection.external_identifier
+      ? events.map((event) => ({ ...event, recipientId: connection.external_identifier as string }))
+      : events
+
+    const processedCount = await processInboundEvents(admin, eventsWithConnection)
 
     return NextResponse.json({ status: 'success', processed: processedCount }, { status: 200 })
   } catch {
