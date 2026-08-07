@@ -40,9 +40,17 @@ export interface IncomingWebhookEvent {
   providerMediaId?: string
 }
 
+/** A delivery/read status change for a message we already sent, identified by the externalId we got back from sendMessage. */
+export interface MessageStatusUpdate {
+  externalId: string
+  status: 'sent' | 'delivered' | 'read' | 'failed'
+}
+
 export interface ICRMIntegrationProvider {
   channelType: ChannelType
   verifyWebhook(verifyToken: string, expectedToken: string): boolean
   parseWebhookPayload(body: Record<string, unknown>): IncomingWebhookEvent[]
   sendMessage(payload: OutgoingMessagePayload): Promise<{ success: boolean; externalId?: string; error?: string }>
+  /** Optional — not every provider's webhook exposes delivery/read receipts the same webhook call handles regular messages. */
+  parseStatusUpdates?(body: Record<string, unknown>): MessageStatusUpdate[]
 }

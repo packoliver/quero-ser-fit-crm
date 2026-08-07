@@ -1,6 +1,10 @@
 import { createAdminClient } from '@/lib/supabase/admin'
 import { Json } from '@/types/database'
-import { IncomingWebhookEvent } from './types'
+import { IncomingWebhookEvent, MessageStatusUpdate } from './types'
+
+// Nunca deixa um status "voltar pra trás" se as atualizações chegarem fora de ordem
+// (ex: um "delivered" atrasado chegando depois de um "read" que já processamos).
+const STATUS_RANK: Record<string, number> = { sent: 0, delivered: 1, read: 2 }
 
 interface ConnectionMatch {
   id: string
@@ -186,4 +190,54 @@ export async function processInboundEvents(
   }
 
   return processedCount
+}
+
+function shouldApplyStatus(currentStatus: string, nextStatus: MessageStatusUpdate['status']): boolean {
+  // 'failed' is treated as terminal from our side — a real retry sends a brand new
+  // message with its own external_id, it doesn't "un-fail" the old one.
+  if (currentStatus === 'failed') return false
+  if (nextStatus === 'failed') return true
+  const currentRank = STATUS_RANK[currentStatus] ?? -1
+  const nextRank = STATUS_RANK[nextStatus] ?? -1
+  return nextRank > currentRank
+}
+
+/**
+ * Applies delivery/read (or failure) status updates to messages WE sent, matched by
+ * the external_id we got back from sendMessage. Never downgrades (see
+ * shouldApplyStatus) — providers don't always deliver these in order. Returns how many
+ * rows were actually updated (a message with no matching external_id, or an
+ * out-of-order/no-op update, doesn't count).
+ */
+export async function applyStatusUpdates(
+  admin: ReturnType<typeof createAdminClient>,
+  updates: MessageStatusUpdate[]
+): Promise<number> {
+  if (updates.length === 0) return 0
+
+  const db = admin as unknown as {
+    from: (table: string) => {
+      select: (cols: string) => {
+        eq: (col: string, val: string) => { maybeSingle: () => Promise<{ data: { id: string; status: string } | null }> }
+      }
+      update: (data: unknown) => { eq: (col: string, val: string) => Promise<{ error: unknown }> }
+    }
+  }
+
+  let appliedCount = 0
+
+  for (const update of updates) {
+    const { data: existing } = await db
+      .from('messages')
+      .select('id, status')
+      .eq('external_id', update.externalId)
+      .maybeSingle()
+
+    if (!existing || !shouldApplyStatus(existing.status, update.status)) continue
+
+    const { error } = await db.from('messages').update({ status: update.status }).eq('id', existing.id)
+    if (!error) appliedCount++
+  }
+
+  return appliedCount
 }

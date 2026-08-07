@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { UazapiWhatsAppProvider, downloadUazapiMedia } from '@/lib/integrations/uazapi-whatsapp'
-import { processInboundEvents } from '@/lib/integrations/persist-event'
+import { processInboundEvents, applyStatusUpdates } from '@/lib/integrations/persist-event'
 import { mirrorMediaToStorage } from '@/lib/integrations/media'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { decryptToken } from '@/lib/security/encryption'
@@ -68,6 +68,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ se
     }
 
     const events = uazapiProvider.parseWebhookPayload(jsonBody)
+    const statusUpdates = uazapiProvider.parseStatusUpdates(jsonBody)
 
     // O segredo na URL já identifica a conexão com certeza — sobrescrevemos o
     // recipientId (que o parser só preenche com um valor de fallback, o nome da
@@ -130,8 +131,9 @@ export async function POST(request: NextRequest, context: { params: Promise<{ se
     }
 
     const processedCount = await processInboundEvents(admin, eventsWithConnection)
+    const statusUpdateCount = await applyStatusUpdates(admin, statusUpdates)
 
-    return NextResponse.json({ status: 'success', processed: processedCount }, { status: 200 })
+    return NextResponse.json({ status: 'success', processed: processedCount, statusUpdates: statusUpdateCount }, { status: 200 })
   } catch {
     return NextResponse.json({ error: 'Erro interno no processamento do evento.' }, { status: 500 })
   }

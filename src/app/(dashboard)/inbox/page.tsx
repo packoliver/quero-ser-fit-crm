@@ -19,6 +19,10 @@ import {
   Paperclip,
   Download,
   File as FileIcon,
+  Check,
+  CheckCheck,
+  Bell,
+  BellOff,
 } from 'lucide-react'
 import { InstagramIcon as Instagram } from '@/components/icons/InstagramIcon'
 import { demoAttendants } from '@/lib/demo'
@@ -101,6 +105,20 @@ export default function InboxPage() {
   const [filterQueue, setFilterQueue] = useState<'all' | 'mine' | 'unassigned'>('all')
   const [filterChannel, setFilterChannel] = useState<'all' | 'whatsapp' | 'instagram'>('all')
   const [searchQuery, setSearchQuery] = useState('')
+
+  // Notifications: sound + browser Notification + tab title badge for new inbound
+  // messages that arrive while the attendant isn't looking (tab hidden, or a different
+  // conversation open). selectedConvIdRef exists because the realtime callback below is
+  // registered once and would otherwise close over a stale selectedConvId.
+  const [notificationsEnabled, setNotificationsEnabled] = useState(
+    () => typeof window !== 'undefined' && localStorage.getItem('inbox_notifications_enabled') === 'true'
+  )
+  const [unreadCount, setUnreadCount] = useState(0)
+  const selectedConvIdRef = useRef(selectedConvId)
+  const originalTitleRef = useRef<string>('')
+  useEffect(() => {
+    selectedConvIdRef.current = selectedConvId
+  }, [selectedConvId])
 
   // Action States
   const [newMessageText, setNewMessageText] = useState('')
@@ -261,6 +279,70 @@ export default function InboxPage() {
     return () => clearTimeout(timer)
   }, [viewMode, fetchRealData])
 
+  // One-time setup: remember the tab's original title (to restore after a "(3) " unread
+  // badge) and clear the unread badge whenever the tab regains focus (best-effort proxy
+  // for "the attendant saw it" — not per-conversation granular, just "you're back
+  // looking at the Inbox").
+  useEffect(() => {
+    originalTitleRef.current = document.title
+
+    const handleVisibility = () => {
+      if (!document.hidden) {
+        setUnreadCount(0)
+        document.title = originalTitleRef.current
+      }
+    }
+    document.addEventListener('visibilitychange', handleVisibility)
+    return () => document.removeEventListener('visibilitychange', handleVisibility)
+  }, [])
+
+  useEffect(() => {
+    document.title = unreadCount > 0 ? `(${unreadCount}) ${originalTitleRef.current}` : originalTitleRef.current
+  }, [unreadCount])
+
+  const toggleNotifications = async () => {
+    if (notificationsEnabled) {
+      setNotificationsEnabled(false)
+      localStorage.setItem('inbox_notifications_enabled', 'false')
+      return
+    }
+    if (typeof Notification !== 'undefined' && Notification.permission !== 'granted') {
+      const permission = await Notification.requestPermission()
+      if (permission !== 'granted') {
+        showToast('Permissão de notificação negada pelo navegador.')
+        return
+      }
+    }
+    setNotificationsEnabled(true)
+    localStorage.setItem('inbox_notifications_enabled', 'true')
+    showToast('Notificações de novas mensagens ativadas.')
+  }
+
+  // Short two-tone "ding" via Web Audio API — no external asset/CORS to worry about.
+  // Browsers block audio that isn't tied to a user gesture until the page has seen at
+  // least one click; the try/catch below just swallows that instead of erroring out.
+  const playNotificationSound = () => {
+    try {
+      const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
+      const ctx = new AudioCtx()
+      const now = ctx.currentTime
+      ;[880, 1320].forEach((freq, i) => {
+        const osc = ctx.createOscillator()
+        const gain = ctx.createGain()
+        osc.frequency.value = freq
+        osc.connect(gain)
+        gain.connect(ctx.destination)
+        const start = now + i * 0.12
+        gain.gain.setValueAtTime(0.15, start)
+        gain.gain.exponentialRampToValueAtTime(0.001, start + 0.15)
+        osc.start(start)
+        osc.stop(start + 0.16)
+      })
+    } catch {
+      // Autoplay blocked or unsupported — silently skip, the visual badge still works.
+    }
+  }
+
   // Realtime: subscribe to Postgres Changes on `messages` and `conversations` so new
   // inbound messages (from the webhook) and changes made by other attendants (assume,
   // transfer, status) show up live, without a manual refresh. RLS still applies — this
@@ -280,17 +362,40 @@ export default function InboxPage() {
       }, 400)
     }
 
+    // Separate listener (same channel) purely for the notification side-effects — needs
+    // the raw inserted row, which the generic scheduleRefresh above doesn't inspect.
+    const handleNewMessage = (payload: { new: Record<string, unknown> }) => {
+      const row = payload.new
+      if (row.sender_type !== 'contact') return
+
+      const isDifferentConversation = row.conversation_id !== selectedConvIdRef.current
+      const tabHidden = typeof document !== 'undefined' && document.hidden
+      if (!isDifferentConversation && !tabHidden) return
+
+      setUnreadCount((n) => n + 1)
+      if (notificationsEnabled) {
+        playNotificationSound()
+        if (tabHidden && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+          const notif = new Notification('Nova mensagem — Quero Ser Fit CRM', {
+            body: typeof row.content === 'string' && row.content ? row.content : 'Você recebeu uma nova mensagem.',
+          })
+          notif.onclick = () => window.focus()
+        }
+      }
+    }
+
     const channel = supabase
       .channel('inbox-realtime')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, scheduleRefresh)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations' }, scheduleRefresh)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, handleNewMessage)
       .subscribe()
 
     return () => {
       if (debounceTimer) clearTimeout(debounceTimer)
       supabase.removeChannel(channel)
     }
-  }, [viewMode, fetchRealData])
+  }, [viewMode, fetchRealData, notificationsEnabled])
 
   // Handle Assume Conversation
   const handleAssume = async (convId: string) => {
@@ -545,8 +650,22 @@ export default function InboxPage() {
           )}
         </div>
 
-        {process.env.NEXT_PUBLIC_ENABLE_DEMO_MODE === 'true' && (
-          <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2">
+          {viewMode === 'real' && (
+            <button
+              onClick={toggleNotifications}
+              title={notificationsEnabled ? 'Notificações ativadas — clique pra desativar' : 'Ativar som e notificação de novas mensagens'}
+              className={`p-1.5 rounded-lg border transition flex items-center gap-1.5 ${
+                notificationsEnabled
+                  ? 'bg-emerald-950/60 border-emerald-800 text-emerald-400'
+                  : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              {notificationsEnabled ? <Bell className="w-3.5 h-3.5" /> : <BellOff className="w-3.5 h-3.5" />}
+            </button>
+          )}
+
+          {process.env.NEXT_PUBLIC_ENABLE_DEMO_MODE === 'true' && (
             <div className="bg-slate-900 p-1 rounded-xl border border-slate-800 flex text-[11px]">
               <button
                 onClick={() => setViewMode('real')}
@@ -565,8 +684,8 @@ export default function InboxPage() {
                 Modo Demo
               </button>
             </div>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       {toastMessage && (
@@ -823,8 +942,17 @@ export default function InboxPage() {
                         </div>
                       )}
                       {msg.content && <p className="whitespace-pre-wrap">{msg.content}</p>}
-                      <span className={`text-[9px] block text-right mt-1.5 ${isFailed ? 'text-rose-300' : isMe ? 'text-emerald-200' : 'text-slate-400'}`}>
+                      <span className={`text-[9px] flex items-center justify-end gap-1 mt-1.5 ${isFailed ? 'text-rose-300' : isMe ? 'text-emerald-200' : 'text-slate-400'}`}>
                         {msg.time}
+                        {isMe && !isFailed && (
+                          msg.status === 'read' ? (
+                            <CheckCheck className="w-3 h-3 text-sky-300" />
+                          ) : msg.status === 'delivered' ? (
+                            <CheckCheck className="w-3 h-3" />
+                          ) : (
+                            <Check className="w-3 h-3" />
+                          )
+                        )}
                       </span>
                     </div>
                     {isFailed && (

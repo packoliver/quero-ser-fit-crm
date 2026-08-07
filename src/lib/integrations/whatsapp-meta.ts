@@ -2,6 +2,7 @@ import {
   ICRMIntegrationProvider,
   IncomingWebhookEvent,
   MediaType,
+  MessageStatusUpdate,
   OutgoingMessagePayload,
 } from './types'
 
@@ -13,6 +14,11 @@ const META_MEDIA_TYPES: Record<string, MediaType> = {
   document: 'document',
   sticker: 'sticker',
 }
+
+// A Cloud API já usa exatamente os mesmos nomes que a gente ('sent', 'delivered',
+// 'read', 'failed') — sem necessidade de mapear. 'deleted' não é um status real de
+// entrega, ignoramos.
+const META_STATUS_VALUES = new Set(['sent', 'delivered', 'read', 'failed'])
 
 /**
  * Conector Oficial da Meta WhatsApp Cloud API (Coexistência habilitada com WhatsApp Business App).
@@ -78,6 +84,35 @@ export class MetaWhatsAppProvider implements ICRMIntegrationProvider {
     }
 
     return events
+  }
+
+  /**
+   * The same webhook call that carries inbound messages also carries delivery/read
+   * receipts for messages WE sent, as a `statuses` array alongside (never mixed into)
+   * the `messages` array — https://developers.facebook.com/docs/whatsapp/cloud-api/webhooks/payload-examples#status--sent.
+   */
+  parseStatusUpdates(body: Record<string, unknown>): MessageStatusUpdate[] {
+    const updates: MessageStatusUpdate[] = []
+    try {
+      const entryArray = (body.entry as Array<Record<string, unknown>>) || []
+      for (const entry of entryArray) {
+        const changes = (entry.changes as Array<Record<string, unknown>>) || []
+        for (const change of changes) {
+          const value = change.value as Record<string, unknown> | undefined
+          const statuses = (value?.statuses as Array<Record<string, unknown>>) || []
+          for (const s of statuses) {
+            const id = typeof s.id === 'string' ? s.id : undefined
+            const status = typeof s.status === 'string' ? s.status : undefined
+            if (id && status && META_STATUS_VALUES.has(status)) {
+              updates.push({ externalId: id, status: status as MessageStatusUpdate['status'] })
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Erro ao interpretar status de mensagem do WhatsApp Meta:', err)
+    }
+    return updates
   }
 
   async sendMessage(

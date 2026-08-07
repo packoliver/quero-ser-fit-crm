@@ -5,6 +5,7 @@ import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { encryptToken } from '@/lib/security/encryption'
 import { verifyCloudApiConnection, verifyUazapiConnection } from '@/lib/integrations/verify-connection'
+import { logAuditEvent } from '@/lib/security/audit'
 
 interface ConnectionRow {
   id: string
@@ -38,7 +39,7 @@ type AdminTyped = {
 
 async function getCallerOrganizationId(
   supabase: Awaited<ReturnType<typeof createClient>>
-): Promise<{ organizationId: string } | { error: NextResponse }> {
+): Promise<{ organizationId: string; userId: string } | { error: NextResponse }> {
   const {
     data: { user },
     error: authError,
@@ -67,7 +68,7 @@ async function getCallerOrganizationId(
     return { error: NextResponse.json({ error: 'Organização do usuário não encontrada.' }, { status: 403 }) }
   }
 
-  return { organizationId: membership.organization_id }
+  return { organizationId: membership.organization_id, userId: user.id }
 }
 
 // Fields returned to the client — encrypted_credentials and webhook_secret are
@@ -134,7 +135,7 @@ export async function POST(request: NextRequest) {
     const supabase = await createClient()
     const result = await getCallerOrganizationId(supabase)
     if ('error' in result) return result.error
-    const { organizationId } = result
+    const { organizationId, userId } = result
 
     // Only admins may register/change integrations.
     const { data: isAdmin } = await (supabase as unknown as {
@@ -189,6 +190,15 @@ export async function POST(request: NextRequest) {
         )
       }
 
+      await logAuditEvent({
+        organizationId,
+        actorId: userId,
+        action: 'integration_connection_created',
+        targetType: 'integration_connection',
+        targetId: inserted.id,
+        details: { provider: input.provider, connectionMethod: 'cloud_api', label: input.label, verified: verifyOk },
+      })
+
       return NextResponse.json(
         {
           connection: inserted,
@@ -240,6 +250,15 @@ export async function POST(request: NextRequest) {
         { status: isDuplicate ? 409 : 500 }
       )
     }
+
+    await logAuditEvent({
+      organizationId,
+      actorId: userId,
+      action: 'integration_connection_created',
+      targetType: 'integration_connection',
+      targetId: inserted.id,
+      details: { provider: 'whatsapp_uazapi', connectionMethod: 'uazapi', label: input.label, verified: uazapiOk },
+    })
 
     return NextResponse.json(
       {

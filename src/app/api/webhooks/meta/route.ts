@@ -1,14 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { MetaWhatsAppProvider, resolveMetaMediaUrl } from '@/lib/integrations/whatsapp-meta'
 import { MetaInstagramProvider } from '@/lib/integrations/instagram-meta'
-import { processInboundEvents } from '@/lib/integrations/persist-event'
+import { processInboundEvents, applyStatusUpdates } from '@/lib/integrations/persist-event'
 import { mirrorMediaToStorage } from '@/lib/integrations/media'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { decryptToken } from '@/lib/security/encryption'
 import { getServerEnv } from '@/lib/env'
 import { timingSafeEqualString, verifyMetaHmacSignature } from '@/lib/security/webhook'
 import { z } from 'zod'
-import { IncomingWebhookEvent } from '@/lib/integrations/types'
+import { ICRMIntegrationProvider, IncomingWebhookEvent } from '@/lib/integrations/types'
 
 const whatsappProvider = new MetaWhatsAppProvider()
 const instagramProvider = new MetaInstagramProvider()
@@ -187,10 +187,11 @@ export async function POST(request: NextRequest) {
       request.headers.get('x-meta-provider') ||
       (jsonBody.object === 'whatsapp_business_account' ? 'whatsapp_meta' : 'instagram_meta')
 
-    const events =
-      providerType === 'whatsapp_meta'
-        ? whatsappProvider.parseWebhookPayload(jsonBody)
-        : instagramProvider.parseWebhookPayload(jsonBody)
+    const provider: ICRMIntegrationProvider = providerType === 'whatsapp_meta' ? whatsappProvider : instagramProvider
+    const events = provider.parseWebhookPayload(jsonBody)
+    // Same webhook call carries both new messages and delivery/read receipts for
+    // messages we sent (as a separate `statuses` array) — only WhatsApp exposes this.
+    const statusUpdates = provider.parseStatusUpdates?.(jsonBody) || []
 
     let admin
     try {
@@ -203,9 +204,10 @@ export async function POST(request: NextRequest) {
 
     const eventsWithMedia = await resolveMediaForEvents(admin, events)
     const processedCount = await processInboundEvents(admin, eventsWithMedia)
+    const statusUpdateCount = await applyStatusUpdates(admin, statusUpdates)
 
     return NextResponse.json(
-      { status: 'success', processed: processedCount },
+      { status: 'success', processed: processedCount, statusUpdates: statusUpdateCount },
       { status: 200 }
     )
   } catch {

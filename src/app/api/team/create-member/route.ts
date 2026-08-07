@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { memberCreateSchema } from '@/lib/validations'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
+import { logAuditEvent } from '@/lib/security/audit'
 
 /**
  * POST /api/team/create-member
@@ -137,6 +138,15 @@ async function handlePost(request: NextRequest) {
     await admin.auth.admin.deleteUser(newUserId)
     return NextResponse.json({ error: `Falha ao vincular o membro à organização: ${memberError.message}` }, { status: 500 })
   }
+
+  await logAuditEvent({
+    organizationId: callerMembership.organization_id,
+    actorId: caller.id,
+    action: 'member_created',
+    targetType: 'organization_member',
+    targetId: newUserId,
+    details: { email, fullName, role },
+  })
 
   return NextResponse.json(
     {

@@ -2,8 +2,20 @@ import {
   ICRMIntegrationProvider,
   IncomingWebhookEvent,
   MediaType,
+  MessageStatusUpdate,
   OutgoingMessagePayload,
 } from './types'
+
+// Valores de `status` observados no schema Message da uazapi (POST /message/find):
+// "Queued", "Sent", "Delivered", "Read", "Failed", "Canceled". Mapeamos pro nosso
+// vocabulário; "Queued"/"Canceled" não têm equivalente direto e são ignorados (não é
+// um evento de entrega de verdade, é mais um estado interno de fila).
+const UAZAPI_STATUS_MAP: Record<string, MessageStatusUpdate['status']> = {
+  sent: 'sent',
+  delivered: 'delivered',
+  read: 'read',
+  failed: 'failed',
+}
 
 // A uazapi documenta um campo `type` simples (image/video/audio/document/sticker —
 // o mesmo vocabulário de POST /send/media), mas o payload REAL de uma mensagem de
@@ -141,6 +153,42 @@ export class UazapiWhatsAppProvider implements ICRMIntegrationProvider {
       ]
     } catch (err) {
       console.error('Erro ao interpretar payload da uazapi:', err)
+      return []
+    }
+  }
+
+  /**
+   * Atualizações de status (entregue/lido) de mensagens que NÓS enviamos chegam como um
+   * evento separado (`EventType: "messages_update"`), não junto do evento `messages`
+   * comum. O formato exato não está documentado nem confirmado com um exemplo real
+   * ainda (diferente do parser de mensagem recebida acima, que foi corrigido depois de
+   * confirmar contra um payload de verdade) — por isso aceita algumas variações
+   * plausíveis de nome de campo e loga o que não reconhecer, pra facilitar ajustar
+   * depois de ver um exemplo real no log de produção.
+   */
+  parseStatusUpdates(body: Record<string, unknown>): MessageStatusUpdate[] {
+    try {
+      const eventType = typeof body.EventType === 'string' ? body.EventType.toLowerCase() : undefined
+      if (eventType !== 'messages_update' && eventType !== 'message_status' && eventType !== 'status') return []
+
+      const message = (body.message ?? body.data ?? body) as Record<string, unknown>
+      const externalId =
+        typeof message.messageid === 'string'
+          ? message.messageid
+          : typeof message.id === 'string'
+            ? message.id
+            : undefined
+      const rawStatus = typeof message.status === 'string' ? message.status.toLowerCase() : undefined
+      const status = rawStatus ? UAZAPI_STATUS_MAP[rawStatus] : undefined
+
+      if (!externalId || !status) {
+        console.error('uazapi parseStatusUpdates: payload de status não reconhecido:', JSON.stringify(body).slice(0, 500))
+        return []
+      }
+
+      return [{ externalId, status }]
+    } catch (err) {
+      console.error('Erro ao interpretar status de mensagem da uazapi:', err)
       return []
     }
   }

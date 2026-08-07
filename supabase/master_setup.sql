@@ -482,6 +482,16 @@ BEGIN
     SET role = p_new_role
     WHERE organization_id = p_org_id AND user_id = p_target_user_id;
 
+    INSERT INTO public.audit_logs (organization_id, actor_id, action, target_type, target_id, details)
+    VALUES (
+        p_org_id,
+        v_caller_id,
+        'member_role_changed',
+        'organization_member',
+        p_target_user_id,
+        jsonb_build_object('from_role', v_current_target_role, 'to_role', p_new_role)
+    );
+
     RETURN TRUE;
 END;
 $$;

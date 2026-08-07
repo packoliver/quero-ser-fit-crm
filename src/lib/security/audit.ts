@@ -1,4 +1,4 @@
-import { createClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/admin'
 import { Json } from '@/types/database'
 
 export interface AuditLogPayload {
@@ -11,9 +11,17 @@ export interface AuditLogPayload {
   ipAddress?: string | null
 }
 
+/**
+ * Writes to audit_logs. Must use the service-role admin client — the table
+ * intentionally has INSERT/UPDATE/DELETE revoked from the `authenticated` Postgres
+ * role (see master_setup.sql), so regular users can never write or tamper with their
+ * own audit trail even if they found a way to call this directly. Only trusted
+ * server-side code paths (this function, or a SECURITY DEFINER function like
+ * update_member_role_safe) can create entries.
+ */
 export async function logAuditEvent(payload: AuditLogPayload) {
   try {
-    const supabase = await createClient()
+    const supabase = createAdminClient()
     const db = supabase as unknown as {
       from: (table: string) => { insert: (data: unknown) => Promise<{ error: { message: string } | null }> }
     }
