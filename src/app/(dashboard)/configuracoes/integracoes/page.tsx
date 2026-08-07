@@ -390,16 +390,19 @@ export default function IntegracoesConfigPage() {
                       <QrCode className="w-3.5 h-3.5" />
                     </button>
                   )}
-                  {conn.status !== 'active' && (
-                    <button
-                      onClick={() => handleVerify(conn)}
-                      disabled={verifyingId === conn.id}
-                      className="p-1.5 rounded-lg bg-slate-900 hover:bg-emerald-950/60 border border-slate-700 hover:border-emerald-800 text-slate-400 hover:text-emerald-400 transition disabled:opacity-50"
-                      title="Reverificar conexão (usa a credencial já salva)"
-                    >
-                      <RefreshCw className={`w-3.5 h-3.5 ${verifyingId === conn.id ? 'animate-spin' : ''}`} />
-                    </button>
-                  )}
+                  {/* Sempre visível, mesmo com status "Ativa" — a conexão pode continuar
+                      ativa enquanto o registro do webhook na uazapi fica desatualizado
+                      por fora (ex: alguém mexeu manualmente no painel deles), e sem
+                      poder reverificar nesse estado não havia como consertar sem apagar
+                      e recriar a conexão inteira. */}
+                  <button
+                    onClick={() => handleVerify(conn)}
+                    disabled={verifyingId === conn.id}
+                    className="p-1.5 rounded-lg bg-slate-900 hover:bg-emerald-950/60 border border-slate-700 hover:border-emerald-800 text-slate-400 hover:text-emerald-400 transition disabled:opacity-50"
+                    title="Reverificar conexão e reforçar o registro do webhook (usa a credencial já salva)"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${verifyingId === conn.id ? 'animate-spin' : ''}`} />
+                  </button>
                   <button
                     onClick={() => handleDelete(conn)}
                     className="p-1.5 rounded-lg bg-slate-900 hover:bg-rose-950/60 border border-slate-700 hover:border-rose-800 text-slate-400 hover:text-rose-400 transition"
