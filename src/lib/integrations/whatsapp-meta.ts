@@ -43,10 +43,16 @@ export class MetaWhatsAppProvider implements ICRMIntegrationProvider {
           if (!value) continue
 
           const messages = (value.messages as Array<Record<string, unknown>>) || []
+          // Nome salvo no WhatsApp de quem mandou a mensagem — a Cloud API manda isso
+          // separado, em `value.contacts` (um item por wa_id envolvido nessa entrega),
+          // não dentro do próprio objeto da mensagem. Documentado e estável há anos:
+          // https://developers.facebook.com/docs/whatsapp/cloud-api/webhooks/payload-examples
+          const contactsArray = (value.contacts as Array<{ wa_id?: string; profile?: { name?: string } }>) || []
           for (const msg of messages) {
             const externalId = (msg.id as string) || `wa_msg_${Date.now()}`
             const senderId = (msg.from as string) || ''
             const textObj = msg.text as { body?: string } | undefined
+            const senderName = contactsArray.find((c) => c.wa_id === senderId)?.profile?.name || undefined
 
             // phone_number_id (not display_phone_number) is the stable routing key Meta
             // uses to identify which of our registered numbers received this message —
@@ -64,14 +70,22 @@ export class MetaWhatsAppProvider implements ICRMIntegrationProvider {
             // preenchido e media_url nulo (que não renderiza nada no chat).
             const mediaType = detectedMediaType && mediaObj?.id ? detectedMediaType : undefined
 
+            // `msg.timestamp` é a hora real de envio (Unix, segundos) que a Meta manda —
+            // usar isso em vez da hora em que ESTE servidor recebeu o webhook evita
+            // desordenar mensagens quando a entrega atrasa ou é reenviada (retry).
+            const rawTimestamp = typeof msg.timestamp === 'string' ? Number(msg.timestamp) : undefined
+            const timestamp =
+              rawTimestamp && !isNaN(rawTimestamp) ? new Date(rawTimestamp * 1000).toISOString() : new Date().toISOString()
+
             events.push({
               provider: 'whatsapp_meta',
               externalEventId: externalId,
               eventType: 'messages',
               senderId,
+              senderName,
               recipientId: metadata?.phone_number_id || '',
               content: textObj?.body || mediaObj?.caption || (msgType && !mediaType ? `[${msgType}, tipo não suportado]` : ''),
-              timestamp: new Date().toISOString(),
+              timestamp,
               rawPayload: msg,
               mediaType,
               providerMediaId: mediaType ? mediaObj?.id : undefined,

@@ -50,6 +50,11 @@ export class MetaInstagramProvider implements ICRMIntegrationProvider {
             const detectedMediaType = attachment?.type ? INSTAGRAM_MEDIA_TYPES[attachment.type] : undefined
             const mediaType = detectedMediaType && attachment?.payload?.url ? detectedMediaType : undefined
 
+            // `item.timestamp` (Unix ms) é a hora real de envio que a Meta manda — evita
+            // desordenar mensagens quando a entrega do webhook atrasa ou é reenviada.
+            const rawTimestamp = typeof item.timestamp === 'number' ? item.timestamp : undefined
+            const timestamp = rawTimestamp ? new Date(rawTimestamp).toISOString() : new Date().toISOString()
+
             events.push({
               provider: 'instagram_meta',
               externalEventId: message.mid || `ig_msg_${Date.now()}`,
@@ -57,7 +62,7 @@ export class MetaInstagramProvider implements ICRMIntegrationProvider {
               senderId: sender.id,
               recipientId: recipient?.id || '',
               content: message.text || '',
-              timestamp: new Date().toISOString(),
+              timestamp,
               rawPayload: item,
               mediaType,
               mediaUrl: mediaType ? attachment?.payload?.url : undefined,

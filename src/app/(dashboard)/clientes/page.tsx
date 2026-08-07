@@ -779,7 +779,10 @@ export default function ClientesPage() {
             <strong className="text-slate-100">{selectedContact?.name}</strong>?
           </p>
           <p className="text-rose-400 bg-rose-950/40 border border-rose-800/40 p-3 rounded-xl">
-            Atenção: Esta ação removerá o cadastro do cliente e suas preferências salvas.
+            Atenção: isso apaga <strong>permanentemente</strong> — sem possibilidade de recuperação — todo o
+            histórico de conversa (mensagens do WhatsApp/Instagram) e qualquer pedido no Funil ligado a este
+            cliente, além do cadastro em si. Se você só quer parar de ver este cliente na lista ativa, prefira
+            editar as tags em vez de excluir.
           </p>
 
           <div className="flex justify-end gap-2 pt-2">
