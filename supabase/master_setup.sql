@@ -171,6 +171,27 @@ CREATE TABLE public.tasks (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- 12b. Deals (funil de vendas / pós-venda) — one row per SALE, not per contact, since a
+-- recurring client can have several deals over time (an old one sitting in "Pós-venda"
+-- while a brand new one starts back at "Lead"). The chat thread in conversations stays
+-- one continuous history per contact regardless of how many deals they've had.
+CREATE TABLE public.deals (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    organization_id UUID NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE,
+    contact_id UUID NOT NULL REFERENCES public.contacts(id) ON DELETE CASCADE,
+    conversation_id UUID REFERENCES public.conversations(id) ON DELETE SET NULL,
+    title TEXT NOT NULL,
+    value NUMERIC(12, 2),
+    stage TEXT NOT NULL DEFAULT 'lead' CHECK (
+        stage IN ('lead', 'negociando', 'fechado', 'entrega', 'posvenda', 'perdido')
+    ),
+    notes TEXT,
+    assigned_to_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+    closed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- 13. Audit Logs
 CREATE TABLE public.audit_logs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -339,6 +360,9 @@ CREATE INDEX idx_messages_conversation ON public.messages(conversation_id);
 CREATE INDEX idx_messages_org ON public.messages(organization_id);
 CREATE INDEX idx_tasks_org ON public.tasks(organization_id);
 CREATE INDEX idx_tasks_assignee ON public.tasks(assigned_to_id);
+CREATE INDEX idx_deals_org ON public.deals(organization_id);
+CREATE INDEX idx_deals_contact ON public.deals(contact_id);
+CREATE INDEX idx_deals_stage ON public.deals(organization_id, stage);
 CREATE INDEX idx_audit_logs_org ON public.audit_logs(organization_id);
 CREATE INDEX idx_webhook_events_provider_extid ON public.webhook_events(provider, external_event_id);
 CREATE UNIQUE INDEX idx_contact_channels_global_extid ON public.contact_channels (channel_type, external_id);
@@ -509,6 +533,10 @@ CREATE TRIGGER trg_autofill_org_tasks
     BEFORE INSERT ON public.tasks
     FOR EACH ROW EXECUTE FUNCTION public.set_organization_id_from_caller();
 
+CREATE TRIGGER trg_autofill_org_deals
+    BEFORE INSERT ON public.deals
+    FOR EACH ROW EXECUTE FUNCTION public.set_organization_id_from_caller();
+
 CREATE TRIGGER trg_autofill_org_contact_channels
     BEFORE INSERT ON public.contact_channels
     FOR EACH ROW EXECUTE FUNCTION public.set_organization_id_from_caller();
@@ -538,6 +566,7 @@ ALTER TABLE public.tags ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.contact_tags ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.internal_notes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.tasks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.deals ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.audit_logs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.integration_connections ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.webhook_events ENABLE ROW LEVEL SECURITY;
@@ -586,6 +615,9 @@ CREATE POLICY "Tenant isolation for internal_notes" ON public.internal_notes
     FOR ALL USING (organization_id IN (SELECT public.get_user_org_ids()));
 
 CREATE POLICY "Tenant isolation for tasks" ON public.tasks
+    FOR ALL USING (organization_id IN (SELECT public.get_user_org_ids()));
+
+CREATE POLICY "Tenant isolation for deals" ON public.deals
     FOR ALL USING (organization_id IN (SELECT public.get_user_org_ids()));
 
 CREATE POLICY "Admins can select audit_logs" ON public.audit_logs
@@ -653,6 +685,9 @@ GRANT SELECT ON public.integration_connections_public TO authenticated, service_
 -- Realtime still respects each table's RLS policy for authenticated clients.
 ALTER PUBLICATION supabase_realtime ADD TABLE public.messages;
 ALTER PUBLICATION supabase_realtime ADD TABLE public.conversations;
+-- The Funil (deals pipeline) subscribes to this so a card another salesperson moves
+-- shows up live in everyone else's board without a manual refresh.
+ALTER PUBLICATION supabase_realtime ADD TABLE public.deals;
 
 -- Storage bucket for chat media (images/videos/audio/documents), both outbound
 -- attachments uploaded from the browser and inbound media mirrored from the

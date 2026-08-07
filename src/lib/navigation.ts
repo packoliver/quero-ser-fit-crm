@@ -2,6 +2,7 @@ import {
   MessageSquare,
   Users,
   CheckSquare,
+  Kanban,
   BarChart3,
   UserCheck,
   Share2,
@@ -20,6 +21,7 @@ export interface NavItem {
 export const allNavItems: NavItem[] = [
   { href: '/inbox', label: 'Conversas', icon: MessageSquare },
   { href: '/clientes', label: 'Clientes', icon: Users },
+  { href: '/funil', label: 'Funil', icon: Kanban },
   { href: '/tarefas', label: 'Tarefas', icon: CheckSquare },
   { href: '/relatorios', label: 'Relatórios', icon: BarChart3, adminOnly: false },
   { href: '/configuracoes/equipe', label: 'Equipe', icon: UserCheck, adminOnly: true },

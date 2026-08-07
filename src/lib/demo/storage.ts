@@ -1,11 +1,14 @@
+import { DealStage } from '@/types/database'
 import {
   DemoContact,
   DemoConversation,
+  DemoDeal,
   DemoTask,
   DemoTeamMember,
   demoAttendants,
   demoContacts,
   demoConversations,
+  demoDeals,
   demoTasks,
 } from './index'
 
@@ -17,6 +20,7 @@ export interface DemoDatabase {
   version: number
   contacts: DemoContact[]
   tasks: DemoTask[]
+  deals: DemoDeal[]
   conversations: DemoConversation[]
   members: DemoTeamMember[]
   updatedAt: string
@@ -26,6 +30,7 @@ export const initialSeedDatabase: DemoDatabase = {
   version: DEMO_STORAGE_VERSION,
   contacts: demoContacts,
   tasks: demoTasks,
+  deals: demoDeals,
   conversations: demoConversations,
   members: demoAttendants,
   updatedAt: new Date().toISOString(),
@@ -59,6 +64,7 @@ export function getDemoDatabase(): DemoDatabase {
       version: DEMO_STORAGE_VERSION,
       contacts: parsed.contacts || [],
       tasks: parsed.tasks || [],
+      deals: parsed.deals || [],
       conversations: parsed.conversations || [],
       members: parsed.members || [],
       updatedAt: parsed.updatedAt || new Date().toISOString(),
@@ -262,6 +268,79 @@ export function deleteStoredTask(taskId: string): boolean {
 
   if (updatedTasks.length < initialLength) {
     saveDemoDatabase({ ...db, tasks: updatedTasks })
+    return true
+  }
+  return false
+}
+
+// ==========================================
+// Deal (Funil) Helpers
+// ==========================================
+
+export function getStoredDeals(): DemoDeal[] {
+  return getDemoDatabase().deals
+}
+
+export function saveStoredDeal(deal: Omit<DemoDeal, 'id' | 'createdAt' | 'isDemo'>): DemoDeal {
+  const db = getDemoDatabase()
+  const newDeal: DemoDeal = {
+    ...deal,
+    id: `d-${Date.now()}`,
+    createdAt: new Date().toLocaleDateString('pt-BR'),
+    isDemo: true,
+  }
+
+  const updatedDeals = [newDeal, ...db.deals]
+  saveDemoDatabase({ ...db, deals: updatedDeals })
+  return newDeal
+}
+
+export function updateStoredDealStage(dealId: string, newStage: DealStage): DemoDeal | null {
+  const db = getDemoDatabase()
+  let updatedDeal: DemoDeal | null = null
+
+  const updatedDeals = db.deals.map((deal) => {
+    if (deal.id === dealId) {
+      updatedDeal = { ...deal, stage: newStage }
+      return updatedDeal
+    }
+    return deal
+  })
+
+  if (updatedDeal) {
+    saveDemoDatabase({ ...db, deals: updatedDeals })
+  }
+  return updatedDeal
+}
+
+export function updateStoredDeal(
+  dealId: string,
+  updates: Partial<Omit<DemoDeal, 'id' | 'createdAt' | 'isDemo'>>
+): DemoDeal | null {
+  const db = getDemoDatabase()
+  let updatedDeal: DemoDeal | null = null
+
+  const updatedDeals = db.deals.map((deal) => {
+    if (deal.id === dealId) {
+      updatedDeal = { ...deal, ...updates }
+      return updatedDeal
+    }
+    return deal
+  })
+
+  if (updatedDeal) {
+    saveDemoDatabase({ ...db, deals: updatedDeals })
+  }
+  return updatedDeal
+}
+
+export function deleteStoredDeal(dealId: string): boolean {
+  const db = getDemoDatabase()
+  const initialLength = db.deals.length
+  const updatedDeals = db.deals.filter((d) => d.id !== dealId)
+
+  if (updatedDeals.length < initialLength) {
+    saveDemoDatabase({ ...db, deals: updatedDeals })
     return true
   }
   return false

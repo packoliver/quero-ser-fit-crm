@@ -1,4 +1,4 @@
-import { ChannelType, ConversationStatus, TaskStatus, UserRole } from '@/types/database'
+import { ChannelType, ConversationStatus, DealStage, TaskStatus, UserRole } from '@/types/database'
 
 export interface DemoMessage {
   id: string
@@ -49,6 +49,18 @@ export interface DemoTask {
   assigneeName: string
   clientName: string
   priority: 'alta' | 'media' | 'baixa'
+  isDemo: true
+}
+
+export interface DemoDeal {
+  id: string
+  title: string
+  contactId: string
+  contactName: string
+  value: number | null
+  stage: DealStage
+  notes: string
+  createdAt: string
   isDemo: true
 }
 
@@ -238,6 +250,42 @@ export const demoTasks: DemoTask[] = [
     assigneeName: 'Patricia Silva',
     clientName: 'Juliana Paes',
     priority: 'baixa',
+    isDemo: true,
+  },
+]
+
+export const demoDeals: DemoDeal[] = [
+  {
+    id: 'd-1',
+    title: 'Kit marmitas fit semanal',
+    contactId: 'c-1',
+    contactName: 'Mariana Medeiros',
+    value: 189.9,
+    stage: 'negociando',
+    notes: 'Aguardando confirmação dos sabores da semana.',
+    createdAt: '01/08/2026',
+    isDemo: true,
+  },
+  {
+    id: 'd-2',
+    title: 'Assinatura mensal Low Carb',
+    contactId: 'c-2',
+    contactName: 'Lucas Andrade',
+    value: 640,
+    stage: 'entrega',
+    notes: 'Confirmar taxa de motoboy para bairro da Barra.',
+    createdAt: '03/08/2026',
+    isDemo: true,
+  },
+  {
+    id: 'd-3',
+    title: 'Pedido #4928 — Plano Trimestral',
+    contactId: 'c-3',
+    contactName: 'Juliana Paes',
+    value: 1290,
+    stage: 'posvenda',
+    notes: 'Cliente fiel, prefere marmitas sem pimentão.',
+    createdAt: '15/07/2026',
     isDemo: true,
   },
 ]

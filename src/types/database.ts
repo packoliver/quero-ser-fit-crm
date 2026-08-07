@@ -13,6 +13,7 @@ export type AssignmentStatus = 'active' | 'transferred' | 'released'
 export type SenderType = 'contact' | 'user' | 'system'
 export type MessageStatus = 'sent' | 'delivered' | 'read' | 'failed'
 export type TaskStatus = 'pending' | 'in_progress' | 'completed' | 'cancelled'
+export type DealStage = 'lead' | 'negociando' | 'fechado' | 'entrega' | 'posvenda' | 'perdido'
 export type IntegrationProvider = 'whatsapp_meta' | 'instagram_meta' | 'whatsapp_uazapi'
 export type IntegrationStatus = 'active' | 'inactive' | 'error'
 export type IntegrationConnectionMethod = 'cloud_api' | 'uazapi'
@@ -439,6 +440,52 @@ export interface Database {
           assigned_to_id?: string | null
           contact_id?: string | null
           conversation_id?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+      }
+      deals: {
+        Row: {
+          id: string
+          organization_id: string
+          contact_id: string
+          conversation_id: string | null
+          title: string
+          value: number | null
+          stage: DealStage
+          notes: string | null
+          assigned_to_id: string | null
+          closed_at: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          // Auto-filled from the caller's organization membership by a DB trigger when
+          // omitted — see trg_autofill_org_deals in master_setup.sql.
+          organization_id?: string
+          contact_id: string
+          conversation_id?: string | null
+          title: string
+          value?: number | null
+          stage?: DealStage
+          notes?: string | null
+          assigned_to_id?: string | null
+          closed_at?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          organization_id?: string
+          contact_id?: string
+          conversation_id?: string | null
+          title?: string
+          value?: number | null
+          stage?: DealStage
+          notes?: string | null
+          assigned_to_id?: string | null
+          closed_at?: string | null
           created_at?: string
           updated_at?: string
         }
