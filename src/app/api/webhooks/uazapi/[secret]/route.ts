@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { UazapiWhatsAppProvider } from '@/lib/integrations/uazapi-whatsapp'
+import { UazapiWhatsAppProvider, downloadUazapiMedia } from '@/lib/integrations/uazapi-whatsapp'
 import { processInboundEvents } from '@/lib/integrations/persist-event'
+import { mirrorMediaToStorage } from '@/lib/integrations/media'
 import { createAdminClient } from '@/lib/supabase/admin'
+import { decryptToken } from '@/lib/security/encryption'
 
 const uazapiProvider = new UazapiWhatsAppProvider()
 
@@ -32,12 +34,25 @@ export async function POST(request: NextRequest, context: { params: Promise<{ se
     const { data: connection } = await (admin as unknown as {
       from: (t: string) => {
         select: (c: string) => {
-          eq: (c: string, v: string) => { maybeSingle: () => Promise<{ data: { id: string; external_identifier: string | null } | null }> }
+          eq: (
+            c: string,
+            v: string
+          ) => {
+            maybeSingle: () => Promise<{
+              data: {
+                id: string
+                organization_id: string
+                external_identifier: string | null
+                api_base_url: string | null
+                encrypted_credentials: string | null
+              } | null
+            }>
+          }
         }
       }
     })
       .from('integration_connections')
-      .select('id, external_identifier')
+      .select('id, organization_id, external_identifier, api_base_url, encrypted_credentials')
       .eq('webhook_secret', secret)
       .maybeSingle()
 
@@ -59,9 +74,52 @@ export async function POST(request: NextRequest, context: { params: Promise<{ se
     // instância) pelo external_identifier real salvo no banco, que é o que
     // persistInboundEvent usa pra casar o evento com a conexão certa. Evita depender de
     // qualquer campo de identificação inconsistente que a uazapi mande no payload.
-    const eventsWithConnection = connection.external_identifier
+    let eventsWithConnection = connection.external_identifier
       ? events.map((event) => ({ ...event, recipientId: connection.external_identifier as string }))
       : events
+
+    // Mensagens de mídia chegam sem a URL de verdade (só o messageId, em
+    // providerMediaId) — precisamos de uma chamada autenticada extra pra resolver e
+    // baixar o arquivo, e só esta rota tem o token decifrado da conexão pra isso.
+    const hasMediaToResolve = eventsWithConnection.some((e) => e.providerMediaId)
+    if (hasMediaToResolve && connection.api_base_url && connection.encrypted_credentials) {
+      let instanceToken: string | null = null
+      try {
+        instanceToken = decryptToken(connection.encrypted_credentials)
+      } catch {
+        instanceToken = null
+      }
+
+      if (instanceToken) {
+        const token = instanceToken
+        const baseUrl = connection.api_base_url
+        eventsWithConnection = await Promise.all(
+          eventsWithConnection.map(async (event) => {
+            if (!event.providerMediaId) return event
+
+            const downloaded = await downloadUazapiMedia(baseUrl, token, event.providerMediaId)
+            if (!downloaded) {
+              // Não conseguimos baixar — vira uma mensagem de texto com um aviso, em vez
+              // de perder o evento inteiro ou salvar um media_type sem media_url (que
+              // renderizaria uma imagem/vídeo quebrado na tela).
+              return { ...event, mediaType: undefined, content: event.content || '[Mídia recebida, mas não foi possível baixar]' }
+            }
+
+            const storedUrl = await mirrorMediaToStorage({
+              sourceUrl: downloaded.fileURL,
+              organizationId: connection.organization_id,
+              mimetypeHint: downloaded.mimetype,
+            })
+
+            if (!storedUrl) {
+              return { ...event, mediaType: undefined, content: event.content || '[Mídia recebida, mas não foi possível baixar]' }
+            }
+
+            return { ...event, mediaUrl: storedUrl }
+          })
+        )
+      }
+    }
 
     const processedCount = await processInboundEvents(admin, eventsWithConnection)
 

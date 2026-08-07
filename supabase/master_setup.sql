@@ -112,6 +112,7 @@ CREATE TABLE public.messages (
     sender_id UUID,
     content TEXT NOT NULL,
     media_url TEXT,
+    media_type TEXT CHECK (media_type IN ('image', 'video', 'audio', 'document', 'sticker')),
     status TEXT NOT NULL DEFAULT 'sent' CHECK (status IN ('sent', 'delivered', 'read', 'failed')),
     external_id TEXT,
     metadata JSONB DEFAULT '{}'::jsonb,
@@ -639,3 +640,28 @@ GRANT SELECT ON public.integration_connections_public TO authenticated, service_
 -- Realtime still respects each table's RLS policy for authenticated clients.
 ALTER PUBLICATION supabase_realtime ADD TABLE public.messages;
 ALTER PUBLICATION supabase_realtime ADD TABLE public.conversations;
+
+-- Storage bucket for chat media (images/videos/audio/documents), both outbound
+-- attachments uploaded from the browser and inbound media mirrored from the
+-- provider's own hosting for permanence (see 20260807030000_media_messages.sql for the
+-- full rationale). Path convention: {organization_id}/{conversation_id}/{file}.
+INSERT INTO storage.buckets (id, name, public, file_size_limit)
+VALUES ('chat-media', 'chat-media', true, 26214400) -- 25 MB
+ON CONFLICT (id) DO NOTHING;
+
+CREATE POLICY "Org members can upload chat media" ON storage.objects
+    FOR INSERT TO authenticated
+    WITH CHECK (
+        bucket_id = 'chat-media'
+        AND (storage.foldername(name))[1]::uuid IN (SELECT public.get_user_org_ids())
+    );
+
+CREATE POLICY "Org members can update their own chat media" ON storage.objects
+    FOR UPDATE TO authenticated
+    USING (
+        bucket_id = 'chat-media'
+        AND (storage.foldername(name))[1]::uuid IN (SELECT public.get_user_org_ids())
+    );
+
+CREATE POLICY "Public can read chat media" ON storage.objects
+    FOR SELECT USING (bucket_id = 'chat-media');

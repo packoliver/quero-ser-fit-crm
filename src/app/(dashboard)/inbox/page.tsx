@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Search,
   Send,
@@ -16,6 +16,9 @@ import {
   Database,
   Loader2,
   Inbox as InboxIcon,
+  Paperclip,
+  Download,
+  File as FileIcon,
 } from 'lucide-react'
 import { InstagramIcon as Instagram } from '@/components/icons/InstagramIcon'
 import { demoAttendants } from '@/lib/demo'
@@ -28,6 +31,17 @@ import { EmptyState } from '@/components/ui/EmptyState'
 import { createClient } from '@/lib/supabase/client'
 import { useDemoStorage } from '@/lib/demo/useDemoStorage'
 
+type MediaType = 'image' | 'video' | 'audio' | 'document' | 'sticker'
+
+const MAX_MEDIA_SIZE_BYTES = 25 * 1024 * 1024 // 25MB — mesmo limite do bucket no Supabase
+
+function detectMediaType(mime: string): MediaType {
+  if (mime.startsWith('image/')) return 'image'
+  if (mime.startsWith('video/')) return 'video'
+  if (mime.startsWith('audio/')) return 'audio'
+  return 'document'
+}
+
 interface UiMessage {
   id: string
   senderType: 'contact' | 'user' | 'system'
@@ -35,10 +49,14 @@ interface UiMessage {
   content: string
   time: string
   status?: 'sent' | 'delivered' | 'read' | 'failed'
+  mediaUrl?: string | null
+  mediaType?: MediaType | null
 }
 
 interface UiConversation {
   id: string
+  /** Only present in real (Supabase) mode — needed for the media upload path prefix. */
+  organizationId?: string
   contactName: string
   contactPhone: string
   channel: 'whatsapp' | 'instagram'
@@ -87,6 +105,8 @@ export default function InboxPage() {
   // Action States
   const [newMessageText, setNewMessageText] = useState('')
   const [isSendingMessage, setIsSendingMessage] = useState(false)
+  const [uploadingMedia, setUploadingMedia] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const [newNoteText, setNewNoteText] = useState('')
   const [activeTabRight, setActiveTabRight] = useState<'info' | 'notes'>('info')
   const [transferModalOpen, setTransferModalOpen] = useState(false)
@@ -131,15 +151,16 @@ export default function InboxPage() {
       const [convRes, msgRes, noteRes, membersRes] = await Promise.all([
         typed
           .from('conversations')
-          .select('id, status, channel_type, current_assignee_id, last_message_at, contact_id, contacts(name, phone), profiles(full_name)')
+          .select('id, organization_id, status, channel_type, current_assignee_id, last_message_at, contact_id, contacts(name, phone), profiles(full_name)')
           .order!('last_message_at', { ascending: false }),
-        typed.from('messages').select('id, conversation_id, sender_type, sender_id, content, status, created_at').order!('created_at', { ascending: true }),
+        typed.from('messages').select('id, conversation_id, sender_type, sender_id, content, media_url, media_type, status, created_at').order!('created_at', { ascending: true }),
         typed.from('internal_notes').select('id, conversation_id, content, created_at, author_id, profiles(full_name)').order!('created_at', { ascending: false }),
         typed.from('organization_members').select('user_id, profiles(full_name)').order!('created_at', { ascending: true }),
       ])
 
       const convData = (convRes.data || []) as Array<{
         id: string
+        organization_id: string
         status: UiConversation['status']
         channel_type: 'whatsapp' | 'instagram'
         current_assignee_id: string | null
@@ -154,6 +175,8 @@ export default function InboxPage() {
         sender_type: 'contact' | 'user' | 'system'
         sender_id: string | null
         content: string
+        media_url: string | null
+        media_type: MediaType | null
         status: 'sent' | 'delivered' | 'read' | 'failed' | null
         created_at: string
       }>
@@ -188,6 +211,8 @@ export default function InboxPage() {
             content: m.content,
             time: formatTime(m.created_at),
             status: m.status || undefined,
+            mediaUrl: m.media_url,
+            mediaType: m.media_type,
           }))
 
         const notes = noteData
@@ -200,13 +225,16 @@ export default function InboxPage() {
           }))
 
         const lastMsg = msgs[msgs.length - 1]
+        const mediaLabel = (t?: MediaType | null) =>
+          t === 'image' ? '📷 Imagem' : t === 'video' ? '🎥 Vídeo' : t === 'audio' ? '🎤 Áudio' : t === 'sticker' ? '🌟 Figurinha' : '📎 Arquivo'
 
         return {
           id: conv.id,
+          organizationId: conv.organization_id,
           contactName: conv.contacts?.name || 'Contato',
           contactPhone: conv.contacts?.phone || '-',
           channel: conv.channel_type,
-          lastMessage: lastMsg?.content || '(sem mensagens)',
+          lastMessage: lastMsg ? lastMsg.content || mediaLabel(lastMsg.mediaType) : '(sem mensagens)',
           lastMessageTime: lastMsg?.time || formatTime(conv.last_message_at),
           status: conv.status,
           currentAssigneeId: conv.current_assignee_id,
@@ -329,6 +357,70 @@ export default function InboxPage() {
     setTransferModalOpen(false)
   }
 
+  // Sends a message in real mode — text-only or with an already-uploaded media URL attached.
+  const sendRealMessage = async (content: string, mediaUrl?: string, mediaType?: MediaType) => {
+    if (!selectedConversation) return
+    setIsSendingMessage(true)
+    try {
+      const res = await fetch('/api/messages/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ conversationId: selectedConversation.id, content, mediaUrl, mediaType }),
+      })
+      const body = await res.json()
+      if (!res.ok) {
+        setErrorMessage(body.error || 'Falha ao enviar mensagem.')
+      }
+      fetchRealData()
+    } catch {
+      setErrorMessage('Erro de conexão ao enviar mensagem.')
+    } finally {
+      setIsSendingMessage(false)
+    }
+  }
+
+  // Handle attaching a file — uploads straight from the browser to Supabase Storage
+  // (respecting the org-scoped RLS policy on the chat-media bucket, not going through
+  // our own API routes, since a large video could blow past a serverless function's
+  // request body limit), then sends the message with the resulting public URL.
+  const handleFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (fileInputRef.current) fileInputRef.current.value = ''
+    if (!file || !selectedConversation || viewMode !== 'real' || !selectedConversation.organizationId) return
+
+    if (file.size > MAX_MEDIA_SIZE_BYTES) {
+      setErrorMessage('Arquivo maior que 25MB — reduza o tamanho e tente de novo.')
+      return
+    }
+
+    setUploadingMedia(true)
+    setErrorMessage(null)
+    try {
+      const supabase = createClient()
+      const ext = file.name.includes('.') ? file.name.split('.').pop() : 'bin'
+      const path = `${selectedConversation.organizationId}/${selectedConversation.id}/${Date.now()}-${crypto.randomUUID()}.${ext}`
+
+      const { error: uploadError } = await supabase.storage
+        .from('chat-media')
+        .upload(path, file, { contentType: file.type || undefined })
+
+      if (uploadError) {
+        setErrorMessage(`Falha ao enviar arquivo: ${uploadError.message}`)
+        return
+      }
+
+      const { data: publicUrlData } = supabase.storage.from('chat-media').getPublicUrl(path)
+      const mediaType = detectMediaType(file.type || '')
+      const caption = newMessageText.trim()
+      setNewMessageText('')
+      await sendRealMessage(caption, publicUrlData.publicUrl, mediaType)
+    } catch {
+      setErrorMessage('Erro inesperado ao enviar arquivo.')
+    } finally {
+      setUploadingMedia(false)
+    }
+  }
+
   // Handle Send Message
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -336,27 +428,13 @@ export default function InboxPage() {
 
     const textToSend = newMessageText
     setNewMessageText('')
-    setIsSendingMessage(true)
 
     if (viewMode === 'real') {
-      try {
-        const res = await fetch('/api/messages/send', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ conversationId: selectedConversation.id, content: textToSend }),
-        })
-        const body = await res.json()
-        if (!res.ok) {
-          setErrorMessage(body.error || 'Falha ao enviar mensagem.')
-        }
-        fetchRealData()
-      } catch {
-        setErrorMessage('Erro de conexão ao enviar mensagem.')
-      } finally {
-        setIsSendingMessage(false)
-      }
+      await sendRealMessage(textToSend)
       return
     }
+
+    setIsSendingMessage(true)
 
     // Demo mode
     addMessage(selectedConversation.id, textToSend, 'user', 'Patricia Silva (Você)')
@@ -716,7 +794,35 @@ export default function InboxPage() {
                           : 'bg-[#131f37] text-slate-200 border border-slate-700/80 rounded-tl-none'
                       }`}
                     >
-                      <p className="whitespace-pre-wrap">{msg.content}</p>
+                      {msg.mediaUrl && (
+                        <div className="mb-1.5">
+                          {msg.mediaType === 'image' || msg.mediaType === 'sticker' ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img
+                              src={msg.mediaUrl}
+                              alt="Mídia enviada"
+                              className="rounded-xl max-w-full max-h-72 object-contain bg-black/20 cursor-pointer"
+                              onClick={() => window.open(msg.mediaUrl!, '_blank')}
+                            />
+                          ) : msg.mediaType === 'video' ? (
+                            <video src={msg.mediaUrl} controls className="rounded-xl max-w-full max-h-72" />
+                          ) : msg.mediaType === 'audio' ? (
+                            <audio src={msg.mediaUrl} controls className="w-full" />
+                          ) : (
+                            <a
+                              href={msg.mediaUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="flex items-center gap-2 bg-black/20 hover:bg-black/30 transition rounded-xl px-3 py-2"
+                            >
+                              <FileIcon className="w-4 h-4 shrink-0" />
+                              <span className="truncate flex-1">Documento anexado</span>
+                              <Download className="w-3.5 h-3.5 shrink-0" />
+                            </a>
+                          )}
+                        </div>
+                      )}
+                      {msg.content && <p className="whitespace-pre-wrap">{msg.content}</p>}
                       <span className={`text-[9px] block text-right mt-1.5 ${isFailed ? 'text-rose-300' : isMe ? 'text-emerald-200' : 'text-slate-400'}`}>
                         {msg.time}
                       </span>
@@ -747,6 +853,27 @@ export default function InboxPage() {
             {/* Message Input Form */}
             <form onSubmit={handleSendMessage} className="p-3 border-t border-slate-800 bg-[#0f172a] shrink-0">
               <div className="flex items-center gap-2">
+                {viewMode === 'real' && (
+                  <>
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      className="hidden"
+                      accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx"
+                      onChange={handleFileSelected}
+                      disabled={uploadingMedia || isSendingMessage}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={uploadingMedia || isSendingMessage}
+                      title="Anexar imagem, vídeo, áudio ou documento"
+                      className="p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-slate-400 hover:text-emerald-400 hover:border-emerald-700 transition disabled:opacity-50 shrink-0"
+                    >
+                      {uploadingMedia ? <Loader2 className="w-4 h-4 animate-spin" /> : <Paperclip className="w-4 h-4" />}
+                    </button>
+                  </>
+                )}
                 <input
                   type="text"
                   placeholder="Digite sua resposta..."

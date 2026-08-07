@@ -11,10 +11,21 @@ const whatsappProvider = new MetaWhatsAppProvider()
 const instagramProvider = new MetaInstagramProvider()
 const uazapiProvider = new UazapiWhatsAppProvider()
 
-const sendSchema = z.object({
-  conversationId: z.string().uuid('ID de conversa inválido'),
-  content: z.string().min(1, 'Mensagem vazia'),
-})
+const sendSchema = z
+  .object({
+    conversationId: z.string().uuid('ID de conversa inválido'),
+    content: z.string().max(4096, 'Mensagem muito longa').default(''),
+    mediaUrl: z.string().url('URL de mídia inválida').optional(),
+    mediaType: z.enum(['image', 'video', 'audio', 'document', 'sticker']).optional(),
+  })
+  .refine((data) => data.content.trim().length > 0 || !!data.mediaUrl, {
+    message: 'Mensagem vazia',
+    path: ['content'],
+  })
+  .refine((data) => !data.mediaUrl || !!data.mediaType, {
+    message: 'Falta o tipo da mídia enviada',
+    path: ['mediaType'],
+  })
 
 interface ConversationRow {
   id: string
@@ -158,6 +169,8 @@ async function handlePost(request: NextRequest) {
     conversationId: conversation.id,
     recipientExternalId,
     content: parsed.data.content,
+    mediaUrl: parsed.data.mediaUrl,
+    mediaType: parsed.data.mediaType,
     accessToken,
     fromExternalId: connection.external_identifier || undefined,
     apiBaseUrl: connection.api_base_url || undefined,
@@ -169,6 +182,8 @@ async function handlePost(request: NextRequest) {
     sender_type: 'user',
     sender_id: user.id,
     content: parsed.data.content,
+    media_url: parsed.data.mediaUrl || null,
+    media_type: parsed.data.mediaType || null,
     status: result.success ? 'sent' : 'failed',
     external_id: result.externalId || null,
   })

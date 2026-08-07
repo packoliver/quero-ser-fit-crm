@@ -1,8 +1,19 @@
 import {
   ICRMIntegrationProvider,
   IncomingWebhookEvent,
+  MediaType,
   OutgoingMessagePayload,
 } from './types'
+
+// O Instagram usa "file" onde a Cloud API do WhatsApp usa "document" — normalizamos
+// pro nosso vocabulário comum.
+const INSTAGRAM_MEDIA_TYPES: Record<string, MediaType> = {
+  image: 'image',
+  video: 'video',
+  audio: 'audio',
+  file: 'document',
+  share: 'document',
+}
 
 /**
  * Conector Oficial da Meta Instagram Graph API (Direct Messaging).
@@ -24,18 +35,28 @@ export class MetaInstagramProvider implements ICRMIntegrationProvider {
         for (const item of messaging) {
           const sender = item.sender as { id?: string } | undefined
           const recipient = item.recipient as { id?: string } | undefined
-          const message = item.message as { mid?: string; text?: string } | undefined
+          const message = item.message as
+            | { mid?: string; text?: string; attachments?: Array<{ type?: string; payload?: { url?: string } }> }
+            | undefined
 
           if (message && sender?.id) {
+            // Diferente da Cloud API do WhatsApp (que exige um segundo hop autenticado
+            // pra resolver o media id), o Instagram já entrega a URL do anexo direto no
+            // payload do webhook — pronta pra baixar sem token.
+            const attachment = message.attachments?.[0]
+            const mediaType = attachment?.type ? INSTAGRAM_MEDIA_TYPES[attachment.type] : undefined
+
             events.push({
               provider: 'instagram_meta',
               externalEventId: message.mid || `ig_msg_${Date.now()}`,
               eventType: 'instagram_direct',
               senderId: sender.id,
               recipientId: recipient?.id || '',
-              content: message.text || '[Mídia Direct]',
+              content: message.text || '',
               timestamp: new Date().toISOString(),
               rawPayload: item,
+              mediaType,
+              mediaUrl: attachment?.payload?.url,
             })
           }
         }
@@ -54,6 +75,14 @@ export class MetaInstagramProvider implements ICRMIntegrationProvider {
       return { success: false, error: 'Conexão sem token/Page ID configurado (Cloud API).' }
     }
 
+    // Instagram Direct usa "file" onde outros conectores usam "document".
+    const attachmentType = payload.mediaType === 'document' ? 'file' : payload.mediaType
+
+    const message =
+      payload.mediaUrl && attachmentType
+        ? { attachment: { type: attachmentType, payload: { url: payload.mediaUrl, is_reusable: true } } }
+        : { text: payload.content }
+
     try {
       const res = await fetch(
         `https://graph.facebook.com/v20.0/${encodeURIComponent(payload.fromExternalId)}/messages`,
@@ -65,7 +94,7 @@ export class MetaInstagramProvider implements ICRMIntegrationProvider {
           },
           body: JSON.stringify({
             recipient: { id: payload.recipientExternalId },
-            message: { text: payload.content },
+            message,
           }),
         }
       )

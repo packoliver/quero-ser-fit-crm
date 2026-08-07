@@ -1,11 +1,15 @@
 import { ChannelType } from '@/types/database'
 
+export type MediaType = 'image' | 'video' | 'audio' | 'document' | 'sticker'
+
 export interface OutgoingMessagePayload {
   organizationId: string
   conversationId: string
   recipientExternalId: string
   content: string
+  /** Publicly fetchable URL (our own Storage bucket) — required alongside mediaType to send media instead of plain text. */
   mediaUrl?: string
+  mediaType?: MediaType
   /** Decrypted access token for this connection (Cloud API access token / uazapi instance token). */
   accessToken?: string
   /** Our identifier for the connection sending this message (phone_number_id / Page ID). */
@@ -23,6 +27,17 @@ export interface IncomingWebhookEvent {
   content: string
   timestamp: string
   rawPayload: Record<string, unknown>
+  /** Set directly when the provider already gives a fetchable URL (e.g. Instagram attachments). */
+  mediaUrl?: string
+  mediaType?: MediaType
+  /**
+   * Set by the parser when the message IS media but resolving the actual URL requires an
+   * extra authenticated call back to the provider (uazapi's /message/download, Meta's
+   * media-id lookup) — the webhook route makes that call (it already has the decrypted
+   * connection credentials) and fills in mediaUrl before persisting. providerMediaId is
+   * whatever ID that follow-up call needs (a message id for uazapi, a media id for Meta).
+   */
+  providerMediaId?: string
 }
 
 export interface ICRMIntegrationProvider {

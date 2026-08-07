@@ -1,14 +1,103 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { MetaWhatsAppProvider } from '@/lib/integrations/whatsapp-meta'
+import { MetaWhatsAppProvider, resolveMetaMediaUrl } from '@/lib/integrations/whatsapp-meta'
 import { MetaInstagramProvider } from '@/lib/integrations/instagram-meta'
 import { processInboundEvents } from '@/lib/integrations/persist-event'
+import { mirrorMediaToStorage } from '@/lib/integrations/media'
 import { createAdminClient } from '@/lib/supabase/admin'
+import { decryptToken } from '@/lib/security/encryption'
 import { getServerEnv } from '@/lib/env'
 import { timingSafeEqualString, verifyMetaHmacSignature } from '@/lib/security/webhook'
 import { z } from 'zod'
+import { IncomingWebhookEvent } from '@/lib/integrations/types'
 
 const whatsappProvider = new MetaWhatsAppProvider()
 const instagramProvider = new MetaInstagramProvider()
+
+interface ConnectionForMedia {
+  organization_id: string
+  encrypted_credentials: string | null
+}
+
+/**
+ * Mensagens de mídia da Cloud API (WhatsApp) chegam só com um media id — resolver o
+ * arquivo de verdade exige uma chamada autenticada extra com o token da conexão certa
+ * (Bearer), então buscamos a conexão (provider + external_identifier = recipientId) só
+ * pros eventos que realmente precisam disso. O Instagram já manda a URL do anexo direto
+ * no payload — só precisa ser espelhada pro nosso Storage pra virar permanente.
+ */
+async function resolveMediaForEvents(
+  admin: ReturnType<typeof createAdminClient>,
+  events: IncomingWebhookEvent[]
+): Promise<IncomingWebhookEvent[]> {
+  const needsResolution = events.filter((e) => e.mediaType && (e.providerMediaId || e.mediaUrl))
+  if (needsResolution.length === 0) return events
+
+  const connectionCache = new Map<string, ConnectionForMedia | null>()
+  const db = admin as unknown as {
+    from: (t: string) => {
+      select: (c: string) => {
+        eq: (c: string, v: string) => {
+          eq: (c: string, v: string) => { maybeSingle: () => Promise<{ data: ConnectionForMedia | null }> }
+        }
+      }
+    }
+  }
+
+  return Promise.all(
+    events.map(async (event) => {
+      if (!event.mediaType || (!event.providerMediaId && !event.mediaUrl)) return event
+
+      const cacheKey = `${event.provider}:${event.recipientId}`
+      let connection = connectionCache.get(cacheKey)
+      if (connection === undefined) {
+        const { data } = await db
+          .from('integration_connections')
+          .select('organization_id, encrypted_credentials')
+          .eq('provider', event.provider)
+          .eq('external_identifier', event.recipientId)
+          .maybeSingle()
+        connection = data
+        connectionCache.set(cacheKey, connection)
+      }
+      if (!connection) return event
+
+      let sourceUrl = event.mediaUrl
+      let authHeader: string | undefined
+
+      // WhatsApp Cloud API: media id → resolve pra URL temporária, que só é baixável
+      // com o mesmo Bearer token da conexão.
+      if (!sourceUrl && event.providerMediaId) {
+        if (!connection.encrypted_credentials) return event
+        let accessToken: string
+        try {
+          accessToken = decryptToken(connection.encrypted_credentials)
+        } catch {
+          return event
+        }
+        const resolved = await resolveMetaMediaUrl(accessToken, event.providerMediaId)
+        if (!resolved) {
+          return { ...event, mediaType: undefined, content: event.content || '[Mídia recebida, mas não foi possível baixar]' }
+        }
+        sourceUrl = resolved.url
+        authHeader = `Bearer ${accessToken}`
+      }
+
+      if (!sourceUrl) return event
+
+      const storedUrl = await mirrorMediaToStorage({
+        sourceUrl,
+        organizationId: connection.organization_id,
+        authHeader,
+      })
+
+      if (!storedUrl) {
+        return { ...event, mediaType: undefined, content: event.content || '[Mídia recebida, mas não foi possível baixar]' }
+      }
+
+      return { ...event, mediaUrl: storedUrl }
+    })
+  )
+}
 
 const genericPayloadSchema = z.object({
   object: z.string().optional(),
@@ -112,7 +201,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ status: 'accepted', processed: 0, warning: 'admin client unavailable' }, { status: 200 })
     }
 
-    const processedCount = await processInboundEvents(admin, events)
+    const eventsWithMedia = await resolveMediaForEvents(admin, events)
+    const processedCount = await processInboundEvents(admin, eventsWithMedia)
 
     return NextResponse.json(
       { status: 'success', processed: processedCount },

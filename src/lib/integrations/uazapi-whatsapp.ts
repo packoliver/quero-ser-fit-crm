@@ -1,8 +1,25 @@
 import {
   ICRMIntegrationProvider,
   IncomingWebhookEvent,
+  MediaType,
   OutgoingMessagePayload,
 } from './types'
+
+// Mapeia o `type` que a uazapi manda numa mensagem recebida pro nosso MediaType. Os
+// tipos de envio (videoplay, myaudio, ptt, ptv — variações de comportamento visual) não
+// têm sentido pra uma mensagem recebida, mas mapeamos mesmo assim por segurança, caso a
+// própria uazapi ecoe o mesmo valor de volta em algum caso.
+const UAZAPI_MEDIA_TYPE_MAP: Record<string, MediaType> = {
+  image: 'image',
+  video: 'video',
+  videoplay: 'video',
+  ptv: 'video',
+  audio: 'audio',
+  ptt: 'audio',
+  myaudio: 'audio',
+  document: 'document',
+  sticker: 'sticker',
+}
 
 /**
  * Conector WhatsApp via uazapi (uazapiGO) — serviço terceiro que mantém a sessão do
@@ -49,6 +66,10 @@ export class UazapiWhatsAppProvider implements ICRMIntegrationProvider {
           : typeof message.content === 'string'
             ? message.content
             : undefined
+      // Mensagens de mídia vêm com `type` igual a um dos valores de UAZAPI_MEDIA_TYPE_MAP
+      // (o mesmo vocabulário usado por POST /send/media) — texto normal vem como "text".
+      const rawType = typeof message.type === 'string' ? message.type : undefined
+      const mediaType = rawType ? UAZAPI_MEDIA_TYPE_MAP[rawType] : undefined
       const chatId = typeof message.chatid === 'string' ? message.chatid : undefined
       // `sender` costuma vir no formato @lid (identificador de privacidade do WhatsApp,
       // não o telefone). `sender_pn` é a versão com o telefone real quando disponível —
@@ -67,7 +88,9 @@ export class UazapiWhatsAppProvider implements ICRMIntegrationProvider {
       const timestampMs = typeof message.messageTimestamp === 'number' ? message.messageTimestamp : undefined
 
       // Grupos ficam fora de escopo por enquanto (o CRM modela conversas 1:1 com contatos).
-      if (fromMe || isGroup || !text || !sender) return []
+      // Uma mensagem é válida se tiver texto OU for de um tipo de mídia reconhecido —
+      // uma imagem sem legenda, por exemplo, não tem `text`, mas ainda é uma mensagem real.
+      if (fromMe || isGroup || !sender || (!text && !mediaType)) return []
 
       // O nome da instância (`instanceName`) não é um identificador estável o bastante
       // pra rotear com segurança — a rota do webhook (que já sabe qual conexão é essa
@@ -82,9 +105,14 @@ export class UazapiWhatsAppProvider implements ICRMIntegrationProvider {
           eventType: 'message',
           senderId: sender,
           recipientId: instanceName,
-          content: text,
+          content: text || '',
           timestamp: timestampMs ? new Date(timestampMs).toISOString() : new Date().toISOString(),
           rawPayload: body,
+          mediaType,
+          // A URL de verdade precisa de uma chamada autenticada extra (POST
+          // /message/download) — a rota do webhook resolve isso usando o messageId aqui
+          // antes de persistir, porque só ela tem o token decifrado da conexão.
+          providerMediaId: mediaType ? messageId : undefined,
         },
       ]
     } catch (err) {
@@ -100,19 +128,28 @@ export class UazapiWhatsAppProvider implements ICRMIntegrationProvider {
       return { success: false, error: 'Conexão sem Base URL/Token configurado (uazapi).' }
     }
 
+    const base = payload.apiBaseUrl.replace(/\/$/, '')
+
     try {
-      const base = payload.apiBaseUrl.replace(/\/$/, '')
-      const res = await fetch(`${base}/send/text`, {
-        method: 'POST',
-        headers: {
-          token: payload.accessToken,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          number: payload.recipientExternalId,
-          text: payload.content,
-        }),
-      })
+      const res = payload.mediaUrl && payload.mediaType
+        ? await fetch(`${base}/send/media`, {
+            method: 'POST',
+            headers: { token: payload.accessToken, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              number: payload.recipientExternalId,
+              type: payload.mediaType,
+              file: payload.mediaUrl,
+              text: payload.content || undefined,
+            }),
+          })
+        : await fetch(`${base}/send/text`, {
+            method: 'POST',
+            headers: { token: payload.accessToken, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              number: payload.recipientExternalId,
+              text: payload.content,
+            }),
+          })
 
       const body = await res.json().catch(() => ({}))
 
@@ -124,5 +161,35 @@ export class UazapiWhatsAppProvider implements ICRMIntegrationProvider {
     } catch (err) {
       return { success: false, error: err instanceof Error ? err.message : 'Erro de rede ao enviar mensagem via uazapi.' }
     }
+  }
+}
+
+/**
+ * Resolve o arquivo de uma mensagem de mídia recebida via POST /message/download.
+ * Retorna uma URL (hospedada pela própria uazapi, válida por ~2 dias) + o mimetype, ou
+ * null em qualquer falha — quem chama decide o que fazer (normalmente: seguir sem mídia
+ * em vez de perder o evento inteiro).
+ */
+export async function downloadUazapiMedia(
+  apiBaseUrl: string,
+  instanceToken: string,
+  messageId: string
+): Promise<{ fileURL: string; mimetype?: string } | null> {
+  try {
+    const base = apiBaseUrl.replace(/\/$/, '')
+    const res = await fetch(`${base}/message/download`, {
+      method: 'POST',
+      headers: { token: instanceToken, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: messageId, return_link: true, return_base64: false }),
+    })
+    const body = await res.json().catch(() => ({}))
+    if (!res.ok || !body?.fileURL) {
+      console.error('downloadUazapiMedia: falha ao baixar mídia:', body?.error || res.status)
+      return null
+    }
+    return { fileURL: body.fileURL, mimetype: body.mimetype }
+  } catch (err) {
+    console.error('downloadUazapiMedia: erro de rede:', err)
+    return null
   }
 }

@@ -136,6 +136,8 @@ export async function persistInboundEvent(
       conversation_id: conversationId,
       sender_type: 'contact',
       content: event.content,
+      media_url: event.mediaUrl || null,
+      media_type: event.mediaType || null,
       status: 'delivered',
       external_id: event.externalEventId,
       metadata: event.rawPayload as Json,
