@@ -107,8 +107,10 @@ export default function InboxPage() {
   }
 
   // Fetch real conversations, their messages/notes, and who's currently logged in.
-  const fetchRealData = useCallback(async () => {
-    setLoadingReal(true)
+  // `silent` skips the loading spinner — used for realtime-triggered background
+  // refreshes, so the Inbox doesn't flicker every time a message comes in.
+  const fetchRealData = useCallback(async (silent = false) => {
+    if (!silent) setLoadingReal(true)
     try {
       const supabase = createClient()
       const typed = supabase as unknown as {
@@ -229,6 +231,37 @@ export default function InboxPage() {
       void fetchRealData()
     }, 0)
     return () => clearTimeout(timer)
+  }, [viewMode, fetchRealData])
+
+  // Realtime: subscribe to Postgres Changes on `messages` and `conversations` so new
+  // inbound messages (from the webhook) and changes made by other attendants (assume,
+  // transfer, status) show up live, without a manual refresh. RLS still applies — this
+  // only ever receives events for rows the logged-in user's tenant-isolation policies
+  // already let them SELECT. Debounced because a single inbound message can touch both
+  // tables (new message insert + conversation's last_message_at update) almost
+  // simultaneously, and we only need one refetch for that.
+  useEffect(() => {
+    if (viewMode !== 'real') return
+
+    const supabase = createClient()
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null
+    const scheduleRefresh = () => {
+      if (debounceTimer) clearTimeout(debounceTimer)
+      debounceTimer = setTimeout(() => {
+        void fetchRealData(true)
+      }, 400)
+    }
+
+    const channel = supabase
+      .channel('inbox-realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, scheduleRefresh)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations' }, scheduleRefresh)
+      .subscribe()
+
+    return () => {
+      if (debounceTimer) clearTimeout(debounceTimer)
+      supabase.removeChannel(channel)
+    }
   }, [viewMode, fetchRealData])
 
   // Handle Assume Conversation

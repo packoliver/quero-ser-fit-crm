@@ -633,3 +633,9 @@ CREATE OR REPLACE VIEW public.integration_connections_public AS
     FROM public.integration_connections;
 
 GRANT SELECT ON public.integration_connections_public TO authenticated, service_role;
+
+-- Realtime (Postgres Changes) — the Inbox subscribes to these so new messages and
+-- conversation changes (status/assignee) show up live without a manual refresh.
+-- Realtime still respects each table's RLS policy for authenticated clients.
+ALTER PUBLICATION supabase_realtime ADD TABLE public.messages;
+ALTER PUBLICATION supabase_realtime ADD TABLE public.conversations;
