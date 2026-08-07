@@ -5,11 +5,25 @@ import {
   OutgoingMessagePayload,
 } from './types'
 
-// Mapeia o `type` que a uazapi manda numa mensagem recebida pro nosso MediaType. Os
-// tipos de envio (videoplay, myaudio, ptt, ptv — variações de comportamento visual) não
-// têm sentido pra uma mensagem recebida, mas mapeamos mesmo assim por segurança, caso a
-// própria uazapi ecoe o mesmo valor de volta em algum caso.
-const UAZAPI_MEDIA_TYPE_MAP: Record<string, MediaType> = {
+// A uazapi documenta um campo `type` simples (image/video/audio/document/sticker —
+// o mesmo vocabulário de POST /send/media), mas o payload REAL de uma mensagem de
+// mídia recebida (confirmado via POST /message/find contra uma imagem de teste
+// enviada de verdade) não traz esse campo de forma confiável — o que SEMPRE vem
+// preenchido é `messageType`, com os nomes de tipo cru do protocolo do WhatsApp
+// (ex: "ImageMessage"). Detectamos por `messageType` primeiro, com `type` como
+// fallback pra qualquer variação futura.
+const UAZAPI_MESSAGE_TYPE_MAP: Record<string, MediaType> = {
+  imagemessage: 'image',
+  videomessage: 'video',
+  ptvmessage: 'video',
+  audiomessage: 'audio',
+  pttmessage: 'audio',
+  documentmessage: 'document',
+  documentwithcaptionmessage: 'document',
+  stickermessage: 'sticker',
+}
+
+const UAZAPI_TYPE_MAP: Record<string, MediaType> = {
   image: 'image',
   video: 'video',
   videoplay: 'video',
@@ -60,16 +74,22 @@ export class UazapiWhatsAppProvider implements ICRMIntegrationProvider {
 
       const fromMe = message.fromMe === true
       const isGroup = message.isGroup === true
+      // Pra mídia, `message.content` é um objeto ({caption, mimetype, fileURL: "", ...}),
+      // não string — então esse `typeof === 'string'` já filtra isso corretamente e só
+      // pega legenda/texto quando é mesmo texto puro. A legenda de uma mídia às vezes
+      // vem em `message.content.caption` em vez de `message.text`, por isso o segundo fallback.
+      const contentObj = message.content && typeof message.content === 'object' ? (message.content as Record<string, unknown>) : undefined
       const text =
         typeof message.text === 'string'
           ? message.text
           : typeof message.content === 'string'
             ? message.content
-            : undefined
-      // Mensagens de mídia vêm com `type` igual a um dos valores de UAZAPI_MEDIA_TYPE_MAP
-      // (o mesmo vocabulário usado por POST /send/media) — texto normal vem como "text".
-      const rawType = typeof message.type === 'string' ? message.type : undefined
-      const mediaType = rawType ? UAZAPI_MEDIA_TYPE_MAP[rawType] : undefined
+            : typeof contentObj?.caption === 'string'
+              ? contentObj.caption
+              : undefined
+      const rawMessageType = typeof message.messageType === 'string' ? message.messageType.toLowerCase() : undefined
+      const rawType = typeof message.type === 'string' ? message.type.toLowerCase() : undefined
+      const mediaType = (rawMessageType && UAZAPI_MESSAGE_TYPE_MAP[rawMessageType]) || (rawType && UAZAPI_TYPE_MAP[rawType]) || undefined
       const chatId = typeof message.chatid === 'string' ? message.chatid : undefined
       // `sender` costuma vir no formato @lid (identificador de privacidade do WhatsApp,
       // não o telefone). `sender_pn` é a versão com o telefone real quando disponível —

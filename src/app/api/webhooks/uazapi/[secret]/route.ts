@@ -81,44 +81,52 @@ export async function POST(request: NextRequest, context: { params: Promise<{ se
     // Mensagens de mídia chegam sem a URL de verdade (só o messageId, em
     // providerMediaId) — precisamos de uma chamada autenticada extra pra resolver e
     // baixar o arquivo, e só esta rota tem o token decifrado da conexão pra isso.
+    // Qualquer que seja o motivo de não conseguir resolver (sem credenciais salvas,
+    // falha ao decifrar, download falhou, mirror falhou), o evento vira uma mensagem de
+    // texto com aviso — nunca fica com media_type sem media_url (que renderizaria uma
+    // imagem/vídeo quebrado na tela) nem se perde silenciosamente.
+    const unresolvedMediaPlaceholder = '[Mídia recebida, mas não foi possível baixar]'
     const hasMediaToResolve = eventsWithConnection.some((e) => e.providerMediaId)
-    if (hasMediaToResolve && connection.api_base_url && connection.encrypted_credentials) {
+
+    if (hasMediaToResolve) {
       let instanceToken: string | null = null
-      try {
-        instanceToken = decryptToken(connection.encrypted_credentials)
-      } catch {
-        instanceToken = null
+      if (connection.api_base_url && connection.encrypted_credentials) {
+        try {
+          instanceToken = decryptToken(connection.encrypted_credentials)
+        } catch {
+          instanceToken = null
+        }
       }
 
-      if (instanceToken) {
-        const token = instanceToken
-        const baseUrl = connection.api_base_url
-        eventsWithConnection = await Promise.all(
-          eventsWithConnection.map(async (event) => {
-            if (!event.providerMediaId) return event
+      const token = instanceToken
+      const baseUrl = connection.api_base_url
 
-            const downloaded = await downloadUazapiMedia(baseUrl, token, event.providerMediaId)
-            if (!downloaded) {
-              // Não conseguimos baixar — vira uma mensagem de texto com um aviso, em vez
-              // de perder o evento inteiro ou salvar um media_type sem media_url (que
-              // renderizaria uma imagem/vídeo quebrado na tela).
-              return { ...event, mediaType: undefined, content: event.content || '[Mídia recebida, mas não foi possível baixar]' }
-            }
+      eventsWithConnection = await Promise.all(
+        eventsWithConnection.map(async (event) => {
+          if (!event.providerMediaId) return event
 
-            const storedUrl = await mirrorMediaToStorage({
-              sourceUrl: downloaded.fileURL,
-              organizationId: connection.organization_id,
-              mimetypeHint: downloaded.mimetype,
-            })
+          if (!token || !baseUrl) {
+            return { ...event, mediaType: undefined, content: event.content || unresolvedMediaPlaceholder }
+          }
 
-            if (!storedUrl) {
-              return { ...event, mediaType: undefined, content: event.content || '[Mídia recebida, mas não foi possível baixar]' }
-            }
+          const downloaded = await downloadUazapiMedia(baseUrl, token, event.providerMediaId)
+          if (!downloaded) {
+            return { ...event, mediaType: undefined, content: event.content || unresolvedMediaPlaceholder }
+          }
 
-            return { ...event, mediaUrl: storedUrl }
+          const storedUrl = await mirrorMediaToStorage({
+            sourceUrl: downloaded.fileURL,
+            organizationId: connection.organization_id,
+            mimetypeHint: downloaded.mimetype,
           })
-        )
-      }
+
+          if (!storedUrl) {
+            return { ...event, mediaType: undefined, content: event.content || unresolvedMediaPlaceholder }
+          }
+
+          return { ...event, mediaUrl: storedUrl }
+        })
+      )
     }
 
     const processedCount = await processInboundEvents(admin, eventsWithConnection)
