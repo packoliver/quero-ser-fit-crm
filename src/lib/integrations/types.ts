@@ -53,6 +53,14 @@ export interface IncomingWebhookEvent {
   /** Display name for the conversationKey's contact — the group's name/subject, when known. */
   conversationName?: string
   isGroup?: boolean
+  /**
+   * Profile photo URL for the conversationKey's contact (the 1:1 contact's own picture,
+   * or the group's photo) — confirmed against uazapi's documented `Chat` schema
+   * (`image`/`imagePreview` fields), extracted here when the webhook's embedded `chat`
+   * object happens to include it. Free (no extra API call); absent when uazapi doesn't
+   * send it for that event.
+   */
+  conversationAvatarUrl?: string
 }
 
 /** A delivery/read status change for a message we already sent, identified by the externalId we got back from sendMessage. */

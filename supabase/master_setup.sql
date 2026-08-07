@@ -260,6 +260,20 @@ CREATE TABLE public.webhook_events (
     UNIQUE(provider, external_event_id)
 );
 
+-- 16. WhatsApp Profiles (cache) — name + photo of individual group participants, so the
+-- Inbox can render "who's who" next to each message bubble in a group conversation.
+-- Deliberately separate from `contacts`: a group member is someone else's WhatsApp
+-- contact, not necessarily a lead of this business.
+CREATE TABLE public.whatsapp_profiles (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    organization_id UUID NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE,
+    external_id TEXT NOT NULL,
+    name TEXT,
+    avatar_url TEXT,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (organization_id, external_id)
+);
+
 -- Helper Functions
 
 -- Auto-fills organization_id on INSERT when the client didn't supply it (every real
@@ -363,6 +377,7 @@ CREATE INDEX idx_tasks_assignee ON public.tasks(assigned_to_id);
 CREATE INDEX idx_deals_org ON public.deals(organization_id);
 CREATE INDEX idx_deals_contact ON public.deals(contact_id);
 CREATE INDEX idx_deals_stage ON public.deals(organization_id, stage);
+CREATE INDEX idx_whatsapp_profiles_org ON public.whatsapp_profiles(organization_id);
 CREATE INDEX idx_audit_logs_org ON public.audit_logs(organization_id);
 CREATE INDEX idx_webhook_events_provider_extid ON public.webhook_events(provider, external_event_id);
 CREATE UNIQUE INDEX idx_contact_channels_global_extid ON public.contact_channels (channel_type, external_id);
@@ -567,6 +582,7 @@ ALTER TABLE public.contact_tags ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.internal_notes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.tasks ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.deals ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.whatsapp_profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.audit_logs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.integration_connections ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.webhook_events ENABLE ROW LEVEL SECURITY;
@@ -618,6 +634,9 @@ CREATE POLICY "Tenant isolation for tasks" ON public.tasks
     FOR ALL USING (organization_id IN (SELECT public.get_user_org_ids()));
 
 CREATE POLICY "Tenant isolation for deals" ON public.deals
+    FOR ALL USING (organization_id IN (SELECT public.get_user_org_ids()));
+
+CREATE POLICY "Tenant isolation for whatsapp_profiles" ON public.whatsapp_profiles
     FOR ALL USING (organization_id IN (SELECT public.get_user_org_ids()));
 
 CREATE POLICY "Admins can select audit_logs" ON public.audit_logs

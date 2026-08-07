@@ -26,6 +26,9 @@ import {
   BellOff,
   Users,
   Camera,
+  Kanban,
+  DollarSign,
+  Plus,
 } from 'lucide-react'
 import { InstagramIcon as Instagram } from '@/components/icons/InstagramIcon'
 import { demoAttendants } from '@/lib/demo'
@@ -37,6 +40,7 @@ import { Modal } from '@/components/ui/Modal'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { createClient } from '@/lib/supabase/client'
 import { useDemoStorage } from '@/lib/demo/useDemoStorage'
+import { DealStage } from '@/types/database'
 
 type MediaType = 'image' | 'video' | 'audio' | 'document' | 'sticker'
 
@@ -58,14 +62,19 @@ interface UiMessage {
   status?: 'sent' | 'delivered' | 'read' | 'failed'
   mediaUrl?: string | null
   mediaType?: MediaType | null
+  /** Only meaningful for a contact message inside a group — that specific member's photo, when we have it cached. */
+  senderAvatarUrl?: string | null
 }
 
 interface UiConversation {
   id: string
   /** Only present in real (Supabase) mode — needed for the media upload path prefix. */
   organizationId?: string
+  /** Only present in real (Supabase) mode — needed to attach a Pedido (Funil) to this contact. */
+  contactId?: string
   contactName: string
   contactPhone: string
+  contactAvatarUrl?: string | null
   /** Only meaningful for whatsapp — a uazapi group thread rather than a 1:1 contact. */
   isGroup?: boolean
   channel: 'whatsapp' | 'instagram'
@@ -84,15 +93,33 @@ interface RealTeamMember {
   fullName: string
 }
 
+interface InlineDeal {
+  id: string
+  title: string
+  contact_id: string
+  stage: DealStage
+  value: number | null
+}
+
+// Mesmo conjunto de etapas do Funil (src/app/(dashboard)/funil/page.tsx) — duplicado
+// aqui de propósito: essa aba só precisa do rótulo e da cor de cada etapa pro widget
+// compacto "Pedido" da conversa, sem puxar o resto da página do Funil.
+const DEAL_STAGES: Array<{ key: DealStage; label: string; variant: 'slate' | 'amber' | 'emerald' | 'teal' | 'indigo' | 'rose' }> = [
+  { key: 'lead', label: 'Lead', variant: 'slate' },
+  { key: 'negociando', label: 'Negociando', variant: 'amber' },
+  { key: 'fechado', label: 'Fechado', variant: 'emerald' },
+  { key: 'entrega', label: 'Entrega', variant: 'teal' },
+  { key: 'posvenda', label: 'Pós-venda', variant: 'indigo' },
+  { key: 'perdido', label: 'Perdido', variant: 'rose' },
+]
+
 const formatTime = (iso: string) =>
   new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
 
-function InboxPageInner() {
+function InboxPageInner({ requestedConvId }: { requestedConvId: string | null }) {
   // Vem de links externos (ex: um card da aba Follow-up "Abrir conversa") — assim que a
   // lista real carrega, seleciona essa conversa automaticamente em vez de deixar o
   // usuário procurar ela na lista de novo.
-  const searchParams = useSearchParams()
-  const requestedConvId = searchParams.get('conversa')
   const appliedRequestedConvRef = useRef(false)
 
   const {
@@ -139,9 +166,18 @@ function InboxPageInner() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const cameraInputRef = useRef<HTMLInputElement>(null)
   const [newNoteText, setNewNoteText] = useState('')
-  const [activeTabRight, setActiveTabRight] = useState<'info' | 'notes'>('info')
+  const [activeTabRight, setActiveTabRight] = useState<'info' | 'notes' | 'pedido'>('info')
   const [transferModalOpen, setTransferModalOpen] = useState(false)
   const [targetAttendantId, setTargetAttendantId] = useState('att-2')
+
+  // Pedido (funil) inline na própria conversa — pra vendedora não precisar sair do
+  // Inbox pra separar "já vendeu, vai pra entrega" etc. Real-mode only: precisa de um
+  // contact_id de verdade pra anexar o pedido a alguém.
+  const [realDeals, setRealDeals] = useState<InlineDeal[]>([])
+  const [newDealTitle, setNewDealTitle] = useState('')
+  const [newDealStage, setNewDealStage] = useState<DealStage>('lead')
+  const [newDealValue, setNewDealValue] = useState('')
+  const [savingDeal, setSavingDeal] = useState(false)
 
   // Feedback State
   const [toastMessage, setToastMessage] = useState<string | null>(null)
@@ -179,14 +215,21 @@ function InboxPageInner() {
       } = await typed.auth.getUser()
       setCurrentUserRealId(user?.id || null)
 
-      const [convRes, msgRes, noteRes, membersRes] = await Promise.all([
+      const [convRes, msgRes, noteRes, membersRes, profilesRes, dealsRes] = await Promise.all([
         typed
           .from('conversations')
-          .select('id, organization_id, status, channel_type, current_assignee_id, last_message_at, contact_id, contacts(name, phone, is_group), profiles(full_name)')
+          .select('id, organization_id, status, channel_type, current_assignee_id, last_message_at, contact_id, contacts(name, phone, is_group, avatar_url), profiles(full_name)')
           .order!('last_message_at', { ascending: false }),
         typed.from('messages').select('id, conversation_id, sender_type, sender_id, content, media_url, media_type, status, metadata, created_at').order!('created_at', { ascending: true }),
         typed.from('internal_notes').select('id, conversation_id, content, created_at, author_id, profiles(full_name)').order!('created_at', { ascending: false }),
         typed.from('organization_members').select('user_id, profiles(full_name)').order!('created_at', { ascending: true }),
+        // Fotos de participantes de grupo (cacheadas pelo webhook em whatsapp_profiles) —
+        // ver comentário na migração 20260807070000_whatsapp_profiles.sql pro porquê disso
+        // não vive em `contacts`.
+        typed.from('whatsapp_profiles').select('external_id, name, avatar_url').order!('updated_at', { ascending: false }),
+        // Pedidos (Funil) — pra mostrar/gerenciar o pedido de um contato direto na aba
+        // "Pedido" do próprio Inbox, sem precisar abrir o Funil.
+        typed.from('deals').select('id, title, contact_id, stage, value').order!('created_at', { ascending: false }),
       ])
 
       const convData = (convRes.data || []) as Array<{
@@ -197,7 +240,7 @@ function InboxPageInner() {
         current_assignee_id: string | null
         last_message_at: string
         contact_id: string
-        contacts: { name: string | null; phone: string | null; is_group: boolean | null } | null
+        contacts: { name: string | null; phone: string | null; is_group: boolean | null; avatar_url: string | null } | null
         profiles: { full_name: string | null } | null
       }>
       const msgData = (msgRes.data || []) as Array<{
@@ -209,9 +252,11 @@ function InboxPageInner() {
         media_url: string | null
         media_type: MediaType | null
         status: 'sent' | 'delivered' | 'read' | 'failed' | null
-        metadata: { group_sender_name?: string | null } | null
+        metadata: { group_sender_name?: string | null; group_sender_id?: string | null } | null
         created_at: string
       }>
+      const profilesData = (profilesRes.data || []) as Array<{ external_id: string; name: string | null; avatar_url: string | null }>
+      const profileByExternalId = new Map(profilesData.map((p) => [p.external_id, p]))
       const noteData = (noteRes.data || []) as Array<{
         id: string
         conversation_id: string
@@ -225,6 +270,7 @@ function InboxPageInner() {
       }>
 
       setRealTeamMembers(membersData.map((m) => ({ id: m.user_id, fullName: m.profiles?.full_name || 'Membro' })))
+      setRealDeals((dealsRes.data || []) as InlineDeal[])
 
       const built: UiConversation[] = convData.map((conv) => {
         const msgs = msgData
@@ -248,6 +294,10 @@ function InboxPageInner() {
             status: m.status || undefined,
             mediaUrl: m.media_url,
             mediaType: m.media_type,
+            senderAvatarUrl:
+              m.sender_type === 'contact' && m.metadata?.group_sender_id
+                ? profileByExternalId.get(m.metadata.group_sender_id)?.avatar_url || null
+                : null,
           }))
 
         const notes = noteData
@@ -266,8 +316,10 @@ function InboxPageInner() {
         return {
           id: conv.id,
           organizationId: conv.organization_id,
+          contactId: conv.contact_id,
           contactName: conv.contacts?.name || 'Contato',
           contactPhone: conv.contacts?.phone || '-',
+          contactAvatarUrl: conv.contacts?.avatar_url || null,
           isGroup: !!conv.contacts?.is_group,
           channel: conv.channel_type,
           lastMessage: lastMsg ? lastMsg.content || mediaLabel(lastMsg.mediaType) : '(sem mensagens)',
@@ -621,6 +673,80 @@ function InboxPageInner() {
     showToast('Nota interna privada registrada.')
   }
 
+  // Cria um pedido (Funil) já anexado ao contato desta conversa — a vendedora não
+  // precisa sair do Inbox e ir até o Funil pra registrar "isso virou venda".
+  const handleCreateInlineDeal = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!selectedConversation?.contactId || !newDealTitle.trim()) return
+
+    setSavingDeal(true)
+    setErrorMessage(null)
+    try {
+      const supabase = createClient()
+      const parsedValue = newDealValue.trim() ? Number(newDealValue.replace(',', '.')) : null
+
+      const { data: created, error } = await (supabase as unknown as {
+        from: (t: string) => {
+          insert: (d: unknown) => {
+            select: (c: string) => { single: () => Promise<{ data: InlineDeal | null; error: { message: string } | null }> }
+          }
+        }
+      })
+        .from('deals')
+        .insert({
+          title: newDealTitle,
+          contact_id: selectedConversation.contactId,
+          stage: newDealStage,
+          value: parsedValue,
+          ...(newDealStage === 'fechado' ? { closed_at: new Date().toISOString() } : {}),
+        })
+        .select('id, title, contact_id, stage, value')
+        .single()
+
+      if (error || !created) {
+        setErrorMessage('Não foi possível criar o pedido no Supabase.')
+        return
+      }
+
+      setRealDeals((prev) => [created, ...prev])
+      setNewDealTitle('')
+      setNewDealValue('')
+      setNewDealStage('lead')
+      showToast('Pedido criado no Funil!')
+    } catch {
+      setErrorMessage('Erro ao criar o pedido.')
+    } finally {
+      setSavingDeal(false)
+    }
+  }
+
+  const handleMoveInlineDeal = async (dealId: string, stage: DealStage) => {
+    try {
+      const supabase = createClient()
+      const updates: Record<string, unknown> = { stage }
+      if (stage === 'fechado') updates.closed_at = new Date().toISOString()
+
+      const { error } = await (supabase as unknown as {
+        from: (t: string) => {
+          update: (d: unknown) => { eq: (col: string, val: string) => Promise<{ error: { message: string } | null }> }
+        }
+      })
+        .from('deals')
+        .update(updates)
+        .eq('id', dealId)
+
+      if (error) {
+        setErrorMessage('Não foi possível mover o pedido.')
+        return
+      }
+
+      setRealDeals((prev) => prev.map((d) => (d.id === dealId ? { ...d, stage } : d)))
+      showToast(`Pedido movido para "${DEAL_STAGES.find((s) => s.key === stage)?.label}"!`)
+    } catch {
+      setErrorMessage('Erro ao mover o pedido.')
+    }
+  }
+
   // Apply Queue, Channel, and Search Filters
   const filteredConversations = conversations.filter((c) => {
     const effectiveCurrentUserId = viewMode === 'real' ? currentUserRealId : currentUserId
@@ -825,7 +951,7 @@ function InboxPageInner() {
                       isSelected ? 'bg-slate-800/90 border-l-4 border-l-emerald-400' : 'hover:bg-slate-800/40'
                     }`}
                   >
-                    <Avatar name={conv.contactName} size="md" />
+                    <Avatar name={conv.contactName} src={conv.contactAvatarUrl} size="md" />
 
                     <div className="flex-1 min-w-0">
                       <div className="flex justify-between items-baseline mb-1">
@@ -872,7 +998,7 @@ function InboxPageInner() {
             {/* Thread Header */}
             <div className="p-3.5 border-b border-slate-800 bg-[#0f172a]/90 flex items-center justify-between gap-3 shrink-0">
               <div className="flex items-center gap-3 min-w-0">
-                <Avatar name={selectedConversation.contactName} size="md" />
+                <Avatar name={selectedConversation.contactName} src={selectedConversation.contactAvatarUrl} size="md" />
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
                     <h2 className="text-sm font-bold text-slate-100 truncate">{selectedConversation.contactName}</h2>
@@ -929,14 +1055,18 @@ function InboxPageInner() {
 
                 const isMe = msg.senderType === 'user'
                 const isFailed = msg.status === 'failed'
+                // Numa conversa de grupo, várias pessoas diferentes mandam mensagem —
+                // a fotinha ao lado (estilo WhatsApp) ajuda a equipe não se perder em
+                // quem é quem sem precisar reler o nome de cada mensagem.
+                const showGroupAvatar = selectedConversation.isGroup && msg.senderType === 'contact'
 
                 return (
                   <div
                     key={msg.id}
-                    className={`flex flex-col max-w-[80%] md:max-w-[70%] ${
-                      isMe ? 'ml-auto items-end' : 'mr-auto items-start'
-                    }`}
+                    className={`flex gap-2 max-w-[80%] md:max-w-[70%] ${isMe ? 'ml-auto flex-row-reverse' : 'mr-auto'}`}
                   >
+                    {showGroupAvatar && <Avatar name={msg.senderName} src={msg.senderAvatarUrl} size="sm" className="mt-4" />}
+                    <div className={`flex flex-col min-w-0 ${isMe ? 'items-end' : 'items-start'}`}>
                     <span className="text-[10px] text-slate-500 mb-1 px-1">{msg.senderName}</span>
                     <div
                       className={`p-3 rounded-2xl text-xs leading-relaxed ${
@@ -995,6 +1125,7 @@ function InboxPageInner() {
                         Falha ao enviar
                       </span>
                     )}
+                    </div>
                   </div>
                 )
               })}
@@ -1102,7 +1233,16 @@ function InboxPageInner() {
                 }`}
               >
                 <FileText className="w-3.5 h-3.5" />
-                <span>Notas Internas</span>
+                <span>Notas</span>
+              </button>
+              <button
+                onClick={() => setActiveTabRight('pedido')}
+                className={`flex-1 py-3 font-semibold flex items-center justify-center gap-1.5 border-b-2 transition ${
+                  activeTabRight === 'pedido' ? 'border-emerald-400 text-emerald-400 bg-slate-800/50' : 'text-slate-400'
+                }`}
+              >
+                <Kanban className="w-3.5 h-3.5" />
+                <span>Pedido</span>
               </button>
             </div>
 
@@ -1175,6 +1315,97 @@ function InboxPageInner() {
                 </form>
               </div>
             )}
+
+            {activeTabRight === 'pedido' && (
+              <div className="p-4 flex flex-col flex-1 text-xs overflow-y-auto space-y-4">
+                {viewMode !== 'real' || !selectedConversation.contactId ? (
+                  <p className="text-slate-500 text-center py-6 text-xs">
+                    Disponível no modo com dados reais.
+                  </p>
+                ) : (
+                  <>
+                    <div>
+                      <h3 className="text-slate-400 uppercase font-semibold text-[10px] tracking-wider mb-2">
+                        Pedidos deste cliente
+                      </h3>
+                      {realDeals.filter((d) => d.contact_id === selectedConversation.contactId).length === 0 ? (
+                        <p className="text-slate-500 text-xs bg-slate-900/80 border border-slate-800 rounded-xl p-3">
+                          Nenhum pedido ainda. Se essa conversa virou venda, separa aqui embaixo — sem precisar ir até o Funil.
+                        </p>
+                      ) : (
+                        <div className="space-y-2">
+                          {realDeals
+                            .filter((d) => d.contact_id === selectedConversation.contactId)
+                            .map((deal) => {
+                              const stageInfo = DEAL_STAGES.find((s) => s.key === deal.stage)
+                              return (
+                                <div key={deal.id} className="bg-slate-900/80 p-3 rounded-xl border border-slate-800 space-y-2">
+                                  <div className="flex items-start justify-between gap-2">
+                                    <span className="font-semibold text-slate-200 leading-snug">{deal.title}</span>
+                                    <Badge variant={stageInfo?.variant}>{stageInfo?.label}</Badge>
+                                  </div>
+                                  {deal.value != null && (
+                                    <span className="flex items-center gap-1 text-emerald-400 font-semibold text-[11px]">
+                                      <DollarSign className="w-3 h-3" />
+                                      {deal.value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                                    </span>
+                                  )}
+                                  <select
+                                    value={deal.stage}
+                                    onChange={(e) => void handleMoveInlineDeal(deal.id, e.target.value as DealStage)}
+                                    className="w-full bg-slate-950 border border-slate-800 text-slate-300 rounded-lg px-2 py-1.5 text-[11px] focus:outline-none focus:border-emerald-500"
+                                    aria-label="Mover pedido para outra etapa"
+                                  >
+                                    {DEAL_STAGES.map((s) => (
+                                      <option key={s.key} value={s.key}>
+                                        Mover: {s.label}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </div>
+                              )
+                            })}
+                        </div>
+                      )}
+                    </div>
+
+                    <form onSubmit={handleCreateInlineDeal} className="space-y-2 border-t border-slate-800 pt-3">
+                      <h3 className="text-slate-400 uppercase font-semibold text-[10px] tracking-wider">
+                        Novo pedido
+                      </h3>
+                      <input
+                        placeholder="Ex: Kit marmitas fit semanal"
+                        value={newDealTitle}
+                        onChange={(e) => setNewDealTitle(e.target.value)}
+                        className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-emerald-500 text-xs"
+                      />
+                      <input
+                        placeholder="Valor (R$) — opcional"
+                        inputMode="decimal"
+                        value={newDealValue}
+                        onChange={(e) => setNewDealValue(e.target.value)}
+                        className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-emerald-500 text-xs"
+                      />
+                      <select
+                        value={newDealStage}
+                        onChange={(e) => setNewDealStage(e.target.value as DealStage)}
+                        className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-slate-100 focus:outline-none focus:border-emerald-500 text-xs"
+                      >
+                        {DEAL_STAGES.map((s) => (
+                          <option key={s.key} value={s.key}>
+                            {s.label}
+                          </option>
+                        ))}
+                      </select>
+                      <Button type="submit" disabled={!newDealTitle.trim() || savingDeal} variant="primary" className="w-full">
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>{savingDeal ? 'Salvando...' : 'Criar Pedido'}</span>
+                      </Button>
+                    </form>
+                  </>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -1218,12 +1449,30 @@ function InboxPageInner() {
   )
 }
 
+// useSearchParams exige um Suspense boundary acima dele em builds estáticos — em vez de
+// envolver a página inteira (que ficaria presa atrás do fallback até isso resolver),
+// isolamos a leitura do parâmetro nesse componente minúsculo, que não renderiza nada
+// visível. O resto da página (InboxPageInner, com toda a UI de verdade) fica FORA do
+// Suspense e sempre monta imediatamente.
+function ConversaParamReader({ onParam }: { onParam: (id: string | null) => void }) {
+  const searchParams = useSearchParams()
+  useEffect(() => {
+    onParam(searchParams.get('conversa'))
+  }, [searchParams, onParam])
+  return null
+}
+
 export default function InboxPage() {
-  // useSearchParams (usado pra abrir uma conversa específica vinda de outra aba, ex:
-  // Follow-up) exige um Suspense boundary acima dele em builds estáticos.
+  // Vem de links externos (ex: um card da aba Follow-up "Abrir conversa") — assim que a
+  // lista real carrega, InboxPageInner seleciona essa conversa automaticamente.
+  const [requestedConvId, setRequestedConvId] = useState<string | null>(null)
+
   return (
-    <Suspense fallback={null}>
-      <InboxPageInner />
-    </Suspense>
+    <>
+      <Suspense fallback={null}>
+        <ConversaParamReader onParam={setRequestedConvId} />
+      </Suspense>
+      <InboxPageInner requestedConvId={requestedConvId} />
+    </>
   )
 }

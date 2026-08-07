@@ -135,16 +135,28 @@ export class UazapiWhatsAppProvider implements ICRMIntegrationProvider {
       // caírem na mesma conversa, e é o que persist-event.ts usa pra achar/reaproveitar
       // a conversa — não o `sender` sozinho.
       const conversationKey = chatId?.split('@')[0] || sender
-      // Nome do grupo: a uazapi não documenta esse campo com um exemplo real ainda —
-      // tentamos os nomes mais prováveis vindos do objeto `chat` que acompanha o
-      // payload; se nenhum bater, cai no fallback padrão (o próprio ID) em persist-event.ts.
+      // Nome do grupo — confirmado contra o schema `Chat` documentado da uazapi
+      // (docs.uazapi.com): `name` é o valor já resolvido pelo sistema (melhor fallback
+      // entre as fontes, maior chance de vir preenchido), `wa_name` é o nome de perfil do
+      // WhatsApp do grupo, `wa_contactName` só existe se o grupo estiver salvo na agenda.
+      // Se nenhum vier, cai no fallback padrão (o próprio ID) em persist-event.ts.
       const chatObj = body.chat && typeof body.chat === 'object' ? (body.chat as Record<string, unknown>) : undefined
       const groupName =
         isGroup && chatObj
-          ? ([chatObj.wa_name, chatObj.name, chatObj.wa_contactName, chatObj.groupSubject].find(
+          ? ([chatObj.name, chatObj.wa_name, chatObj.wa_contactName].find(
               (v): v is string => typeof v === 'string' && v.length > 0
             ) ?? undefined)
           : undefined
+      // Foto do chat (contato 1:1 ou grupo) — também confirmada no schema `Chat`:
+      // `image` é a URL em resolução original, `imagePreview` a miniatura. Só está
+      // presente quando a uazapi já resolveu isso pro payload do webhook; quando não
+      // vem, fica undefined e simplesmente não temos foto ainda (não é um erro).
+      const conversationAvatarUrl =
+        chatObj && typeof chatObj.image === 'string' && chatObj.image
+          ? chatObj.image
+          : chatObj && typeof chatObj.imagePreview === 'string' && chatObj.imagePreview
+            ? chatObj.imagePreview
+            : undefined
 
       // O nome da instância (`instanceName`) não é um identificador estável o bastante
       // pra rotear com segurança — a rota do webhook (que já sabe qual conexão é essa
@@ -171,6 +183,7 @@ export class UazapiWhatsAppProvider implements ICRMIntegrationProvider {
           conversationKey,
           conversationName: isGroup ? groupName : senderName,
           isGroup,
+          conversationAvatarUrl,
         },
       ]
     } catch (err) {
@@ -255,6 +268,40 @@ export class UazapiWhatsAppProvider implements ICRMIntegrationProvider {
     } catch (err) {
       return { success: false, error: err instanceof Error ? err.message : 'Erro de rede ao enviar mensagem via uazapi.' }
     }
+  }
+}
+
+/**
+ * Busca nome + foto de perfil de um número específico via POST /chat/details —
+ * documentado (schema `Chat`) como o jeito de obter `image`/`imagePreview` pra um
+ * contato ou grupo. Usado pelo webhook pra resolver a fotinha de cada participante
+ * dentro de uma conversa de grupo (o payload da própria mensagem não traz isso — só
+ * `senderName`, sem foto — conferido contra o schema `Message` da uazapi). Retorna null
+ * em qualquer falha; quem chama decide o que fazer (normalmente: seguir sem foto).
+ */
+export async function fetchUazapiChatDetails(
+  apiBaseUrl: string,
+  instanceToken: string,
+  number: string
+): Promise<{ name: string | null; avatarUrl: string | null } | null> {
+  try {
+    const base = apiBaseUrl.replace(/\/$/, '')
+    const res = await fetch(`${base}/chat/details`, {
+      method: 'POST',
+      headers: { token: instanceToken, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ number, preview: true }),
+    })
+    const body = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      console.error('fetchUazapiChatDetails: falha ao buscar detalhes do chat:', body?.error || res.status)
+      return null
+    }
+    const name = typeof body?.name === 'string' && body.name ? body.name : typeof body?.wa_name === 'string' ? body.wa_name : null
+    const avatarUrl = typeof body?.image === 'string' && body.image ? body.image : typeof body?.imagePreview === 'string' ? body.imagePreview : null
+    return { name, avatarUrl }
+  } catch (err) {
+    console.error('fetchUazapiChatDetails: erro de rede:', err)
+    return null
   }
 }
 

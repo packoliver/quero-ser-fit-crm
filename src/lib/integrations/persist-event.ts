@@ -90,6 +90,7 @@ export async function persistInboundEvent(
         phone: channelType === 'whatsapp' ? contactExternalId : null,
         status: 'active',
         is_group: !!event.isGroup,
+        avatar_url: event.conversationAvatarUrl || null,
       })
       .select('id')
       .single()
@@ -108,6 +109,12 @@ export async function persistInboundEvent(
       })
       .select('contact_id')
       .single()
+  } else if (event.conversationAvatarUrl) {
+    // Best-effort refresh — a contact's WhatsApp photo can change, and the very first
+    // message that created this contact might have arrived before uazapi had resolved
+    // a photo yet. Never overwrites a known photo with nothing; only writes when this
+    // event actually carries one.
+    await db.from('contacts').update({ avatar_url: event.conversationAvatarUrl }).eq('id', contactId)
   }
 
   // 2. Find or reuse this contact's conversation. Matched by contact_id ALONE — NOT also

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { UazapiWhatsAppProvider, downloadUazapiMedia } from '@/lib/integrations/uazapi-whatsapp'
+import { UazapiWhatsAppProvider, downloadUazapiMedia, fetchUazapiChatDetails } from '@/lib/integrations/uazapi-whatsapp'
 import { processInboundEvents, applyStatusUpdates } from '@/lib/integrations/persist-event'
 import { mirrorMediaToStorage } from '@/lib/integrations/media'
 import { createAdminClient } from '@/lib/supabase/admin'
@@ -132,6 +132,68 @@ export async function POST(request: NextRequest, context: { params: Promise<{ se
 
     const processedCount = await processInboundEvents(admin, eventsWithConnection)
     const statusUpdateCount = await applyStatusUpdates(admin, statusUpdates)
+
+    // Fotos + nomes de participantes de grupo — best-effort, nunca deve derrubar a
+    // resposta do webhook. O payload da mensagem em si não traz foto (só senderName),
+    // então isso é uma chamada extra por remetente novo/desatualizado, cacheada em
+    // whatsapp_profiles por até 24h pra não bater na API da uazapi a cada mensagem.
+    try {
+      const groupSenderIds = Array.from(
+        new Set(eventsWithConnection.filter((e) => e.isGroup && e.senderId).map((e) => e.senderId))
+      )
+
+      if (groupSenderIds.length > 0 && connection.api_base_url && connection.encrypted_credentials) {
+        const profileToken = decryptToken(connection.encrypted_credentials)
+        const ONE_DAY_MS = 24 * 60 * 60 * 1000
+
+        const { data: cached } = await (admin as unknown as {
+          from: (t: string) => {
+            select: (c: string) => {
+              eq: (
+                c: string,
+                v: string
+              ) => { in: (c: string, v: string[]) => Promise<{ data: Array<{ external_id: string; updated_at: string }> | null }> }
+            }
+          }
+        })
+          .from('whatsapp_profiles')
+          .select('external_id, updated_at')
+          .eq('organization_id', connection.organization_id)
+          .in('external_id', groupSenderIds)
+
+        const freshIds = new Set(
+          (cached || [])
+            .filter((row) => Date.now() - new Date(row.updated_at).getTime() < ONE_DAY_MS)
+            .map((row) => row.external_id)
+        )
+        const staleOrMissingIds = groupSenderIds.filter((id) => !freshIds.has(id))
+
+        await Promise.all(
+          staleOrMissingIds.map(async (senderId) => {
+            const details = await fetchUazapiChatDetails(connection.api_base_url as string, profileToken, senderId)
+            if (!details || (!details.name && !details.avatarUrl)) return
+
+            await (admin as unknown as {
+              from: (t: string) => { upsert: (d: unknown, o: { onConflict: string }) => Promise<{ error: unknown }> }
+            })
+              .from('whatsapp_profiles')
+              .upsert(
+                {
+                  organization_id: connection.organization_id,
+                  external_id: senderId,
+                  name: details.name,
+                  avatar_url: details.avatarUrl,
+                  updated_at: new Date().toISOString(),
+                },
+                { onConflict: 'organization_id,external_id' }
+              )
+          })
+        )
+      }
+    } catch {
+      // Não deixa uma falha aqui (rede, decrypt, schema) derrubar o processamento das
+      // mensagens em si — foto de participante de grupo é um extra, não o essencial.
+    }
 
     return NextResponse.json({ status: 'success', processed: processedCount, statusUpdates: statusUpdateCount }, { status: 200 })
   } catch {
