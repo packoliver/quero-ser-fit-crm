@@ -22,6 +22,7 @@ const PAGE_SIZE = 25
 const ACTION_META: Record<string, { label: string; icon: typeof Info; variant: 'emerald' | 'teal' | 'rose' | 'indigo' }> = {
   member_created: { label: 'Membro cadastrado', icon: UserPlus, variant: 'emerald' },
   member_role_changed: { label: 'Cargo alterado', icon: ShieldCheck, variant: 'teal' },
+  member_removed: { label: 'Membro removido', icon: Trash2, variant: 'rose' },
   integration_connection_created: { label: 'Conexão criada', icon: Share2, variant: 'indigo' },
   integration_connection_deleted: { label: 'Conexão removida', icon: Trash2, variant: 'rose' },
 }
@@ -33,6 +34,8 @@ function describeDetails(action: string, details: Record<string, unknown> | null
       return `${details.fullName || ''} (${details.email || ''}) — cargo: ${details.role || '-'}`
     case 'member_role_changed':
       return `${details.from_role || '?'} → ${details.to_role || '?'}`
+    case 'member_removed':
+      return `Cargo removido: ${details.removed_role || '?'}`
     case 'integration_connection_created':
       return `${details.label || ''} (${details.connectionMethod || details.provider || ''})${details.verified === false ? ' — não verificada na hora' : ''}`
     default:

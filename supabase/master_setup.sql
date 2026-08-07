@@ -538,6 +538,68 @@ BEGIN
 END;
 $$;
 
+-- Removes a member from the organization, with the same "can't touch the last active
+-- admin" protection update_member_role_safe applies to role changes — a raw client-side
+-- DELETE (which RLS alone would otherwise permit for any admin) has no such guard.
+CREATE OR REPLACE FUNCTION public.remove_member_safe(
+    p_org_id UUID,
+    p_target_user_id UUID
+)
+RETURNS BOOLEAN
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+    v_caller_id UUID;
+    v_is_caller_admin BOOLEAN;
+    v_target_role TEXT;
+    v_active_admins_count INT;
+BEGIN
+    v_caller_id := auth.uid();
+    IF v_caller_id IS NULL THEN
+        RAISE EXCEPTION 'USUÁRIO NÃO AUTENTICADO.';
+    END IF;
+
+    SELECT public.is_org_admin(p_org_id) INTO v_is_caller_admin;
+    IF NOT v_is_caller_admin THEN
+        RAISE EXCEPTION 'SOMENTE ADMINISTRADORES PODEM REMOVER MEMBROS DA EQUIPE.';
+    END IF;
+
+    SELECT role INTO v_target_role
+    FROM public.organization_members
+    WHERE organization_id = p_org_id AND user_id = p_target_user_id;
+
+    IF v_target_role IS NULL THEN
+        RAISE EXCEPTION 'MEMBRO NÃO ENCONTRADO NA ORGANIZAÇÃO ESPECIFICADA.';
+    END IF;
+
+    IF v_target_role = 'admin' THEN
+        SELECT COUNT(*) INTO v_active_admins_count
+        FROM public.organization_members
+        WHERE organization_id = p_org_id AND role = 'admin';
+
+        IF v_active_admins_count <= 1 THEN
+            RAISE EXCEPTION 'NÃO É PERMITIDO REMOVER O ÚLTIMO ADMINISTRADOR ATIVO DA ORGANIZAÇÃO.';
+        END IF;
+    END IF;
+
+    DELETE FROM public.organization_members
+    WHERE organization_id = p_org_id AND user_id = p_target_user_id;
+
+    INSERT INTO public.audit_logs (organization_id, actor_id, action, target_type, target_id, details)
+    VALUES (
+        p_org_id,
+        v_caller_id,
+        'member_removed',
+        'organization_member',
+        p_target_user_id,
+        jsonb_build_object('removed_role', v_target_role)
+    );
+
+    RETURN TRUE;
+END;
+$$;
+
 -- Auto-fill triggers (organization_id / author_id) for tables real pages insert into
 -- directly from the browser.
 CREATE TRIGGER trg_autofill_org_contacts
@@ -677,6 +739,7 @@ REVOKE EXECUTE ON FUNCTION public.normalize_phone(text) FROM PUBLIC, anon;
 REVOKE EXECUTE ON FUNCTION public.assume_conversation_atomic(UUID) FROM PUBLIC, anon;
 REVOKE EXECUTE ON FUNCTION public.transfer_conversation_atomic(UUID, UUID) FROM PUBLIC, anon;
 REVOKE EXECUTE ON FUNCTION public.update_member_role_safe(UUID, UUID, TEXT) FROM PUBLIC, anon;
+REVOKE EXECUTE ON FUNCTION public.remove_member_safe(UUID, UUID) FROM PUBLIC, anon;
 
 GRANT EXECUTE ON FUNCTION public.get_user_org_ids() TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.is_org_admin(UUID) TO authenticated, service_role;
@@ -684,6 +747,7 @@ GRANT EXECUTE ON FUNCTION public.normalize_phone(text) TO authenticated, service
 GRANT EXECUTE ON FUNCTION public.assume_conversation_atomic(UUID) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.transfer_conversation_atomic(UUID, UUID) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.update_member_role_safe(UUID, UUID, TEXT) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.remove_member_safe(UUID, UUID) TO authenticated, service_role;
 
 -- Views
 CREATE OR REPLACE VIEW public.integration_connections_public AS

@@ -61,7 +61,7 @@ export default function EquipeConfigPage() {
   const [inviteModalOpen, setInviteModalOpen] = useState(false)
   const [deleteModalOpen, setDeleteModalOpen] = useState(false)
   const [permissionsModalOpen, setPermissionsModalOpen] = useState(false)
-  const [deletingMember, setDeletingMember] = useState<DemoTeamMember | null>(null)
+  const [deletingMember, setDeletingMember] = useState<RealMember | DemoTeamMember | null>(null)
   const [selectedMemberForPerms, setSelectedMemberForPerms] = useState<RealMember | DemoTeamMember | null>(null)
   const [editingPermissions, setEditingPermissions] = useState<CustomPermissions>({})
 
@@ -127,6 +127,16 @@ export default function EquipeConfigPage() {
 
   // Count active admins in Demo mode for visual safeguard
   const activeAdminCount = storedDemoMembers.filter((m) => m.role === 'admin' && m.status === 'active').length
+  // Same idea for real mode — purely a UI hint (disables the button pre-emptively); the
+  // actual protection lives server-side in remove_member_safe regardless.
+  const activeRealAdminCount = realMembers.filter((m) => m.role === 'admin').length
+
+  const isRealMember = (member: RealMember | DemoTeamMember): member is RealMember => 'user_id' in member
+
+  const getMemberName = (member: RealMember | DemoTeamMember): string =>
+    isRealMember(member) ? member.profiles?.full_name || 'Usuário Sem Nome' : member.fullName
+  const getMemberEmail = (member: RealMember | DemoTeamMember): string =>
+    isRealMember(member) ? member.profiles?.email || 'N/A' : member.email
 
   // Cycle Role: attendant -> manager -> admin -> attendant
   const getNextRole = (currentRole: UserRole): UserRole => {
@@ -176,10 +186,42 @@ export default function EquipeConfigPage() {
     showToast(`Status de ${updated.fullName} alterado para ${updated.status === 'active' ? 'Ativo' : 'Inativo'}.`)
   }
 
-  // Delete Member Demo
-  const handleDeleteMemberConfirm = () => {
+  // Remove Member — real mode goes through remove_member_safe (same last-active-admin
+  // protection update_member_role_safe applies to role changes, since a raw client-side
+  // DELETE would otherwise be allowed by RLS alone with no such guard); demo mode keeps
+  // its existing localStorage-only behavior.
+  const handleDeleteMemberConfirm = async () => {
     if (!deletingMember) return
     setError(null)
+
+    if (isRealMember(deletingMember)) {
+      try {
+        const supabase = createClient()
+        const { error: rpcError } = await (supabase as unknown as {
+          rpc: (fn: string, p: { p_org_id: string; p_target_user_id: string }) => Promise<{ error: { message: string } | null }>
+        }).rpc('remove_member_safe', {
+          p_org_id: deletingMember.organization_id,
+          p_target_user_id: deletingMember.user_id,
+        })
+
+        if (rpcError) {
+          setError(
+            rpcError.message.includes('ÚLTIMO ADMINISTRADOR')
+              ? 'Operação negada: Não é possível remover o único administrador ativo da organização.'
+              : rpcError.message || 'Falha ao remover o membro no Supabase.'
+          )
+          setDeleteModalOpen(false)
+          return
+        }
+
+        showToast(`Membro ${getMemberName(deletingMember)} removido da equipe.`)
+        fetchRealMembers()
+      } catch {
+        setError('Erro ao remover o membro no Supabase.')
+      }
+      setDeleteModalOpen(false)
+      return
+    }
 
     if (deletingMember.role === 'admin' && deletingMember.status === 'active' && activeAdminCount <= 1) {
       setError('Operação negada: Não é possível excluir o único administrador ativo do sistema.')
@@ -474,7 +516,10 @@ export default function EquipeConfigPage() {
               </thead>
               <tbody className="divide-y divide-slate-800 text-slate-200">
                 {viewMode === 'real'
-                  ? realMembers.map((member) => (
+                  ? realMembers.map((member) => {
+                      const isSoleRealAdmin = member.role === 'admin' && activeRealAdminCount <= 1
+
+                      return (
                       <tr key={member.user_id} className="hover:bg-slate-800/40 transition">
                         <td className="py-3.5 px-4 font-semibold text-slate-100">
                           {member.profiles?.full_name || 'Usuário Sem Nome'}
@@ -498,9 +543,19 @@ export default function EquipeConfigPage() {
                         <td className="py-3.5 px-4 text-emerald-400 font-medium">Ativo</td>
                         <td className="py-3.5 px-4 text-right">
                           <div className="flex items-center justify-end gap-1.5">
-                            <Button variant="secondary" size="sm" onClick={() => toggleRoleReal(member)}>
-                              Alternar Cargo
-                            </Button>
+                            {isSoleRealAdmin ? (
+                              <span
+                                title="Não é possível alterar ou remover o único administrador ativo da organização."
+                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-800 text-slate-500 text-[11px] cursor-not-allowed"
+                              >
+                                <Lock className="w-3 h-3 text-amber-500" />
+                                <span>Único Admin (Protegido)</span>
+                              </span>
+                            ) : (
+                              <Button variant="secondary" size="sm" onClick={() => toggleRoleReal(member)}>
+                                Alternar Cargo
+                              </Button>
+                            )}
 
                             <button
                               type="button"
@@ -511,10 +566,22 @@ export default function EquipeConfigPage() {
                               <SlidersHorizontal className="w-3.5 h-3.5 text-emerald-400" />
                               <span>Permissões</span>
                             </button>
+
+                            {!isSoleRealAdmin && (
+                              <button
+                                type="button"
+                                onClick={() => { setDeletingMember(member); setDeleteModalOpen(true) }}
+                                className="p-1.5 rounded-lg bg-slate-900 hover:bg-rose-950/60 border border-slate-700 hover:border-rose-800 text-slate-400 hover:text-rose-400 transition"
+                                title="Remover membro da equipe"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
                           </div>
                         </td>
                       </tr>
-                    ))
+                      )
+                    })
                   : storedDemoMembers.map((member) => {
                       const isSoleAdmin = member.role === 'admin' && member.status === 'active' && activeAdminCount <= 1
 
@@ -911,7 +978,8 @@ export default function EquipeConfigPage() {
         <div className="space-y-4 text-xs">
           <p className="text-slate-300 leading-relaxed">
             Tem certeza que deseja remover o membro{' '}
-            <strong className="text-slate-100">{deletingMember?.fullName}</strong> ({deletingMember?.email})?
+            <strong className="text-slate-100">{deletingMember ? getMemberName(deletingMember) : ''}</strong> (
+            {deletingMember ? getMemberEmail(deletingMember) : ''})?
           </p>
           <p className="text-rose-400 bg-rose-950/40 border border-rose-800/40 p-3 rounded-xl">
             Atenção: Esta ação revogará os acessos e removerá o cadastro do membro na equipe.
@@ -923,7 +991,7 @@ export default function EquipeConfigPage() {
             </Button>
             <button
               type="button"
-              onClick={handleDeleteMemberConfirm}
+              onClick={() => void handleDeleteMemberConfirm()}
               className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white font-semibold rounded-xl text-xs transition"
             >
               Sim, Remover Membro
