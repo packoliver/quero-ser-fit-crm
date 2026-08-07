@@ -23,6 +23,8 @@ import {
   CheckCheck,
   Bell,
   BellOff,
+  Users,
+  Camera,
 } from 'lucide-react'
 import { InstagramIcon as Instagram } from '@/components/icons/InstagramIcon'
 import { demoAttendants } from '@/lib/demo'
@@ -63,6 +65,8 @@ interface UiConversation {
   organizationId?: string
   contactName: string
   contactPhone: string
+  /** Only meaningful for whatsapp — a uazapi group thread rather than a 1:1 contact. */
+  isGroup?: boolean
   channel: 'whatsapp' | 'instagram'
   lastMessage: string
   lastMessageTime: string
@@ -125,6 +129,7 @@ export default function InboxPage() {
   const [isSendingMessage, setIsSendingMessage] = useState(false)
   const [uploadingMedia, setUploadingMedia] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const cameraInputRef = useRef<HTMLInputElement>(null)
   const [newNoteText, setNewNoteText] = useState('')
   const [activeTabRight, setActiveTabRight] = useState<'info' | 'notes'>('info')
   const [transferModalOpen, setTransferModalOpen] = useState(false)
@@ -169,9 +174,9 @@ export default function InboxPage() {
       const [convRes, msgRes, noteRes, membersRes] = await Promise.all([
         typed
           .from('conversations')
-          .select('id, organization_id, status, channel_type, current_assignee_id, last_message_at, contact_id, contacts(name, phone), profiles(full_name)')
+          .select('id, organization_id, status, channel_type, current_assignee_id, last_message_at, contact_id, contacts(name, phone, is_group), profiles(full_name)')
           .order!('last_message_at', { ascending: false }),
-        typed.from('messages').select('id, conversation_id, sender_type, sender_id, content, media_url, media_type, status, created_at').order!('created_at', { ascending: true }),
+        typed.from('messages').select('id, conversation_id, sender_type, sender_id, content, media_url, media_type, status, metadata, created_at').order!('created_at', { ascending: true }),
         typed.from('internal_notes').select('id, conversation_id, content, created_at, author_id, profiles(full_name)').order!('created_at', { ascending: false }),
         typed.from('organization_members').select('user_id, profiles(full_name)').order!('created_at', { ascending: true }),
       ])
@@ -184,7 +189,7 @@ export default function InboxPage() {
         current_assignee_id: string | null
         last_message_at: string
         contact_id: string
-        contacts: { name: string | null; phone: string | null } | null
+        contacts: { name: string | null; phone: string | null; is_group: boolean | null } | null
         profiles: { full_name: string | null } | null
       }>
       const msgData = (msgRes.data || []) as Array<{
@@ -196,6 +201,7 @@ export default function InboxPage() {
         media_url: string | null
         media_type: MediaType | null
         status: 'sent' | 'delivered' | 'read' | 'failed' | null
+        metadata: { group_sender_name?: string | null } | null
         created_at: string
       }>
       const noteData = (noteRes.data || []) as Array<{
@@ -220,7 +226,10 @@ export default function InboxPage() {
             senderType: m.sender_type,
             senderName:
               m.sender_type === 'contact'
-                ? conv.contacts?.name || 'Cliente'
+                // Numa conversa de grupo, quem "fala" varia mensagem a mensagem — o
+                // nome do membro específico (guardado em metadata na hora de receber)
+                // tem prioridade sobre o nome do contato (que aqui é o nome do grupo).
+                ? m.metadata?.group_sender_name || conv.contacts?.name || 'Cliente'
                 : m.sender_type === 'system'
                 ? 'Sistema'
                 : m.sender_id === user?.id
@@ -251,6 +260,7 @@ export default function InboxPage() {
           organizationId: conv.organization_id,
           contactName: conv.contacts?.name || 'Contato',
           contactPhone: conv.contacts?.phone || '-',
+          isGroup: !!conv.contacts?.is_group,
           channel: conv.channel_type,
           lastMessage: lastMsg ? lastMsg.content || mediaLabel(lastMsg.mediaType) : '(sem mensagens)',
           lastMessageTime: lastMsg?.time || formatTime(conv.last_message_at),
@@ -487,10 +497,11 @@ export default function InboxPage() {
   // Handle attaching a file — uploads straight from the browser to Supabase Storage
   // (respecting the org-scoped RLS policy on the chat-media bucket, not going through
   // our own API routes, since a large video could blow past a serverless function's
-  // request body limit), then sends the message with the resulting public URL.
+  // request body limit), then sends the message with the resulting public URL. Shared
+  // by both the paperclip (any file) and the camera (photo capture) inputs.
   const handleFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
-    if (fileInputRef.current) fileInputRef.current.value = ''
+    e.target.value = ''
     if (!file || !selectedConversation || viewMode !== 'real' || !selectedConversation.organizationId) return
 
     if (file.size > MAX_MEDIA_SIZE_BYTES) {
@@ -820,6 +831,11 @@ export default function InboxPage() {
                             Instagram
                           </Badge>
                         )}
+                        {conv.isGroup && (
+                          <Badge variant="indigo" icon={<Users className="w-3 h-3" />}>
+                            Grupo
+                          </Badge>
+                        )}
 
                         {!conv.currentAssigneeId || conv.status === 'open' ? (
                           <Badge variant="amber">Fila de Espera</Badge>
@@ -850,6 +866,11 @@ export default function InboxPage() {
                     <Badge variant={selectedConversation.channel === 'whatsapp' ? 'emerald' : 'pink'}>
                       {selectedConversation.channel === 'whatsapp' ? 'WhatsApp' : 'Instagram Direct'}
                     </Badge>
+                    {selectedConversation.isGroup && (
+                      <Badge variant="indigo" icon={<Users className="w-3 h-3" />}>
+                        Grupo
+                      </Badge>
+                    )}
                   </div>
                   <p className="text-xs text-slate-400">{selectedConversation.contactPhone}</p>
                 </div>
@@ -999,6 +1020,27 @@ export default function InboxPage() {
                       className="p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-slate-400 hover:text-emerald-400 hover:border-emerald-700 transition disabled:opacity-50 shrink-0"
                     >
                       {uploadingMedia ? <Loader2 className="w-4 h-4 animate-spin" /> : <Paperclip className="w-4 h-4" />}
+                    </button>
+
+                    {/* `capture` abre a câmera do celular direto (em vez do seletor de
+                        arquivos) — em desktop sem câmera, cai de volta pro seletor normal. */}
+                    <input
+                      ref={cameraInputRef}
+                      type="file"
+                      className="hidden"
+                      accept="image/*"
+                      capture="environment"
+                      onChange={handleFileSelected}
+                      disabled={uploadingMedia || isSendingMessage}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => cameraInputRef.current?.click()}
+                      disabled={uploadingMedia || isSendingMessage}
+                      title="Tirar foto"
+                      className="p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-slate-400 hover:text-emerald-400 hover:border-emerald-700 transition disabled:opacity-50 shrink-0"
+                    >
+                      <Camera className="w-4 h-4" />
                     </button>
                   </>
                 )}

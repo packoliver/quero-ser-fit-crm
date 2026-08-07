@@ -22,7 +22,10 @@ export interface IncomingWebhookEvent {
   provider: 'whatsapp_meta' | 'instagram_meta' | 'whatsapp_uazapi'
   externalEventId: string
   eventType: string
+  /** Who actually sent THIS message — for a group, one specific member; for a 1:1 chat, the contact themself. */
   senderId: string
+  /** Display name of whoever sent this specific message, when the provider gives one (e.g. a group member's name). */
+  senderName?: string
   recipientId: string
   content: string
   timestamp: string
@@ -38,6 +41,18 @@ export interface IncomingWebhookEvent {
    * whatever ID that follow-up call needs (a message id for uazapi, a media id for Meta).
    */
   providerMediaId?: string
+  /**
+   * Stable identity of the THREAD this message belongs to — the contact's own id for a
+   * 1:1 chat, or the group's id for a group message. This is what contacts/conversations
+   * get matched and reused by; it's deliberately separate from `senderId` because in a
+   * group, many different senderIds share the same conversationKey. Falls back to
+   * senderId when omitted (the right behavior for 1:1-only providers like Meta/Instagram,
+   * where every message's sender IS the conversation).
+   */
+  conversationKey?: string
+  /** Display name for the conversationKey's contact — the group's name/subject, when known. */
+  conversationName?: string
+  isGroup?: boolean
 }
 
 /** A delivery/read status change for a message we already sent, identified by the externalId we got back from sendMessage. */

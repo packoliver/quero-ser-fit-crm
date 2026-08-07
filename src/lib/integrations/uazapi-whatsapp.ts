@@ -121,12 +121,30 @@ export class UazapiWhatsAppProvider implements ICRMIntegrationProvider {
             ? message.sender
             : chatId
       const sender = senderRaw?.split('@')[0]
+      const senderName = typeof message.senderName === 'string' && message.senderName ? message.senderName : undefined
       const timestampMs = typeof message.messageTimestamp === 'number' ? message.messageTimestamp : undefined
 
-      // Grupos ficam fora de escopo por enquanto (o CRM modela conversas 1:1 com contatos).
       // Uma mensagem é válida se tiver texto OU for de um tipo de mídia reconhecido —
       // uma imagem sem legenda, por exemplo, não tem `text`, mas ainda é uma mensagem real.
-      if (fromMe || isGroup || !sender || (!text && !mediaType)) return []
+      if (fromMe || !sender || (!text && !mediaType)) return []
+
+      // `chatid` é a identidade ESTÁVEL da conversa — pra um chat 1:1 é o próprio
+      // contato (igual a `sender`, só que sempre presente mesmo quando sender/sender_pn
+      // variam entre mensagens), e pra um grupo é o grupo inteiro, o mesmo pra todo
+      // membro que mandar mensagem nele. É isso que faz todas as mensagens de um grupo
+      // caírem na mesma conversa, e é o que persist-event.ts usa pra achar/reaproveitar
+      // a conversa — não o `sender` sozinho.
+      const conversationKey = chatId?.split('@')[0] || sender
+      // Nome do grupo: a uazapi não documenta esse campo com um exemplo real ainda —
+      // tentamos os nomes mais prováveis vindos do objeto `chat` que acompanha o
+      // payload; se nenhum bater, cai no fallback padrão (o próprio ID) em persist-event.ts.
+      const chatObj = body.chat && typeof body.chat === 'object' ? (body.chat as Record<string, unknown>) : undefined
+      const groupName =
+        isGroup && chatObj
+          ? ([chatObj.wa_name, chatObj.name, chatObj.wa_contactName, chatObj.groupSubject].find(
+              (v): v is string => typeof v === 'string' && v.length > 0
+            ) ?? undefined)
+          : undefined
 
       // O nome da instância (`instanceName`) não é um identificador estável o bastante
       // pra rotear com segurança — a rota do webhook (que já sabe qual conexão é essa
@@ -140,6 +158,7 @@ export class UazapiWhatsAppProvider implements ICRMIntegrationProvider {
           externalEventId: messageId || `uazapi_msg_${Date.now()}`,
           eventType: 'message',
           senderId: sender,
+          senderName,
           recipientId: instanceName,
           content: text || '',
           timestamp: timestampMs ? new Date(timestampMs).toISOString() : new Date().toISOString(),
@@ -149,6 +168,9 @@ export class UazapiWhatsAppProvider implements ICRMIntegrationProvider {
           // /message/download) — a rota do webhook resolve isso usando o messageId aqui
           // antes de persistir, porque só ela tem o token decifrado da conexão.
           providerMediaId: mediaType ? messageId : undefined,
+          conversationKey,
+          conversationName: isGroup ? groupName : senderName,
+          isGroup,
         },
       ]
     } catch (err) {

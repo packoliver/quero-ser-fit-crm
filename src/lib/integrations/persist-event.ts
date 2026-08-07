@@ -63,12 +63,20 @@ export async function persistInboundEvent(
 
   const channelType = event.provider === 'instagram_meta' ? 'instagram' : 'whatsapp'
 
-  // 1. Find or create the contact via its channel identity (external_id = platform-side sender id).
+  // conversationKey is the stable identity of the THREAD (the contact for a 1:1 chat,
+  // the group for a group message) — deliberately not always the same as senderId, so
+  // every member of a group lands in one shared conversation instead of each spawning
+  // their own. Providers that don't set it (Meta/Instagram, both 1:1-only) fall back to
+  // senderId, which is exactly the old behavior for them.
+  const contactExternalId = event.conversationKey || event.senderId
+  const contactName = event.conversationName || event.senderName || contactExternalId
+
+  // 1. Find or create the contact via its channel identity.
   const { data: existingChannel } = await db
     .from('contact_channels')
     .select('contact_id')
     .eq('organization_id', matchedConnection.organization_id)
-    .eq('external_id', event.senderId)
+    .eq('external_id', contactExternalId)
     .maybeSingle()
 
   let contactId = (existingChannel as { contact_id: string } | null)?.contact_id
@@ -78,9 +86,10 @@ export async function persistInboundEvent(
       .from('contacts')
       .insert({
         organization_id: matchedConnection.organization_id,
-        name: event.senderId,
-        phone: channelType === 'whatsapp' ? event.senderId : null,
+        name: contactName,
+        phone: channelType === 'whatsapp' ? contactExternalId : null,
         status: 'active',
+        is_group: !!event.isGroup,
       })
       .select('id')
       .single()
@@ -94,23 +103,40 @@ export async function persistInboundEvent(
         organization_id: matchedConnection.organization_id,
         contact_id: contactId,
         channel_type: channelType,
-        external_id: event.senderId,
-        identifier: event.senderId,
+        external_id: contactExternalId,
+        identifier: contactExternalId,
       })
       .select('contact_id')
       .single()
   }
 
-  // 2. Find or create an open conversation on this exact connection for this contact.
-  const { data: existingConversation } = await db
+  // 2. Find or reuse this contact's conversation. Matched by contact_id ALONE — NOT also
+  // scoped to this specific integration_connection_id. A connection can get recreated
+  // (a free-tier uazapi instance expiring and being re-added, an admin deleting and
+  // re-adding a number) without the contact's phone number changing at all; scoping by
+  // connection used to treat that as a brand new conversation every time, scattering a
+  // recurring client's history across several dead-end threads. If more than one
+  // conversation already exists for this contact (from before this fix), we reuse the
+  // most recently active one and just keep going from there.
+  const { data: existingConversation } = await (
+    db as unknown as {
+      from: (t: string) => {
+        select: (c: string) => {
+          eq: (c: string, v: string) => {
+            order: (c: string, o: { ascending: boolean }) => { limit: (n: number) => { maybeSingle: () => Promise<{ data: ConversationMatch | null }> } }
+          }
+        }
+      }
+    }
+  )
     .from('conversations')
     .select('id')
     .eq('contact_id', contactId)
-    .eq('integration_connection_id', matchedConnection.id)
+    .order('last_message_at', { ascending: false })
     .limit(1)
     .maybeSingle()
 
-  let conversationId = (existingConversation as ConversationMatch | null)?.id
+  let conversationId = existingConversation?.id
 
   if (!conversationId) {
     const { data: newConversation, error: convError } = await db
@@ -129,10 +155,16 @@ export async function persistInboundEvent(
     if (convError || !newConversation) return false
     conversationId = (newConversation as ConversationMatch).id
   } else {
-    await db.from('conversations').update({ last_message_at: event.timestamp, status: 'open' }).eq('id', conversationId)
+    // Always point at the connection THIS message actually came in on — keeps outbound
+    // replies going out via whichever number/instance is currently live for this contact.
+    await db
+      .from('conversations')
+      .update({ last_message_at: event.timestamp, status: 'open', integration_connection_id: matchedConnection.id })
+      .eq('id', conversationId)
   }
 
-  // 3. Insert the message itself.
+  // 3. Insert the message itself. For a group, the conversation belongs to the group as
+  // a whole, but we still record which specific member sent this particular message.
   await db
     .from('messages')
     .insert({
@@ -144,7 +176,10 @@ export async function persistInboundEvent(
       media_type: event.mediaType || null,
       status: 'delivered',
       external_id: event.externalEventId,
-      metadata: event.rawPayload as Json,
+      metadata: {
+        ...(event.rawPayload as object),
+        ...(event.isGroup ? { group_sender_id: event.senderId, group_sender_name: event.senderName || null } : {}),
+      } as Json,
     })
     .select('id')
     .single()

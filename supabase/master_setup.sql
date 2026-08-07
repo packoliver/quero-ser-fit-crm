@@ -61,6 +61,9 @@ CREATE TABLE public.contacts (
     status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'archived', 'blocked')),
     notes TEXT,
     tags TEXT[] NOT NULL DEFAULT '{}',
+    -- Flags a contact that's actually a WhatsApp group, not an individual (uazapi only —
+    -- Meta's Cloud API doesn't deliver group messages to webhooks at all).
+    is_group BOOLEAN NOT NULL DEFAULT false,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
