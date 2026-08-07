@@ -60,11 +60,16 @@ export function getDemoDatabase(): DemoDatabase {
       return initialSeedDatabase
     }
 
+    // `deals` is newer than the rest of this schema — a localStorage blob saved before
+    // this feature shipped won't have the key at all (still version 1, since the shape
+    // change didn't bump DEMO_STORAGE_VERSION). Backfill it from the seed data instead of
+    // defaulting to an empty array, so returning demo users see the example pipeline too
+    // instead of a permanently empty Funil.
     return {
       version: DEMO_STORAGE_VERSION,
       contacts: parsed.contacts || [],
       tasks: parsed.tasks || [],
-      deals: parsed.deals || [],
+      deals: parsed.deals || demoDeals,
       conversations: parsed.conversations || [],
       members: parsed.members || [],
       updatedAt: parsed.updatedAt || new Date().toISOString(),
