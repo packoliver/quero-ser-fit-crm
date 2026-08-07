@@ -1,6 +1,7 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { Suspense, useCallback, useEffect, useRef, useState } from 'react'
+import { useSearchParams } from 'next/navigation'
 import {
   Search,
   Send,
@@ -86,7 +87,14 @@ interface RealTeamMember {
 const formatTime = (iso: string) =>
   new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
 
-export default function InboxPage() {
+function InboxPageInner() {
+  // Vem de links externos (ex: um card da aba Follow-up "Abrir conversa") — assim que a
+  // lista real carrega, seleciona essa conversa automaticamente em vez de deixar o
+  // usuário procurar ela na lista de novo.
+  const searchParams = useSearchParams()
+  const requestedConvId = searchParams.get('conversa')
+  const appliedRequestedConvRef = useRef(false)
+
   const {
     conversations: storedConversations,
     addMessage,
@@ -274,12 +282,17 @@ export default function InboxPage() {
       })
 
       setRealConversations(built)
+
+      if (requestedConvId && !appliedRequestedConvRef.current && built.some((c) => c.id === requestedConvId)) {
+        appliedRequestedConvRef.current = true
+        setSelectedConvId(requestedConvId)
+      }
     } catch {
       setErrorMessage('Falha ao carregar conversas reais do Supabase.')
     } finally {
       setLoadingReal(false)
     }
-  }, [])
+  }, [requestedConvId])
 
   useEffect(() => {
     if (viewMode !== 'real') return
@@ -1202,5 +1215,15 @@ export default function InboxPage() {
         </div>
       </Modal>
     </div>
+  )
+}
+
+export default function InboxPage() {
+  // useSearchParams (usado pra abrir uma conversa específica vinda de outra aba, ex:
+  // Follow-up) exige um Suspense boundary acima dele em builds estáticos.
+  return (
+    <Suspense fallback={null}>
+      <InboxPageInner />
+    </Suspense>
   )
 }
