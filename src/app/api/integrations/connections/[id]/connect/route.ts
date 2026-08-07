@@ -2,12 +2,14 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { decryptToken } from '@/lib/security/encryption'
+import { registerUazapiWebhook } from '@/lib/integrations/verify-connection'
 
 interface ConnectionRow {
   id: string
   connection_method: string
   api_base_url: string | null
   encrypted_credentials: string | null
+  webhook_secret: string | null
 }
 
 type AdminDb = {
@@ -70,7 +72,7 @@ async function loadUazapiConnection(id: string) {
 
   const { data: connection } = await adminDb
     .from('integration_connections')
-    .select('id, connection_method, api_base_url, encrypted_credentials')
+    .select('id, connection_method, api_base_url, encrypted_credentials, webhook_secret')
     .eq('id', id)
     .eq('organization_id', membership.organization_id)
     .maybeSingle()
@@ -141,7 +143,7 @@ export async function POST(_request: NextRequest, context: { params: Promise<{ i
  * to 'active' the moment it detects a successful connection, so the UI doesn't need a
  * separate "confirm" step.
  */
-export async function GET(_request: NextRequest, context: { params: Promise<{ id: string }> }) {
+export async function GET(request: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await context.params
     const result = await loadUazapiConnection(id)
@@ -163,6 +165,13 @@ export async function GET(_request: NextRequest, context: { params: Promise<{ id
         .from('integration_connections')
         .update({ status: 'active', settings: {} })
         .eq('id', connection.id)
+
+      // Reforça o registro do webhook bem no momento em que o dispositivo termina de
+      // conectar — segunda camada de proteção contra o webhook ficar desatualizado
+      // (já aconteceu de verdade, mais de uma vez, por edição manual no painel da uazapi).
+      if (connection.webhook_secret) {
+        void registerUazapiWebhook(base, token, request.nextUrl.origin, connection.webhook_secret)
+      }
     }
 
     return NextResponse.json({

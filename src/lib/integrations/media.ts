@@ -2,6 +2,7 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { randomUUID } from 'crypto'
 
 const BUCKET = 'chat-media'
+const MAX_MEDIA_SIZE_BYTES = 25 * 1024 * 1024 // 25MB — mesmo limite configurado no bucket
 
 const EXTENSION_BY_MIME: Record<string, string> = {
   'image/jpeg': 'jpg',
@@ -49,8 +50,22 @@ export async function mirrorMediaToStorage(params: {
       return null
     }
 
+    // Corta cedo se o servidor de origem já anuncia um arquivo maior que o limite do
+    // bucket, em vez de baixar tudo pra memória da função serverless só pra falhar no
+    // upload depois. Sem Content-Length (transfer chunked) não dá pra checar
+    // antecipadamente — segue e deixa o limite do bucket rejeitar no upload mesmo.
+    const declaredLength = Number(res.headers.get('content-length'))
+    if (Number.isFinite(declaredLength) && declaredLength > MAX_MEDIA_SIZE_BYTES) {
+      console.error(`mirrorMediaToStorage: arquivo de origem maior que o limite (${declaredLength} bytes)`)
+      return null
+    }
+
     const mimetype = params.mimetypeHint || res.headers.get('content-type') || undefined
     const buffer = Buffer.from(await res.arrayBuffer())
+    if (buffer.byteLength > MAX_MEDIA_SIZE_BYTES) {
+      console.error(`mirrorMediaToStorage: arquivo de origem maior que o limite (${buffer.byteLength} bytes)`)
+      return null
+    }
     const ext = guessExtension(mimetype, params.sourceUrl)
     const path = `${params.organizationId}/${params.conversationId || 'inbound'}/${Date.now()}-${randomUUID()}.${ext}`
 

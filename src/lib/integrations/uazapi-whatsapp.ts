@@ -89,7 +89,12 @@ export class UazapiWhatsAppProvider implements ICRMIntegrationProvider {
               : undefined
       const rawMessageType = typeof message.messageType === 'string' ? message.messageType.toLowerCase() : undefined
       const rawType = typeof message.type === 'string' ? message.type.toLowerCase() : undefined
-      const mediaType = (rawMessageType && UAZAPI_MESSAGE_TYPE_MAP[rawMessageType]) || (rawType && UAZAPI_TYPE_MAP[rawType]) || undefined
+      const messageId = typeof message.messageid === 'string' ? message.messageid : undefined
+      // Sem messageId não tem como chamar /message/download depois — sem detectar
+      // mediaType aqui, a mensagem cai no fallback de texto abaixo em vez de virar uma
+      // linha com media_type preenchido e media_url nulo (que não renderiza nada no chat).
+      const detectedMediaType = (rawMessageType && UAZAPI_MESSAGE_TYPE_MAP[rawMessageType]) || (rawType && UAZAPI_TYPE_MAP[rawType]) || undefined
+      const mediaType = detectedMediaType && messageId ? detectedMediaType : undefined
       const chatId = typeof message.chatid === 'string' ? message.chatid : undefined
       // `sender` costuma vir no formato @lid (identificador de privacidade do WhatsApp,
       // não o telefone). `sender_pn` é a versão com o telefone real quando disponível —
@@ -104,7 +109,6 @@ export class UazapiWhatsAppProvider implements ICRMIntegrationProvider {
             ? message.sender
             : chatId
       const sender = senderRaw?.split('@')[0]
-      const messageId = typeof message.messageid === 'string' ? message.messageid : undefined
       const timestampMs = typeof message.messageTimestamp === 'number' ? message.messageTimestamp : undefined
 
       // Grupos ficam fora de escopo por enquanto (o CRM modela conversas 1:1 com contatos).

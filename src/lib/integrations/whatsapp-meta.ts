@@ -48,11 +48,15 @@ export class MetaWhatsAppProvider implements ICRMIntegrationProvider {
             const metadata = value.metadata as { phone_number_id?: string } | undefined
 
             const msgType = typeof msg.type === 'string' ? msg.type : undefined
-            const mediaType = msgType ? META_MEDIA_TYPES[msgType] : undefined
+            const detectedMediaType = msgType ? META_MEDIA_TYPES[msgType] : undefined
             // Mídia vem como {[type]: {id, mime_type, caption?, sha256, filename?}} — o
             // `id` é o identificador de mídia da Meta, resolvido depois via uma chamada
             // autenticada separada (a rota do webhook, que tem o token decifrado da conexão).
-            const mediaObj = mediaType ? (msg[mediaType] as { id?: string; caption?: string } | undefined) : undefined
+            const mediaObj = detectedMediaType ? (msg[detectedMediaType] as { id?: string; caption?: string } | undefined) : undefined
+            // Sem media id não tem como resolver a mídia depois — sem isso, cai no
+            // fallback de texto abaixo em vez de virar uma linha com media_type
+            // preenchido e media_url nulo (que não renderiza nada no chat).
+            const mediaType = detectedMediaType && mediaObj?.id ? detectedMediaType : undefined
 
             events.push({
               provider: 'whatsapp_meta',
@@ -64,7 +68,7 @@ export class MetaWhatsAppProvider implements ICRMIntegrationProvider {
               timestamp: new Date().toISOString(),
               rawPayload: msg,
               mediaType,
-              providerMediaId: mediaObj?.id,
+              providerMediaId: mediaType ? mediaObj?.id : undefined,
             })
           }
         }

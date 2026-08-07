@@ -879,10 +879,10 @@ export default function InboxPage() {
                   placeholder="Digite sua resposta..."
                   value={newMessageText}
                   onChange={(e) => setNewMessageText(e.target.value)}
-                  disabled={isSendingMessage}
+                  disabled={isSendingMessage || uploadingMedia}
                   className="flex-1 px-4 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-xs text-slate-100 focus:outline-none focus:border-emerald-500 disabled:opacity-50"
                 />
-                <Button type="submit" disabled={!newMessageText.trim() || isSendingMessage} size="md" variant="primary">
+                <Button type="submit" disabled={!newMessageText.trim() || isSendingMessage || uploadingMedia} size="md" variant="primary">
                   {isSendingMessage ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
                 </Button>
               </div>

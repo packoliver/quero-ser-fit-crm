@@ -42,9 +42,13 @@ export class MetaInstagramProvider implements ICRMIntegrationProvider {
           if (message && sender?.id) {
             // Diferente da Cloud API do WhatsApp (que exige um segundo hop autenticado
             // pra resolver o media id), o Instagram já entrega a URL do anexo direto no
-            // payload do webhook — pronta pra baixar sem token.
+            // payload do webhook — pronta pra baixar sem token. Sem essa URL não tem
+            // como resolver a mídia depois, então nem marcamos mediaType nesse caso —
+            // vira mensagem de texto (vazia, se não tiver `text` também) em vez de uma
+            // linha com media_type preenchido e media_url nulo (que não renderiza nada).
             const attachment = message.attachments?.[0]
-            const mediaType = attachment?.type ? INSTAGRAM_MEDIA_TYPES[attachment.type] : undefined
+            const detectedMediaType = attachment?.type ? INSTAGRAM_MEDIA_TYPES[attachment.type] : undefined
+            const mediaType = detectedMediaType && attachment?.payload?.url ? detectedMediaType : undefined
 
             events.push({
               provider: 'instagram_meta',
@@ -56,7 +60,7 @@ export class MetaInstagramProvider implements ICRMIntegrationProvider {
               timestamp: new Date().toISOString(),
               rawPayload: item,
               mediaType,
-              mediaUrl: attachment?.payload?.url,
+              mediaUrl: mediaType ? attachment?.payload?.url : undefined,
             })
           }
         }

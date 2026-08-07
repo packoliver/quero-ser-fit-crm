@@ -21,6 +21,47 @@ export async function verifyCloudApiConnection(externalIdentifier: string, acces
 }
 
 /**
+ * Registers our webhook on a uazapi instance — "modo simples" (no id/action in the
+ * body) means this always overwrites whatever's currently configured, which is exactly
+ * what we want: it's the one thing that reliably undoes drift if someone edits the
+ * Webhooks screen on uazapi's own dashboard by hand and re-saves stale form state
+ * (addUrlEvents/addUrlTypesMessages toggled on, an old secret in the URL — this has
+ * happened for real, more than once). Called both from verifyUazapiConnection below and
+ * directly from the QR-connect polling route the moment a device finishes connecting,
+ * as a second reinforcement point beyond just creation/reverify.
+ */
+export async function registerUazapiWebhook(
+  apiBaseUrl: string,
+  instanceToken: string,
+  webhookOrigin: string,
+  webhookSecret: string
+): Promise<{ ok: boolean; warning?: string }> {
+  try {
+    const base = apiBaseUrl.replace(/\/$/, '')
+    const webhookUrl = `${webhookOrigin}/api/webhooks/uazapi/${webhookSecret}`
+    const registerRes = await fetch(`${base}/webhook`, {
+      method: 'POST',
+      headers: { token: instanceToken, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        enabled: true,
+        url: webhookUrl,
+        events: ['messages', 'connection'],
+        excludeMessages: ['wasSentByApi'],
+        addUrlEvents: false,
+        addUrlTypesMessages: false,
+      }),
+    })
+    if (!registerRes.ok) {
+      const registerBody = await registerRes.json().catch(() => ({}))
+      return { ok: false, warning: `Falhou ao registrar o webhook automaticamente na uazapi: ${registerBody?.error || `HTTP ${registerRes.status}`}.` }
+    }
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, warning: `Falhou ao registrar o webhook automaticamente: ${err instanceof Error ? err.message : 'erro de rede'}.` }
+  }
+}
+
+/**
  * Validates a uazapi (uazapiGO) instance token against the account's own base URL
  * (each account has its own subdomain, e.g. https://minhaempresa.uazapi.com — there's
  * no single fixed API host like Meta's or zap-api.tech's), then registers our webhook
@@ -69,33 +110,13 @@ export async function verifyUazapiConnection(
     return { ok: false, detail: err instanceof Error ? err.message : 'Falha de rede ao validar com a uazapi.' }
   }
 
-  try {
-    const webhookUrl = `${webhookOrigin}/api/webhooks/uazapi/${webhookSecret}`
-    const registerRes = await fetch(`${base}/webhook`, {
-      method: 'POST',
-      headers: { token: instanceToken, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        enabled: true,
-        url: webhookUrl,
-        events: ['messages', 'connection'],
-        excludeMessages: ['wasSentByApi'],
-      }),
-    })
-    if (!registerRes.ok) {
-      const registerBody = await registerRes.json().catch(() => ({}))
-      return {
-        ok,
-        detail,
-        resolvedExternalId,
-        webhookWarning: `${ok ? 'Conexão validada' : 'Instância acessível'}, mas falhou ao registrar o webhook automaticamente na uazapi: ${registerBody?.error || `HTTP ${registerRes.status}`}.`,
-      }
-    }
-  } catch (err) {
+  const registration = await registerUazapiWebhook(apiBaseUrl, instanceToken, webhookOrigin, webhookSecret)
+  if (!registration.ok) {
     return {
       ok,
       detail,
       resolvedExternalId,
-      webhookWarning: `${ok ? 'Conexão validada' : 'Instância acessível'}, mas falhou ao registrar o webhook automaticamente: ${err instanceof Error ? err.message : 'erro de rede'}.`,
+      webhookWarning: `${ok ? 'Conexão validada, mas' : 'Instância acessível, mas'} ${registration.warning}`,
     }
   }
 
