@@ -151,13 +151,15 @@ export default function FunilPage() {
         .order('created_at', { ascending: false })
 
       if (dbError) {
-        setViewMode('demo')
+        setError(dbError.message || 'Não foi possível carregar os pedidos do Supabase.')
+        setRealDeals([])
       } else if (data) {
         setRealDeals(data)
         if (offlineScope) await cacheEntity(offlineScope, 'deals', data)
       }
-    } catch {
-      setViewMode('demo')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Erro inesperado ao carregar o funil.')
+      setRealDeals([])
     } finally {
       setLoading(false)
     }
