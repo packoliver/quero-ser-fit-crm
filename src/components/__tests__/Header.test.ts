@@ -21,9 +21,8 @@ describe('Componentes Globais - Header e Sessão (Fase 4.4)', () => {
     expect(userEmail).toBe('carlos@queroserfit.com.br')
   })
 
-  it('deve validar string de expiração do cookie de logout', () => {
-    const logoutCookieStr = 'crm_demo_session=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;'
-    expect(logoutCookieStr).toContain('expires=Thu, 01 Jan 1970')
-    expect(logoutCookieStr).toContain('path=/')
+  it('deve manter a role de atendente sem privilégios de admin', () => {
+    const role: UserRole = 'attendant'
+    expect(role).not.toBe('admin')
   })
 })

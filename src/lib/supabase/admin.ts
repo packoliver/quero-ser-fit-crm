@@ -1,10 +1,7 @@
-import { createClient as createSupabaseClient } from '@supabase/supabase-js'
+import { createClient as createSupabaseClient, SupabaseClient } from '@supabase/supabase-js'
 import { getServerEnv } from '@/lib/env'
 
-// Note: intentionally NOT parameterized with the generated `Database` type here.
-// The rest of this codebase works around gaps in that generic (see the `as unknown as`
-// casts in src/lib/auth.ts and the Equipe page) rather than fighting it — the admin
-// client follows the same convention at its call sites.
+export type AdminClient = SupabaseClient
 
 /**
  * Privileged Supabase client using the Service Role key. Bypasses Row Level Security.
@@ -13,7 +10,7 @@ import { getServerEnv } from '@/lib/env'
  * from server-only code (API routes / Server Actions) that has already verified the
  * caller's authorization through the regular (RLS-respecting) server client.
  */
-export function createAdminClient() {
+export function createAdminClient(): AdminClient {
   const env = getServerEnv()
 
   if (!env.NEXT_PUBLIC_SUPABASE_URL) {

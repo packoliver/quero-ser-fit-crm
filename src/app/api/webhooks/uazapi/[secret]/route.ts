@@ -28,7 +28,10 @@ export async function POST(request: NextRequest, context: { params: Promise<{ se
     try {
       admin = createAdminClient()
     } catch {
-      return NextResponse.json({ status: 'accepted', processed: 0, warning: 'admin client unavailable' }, { status: 200 })
+      return NextResponse.json(
+        { error: 'Serviço de webhook temporariamente indisponível.' },
+        { status: 503 }
+      )
     }
 
     const { data: connection } = await (admin as unknown as {
@@ -131,7 +134,10 @@ export async function POST(request: NextRequest, context: { params: Promise<{ se
     }
 
     const processedCount = await processInboundEvents(admin, eventsWithConnection)
-    const statusUpdateCount = await applyStatusUpdates(admin, statusUpdates)
+    const statusUpdateCount = await applyStatusUpdates(admin, statusUpdates, {
+      connectionId: connection.id,
+      organizationId: connection.organization_id,
+    })
 
     // Fotos + nomes de participantes de grupo — best-effort, nunca deve derrubar a
     // resposta do webhook. O payload da mensagem em si não traz foto (só senderName),

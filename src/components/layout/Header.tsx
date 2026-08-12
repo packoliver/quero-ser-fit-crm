@@ -25,6 +25,8 @@ import { Input } from '@/components/ui/Input'
 import { useDemoStorage } from '@/lib/demo/useDemoStorage'
 import { changePasswordSchema } from '@/lib/validations'
 import { createClient } from '@/lib/supabase/client'
+import { clearOfflineScope } from '@/lib/offline/db'
+import { getOfflineScope } from '@/lib/offline/scope'
 
 export interface HeaderProps {
   currentRole?: UserRole
@@ -173,12 +175,13 @@ export function Header({ currentRole = 'admin', onToggleRole, realUser }: Header
     try {
       const { createClient } = await import('@/lib/supabase/client')
       const supabase = createClient()
+      const { unsubscribeFromPush } = await import('@/lib/pwa/subscribe')
+      await unsubscribeFromPush()
+      const scope = await getOfflineScope()
+      if (scope) await clearOfflineScope(scope)
       await supabase.auth.signOut()
     } catch {
       // Ignore errors if Supabase is not configured
-    }
-    if (typeof document !== 'undefined') {
-      document.cookie = 'crm_demo_session=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;'
     }
     router.push('/login')
     router.refresh()

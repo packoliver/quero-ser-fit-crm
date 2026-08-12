@@ -69,11 +69,18 @@ export default function IntegracoesConfigPage() {
   const [qrTimedOut, setQrTimedOut] = useState(false)
   const [qrError, setQrError] = useState<string | null>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const pollInFlightRef = useRef(false)
+  const mountedRef = useRef(false)
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const showToast = (msg: string) => {
+  const showToast = useCallback((msg: string) => {
     setToast(msg)
-    setTimeout(() => setToast(null), 4000)
-  }
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
+    toastTimerRef.current = setTimeout(() => {
+      setToast(null)
+      toastTimerRef.current = null
+    }, 4000)
+  }, [])
 
   const fetchConnections = useCallback(async () => {
     setLoading(true)
@@ -102,8 +109,13 @@ export default function IntegracoesConfigPage() {
   }, [fetchConnections])
 
   useEffect(() => {
+    mountedRef.current = true
     return () => {
+      mountedRef.current = false
       if (pollRef.current) clearInterval(pollRef.current)
+      pollRef.current = null
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
+      toastTimerRef.current = null
     }
   }, [])
 
@@ -219,12 +231,13 @@ export default function IntegracoesConfigPage() {
     }
   }
 
-  const stopPolling = () => {
+  const stopPolling = useCallback(() => {
     if (pollRef.current) {
       clearInterval(pollRef.current)
       pollRef.current = null
     }
-  }
+    pollInFlightRef.current = false
+  }, [])
 
   const closeQrModal = () => {
     stopPolling()
@@ -238,9 +251,12 @@ export default function IntegracoesConfigPage() {
 
   const pollQrStatus = useCallback(
     async (connId: string, deadline: number) => {
+      if (!mountedRef.current || pollInFlightRef.current) return
+      pollInFlightRef.current = true
       try {
         const res = await fetch(`/api/integrations/connections/${connId}/connect`)
         const body = await res.json()
+        if (!mountedRef.current) return
         if (!res.ok) {
           setQrError(body.error || 'Falha ao consultar status da conexão.')
           return
@@ -251,7 +267,7 @@ export default function IntegracoesConfigPage() {
           setQrConnected(true)
           stopPolling()
           showToast('WhatsApp conectado com sucesso!')
-          fetchConnections()
+          void fetchConnections()
           return
         }
         if (Date.now() > deadline) {
@@ -259,11 +275,20 @@ export default function IntegracoesConfigPage() {
           stopPolling()
         }
       } catch {
-        setQrError('Erro de conexão ao consultar status.')
+        if (mountedRef.current) setQrError('Erro de conexão ao consultar status.')
+      } finally {
+        pollInFlightRef.current = false
       }
     },
-    [fetchConnections]
+    [fetchConnections, showToast, stopPolling]
   )
+
+  const startPolling = useCallback((connId: string, deadline: number) => {
+    stopPolling()
+    pollRef.current = setInterval(() => {
+      void pollQrStatus(connId, deadline)
+    }, QR_POLL_INTERVAL_MS)
+  }, [pollQrStatus, stopPolling])
 
   const handleOpenQr = useCallback(async (conn: Connection) => {
     setQrModal({ connId: conn.id, label: conn.label })
@@ -289,13 +314,11 @@ export default function IntegracoesConfigPage() {
       }
 
       const deadline = Date.now() + QR_TIMEOUT_MS
-      pollRef.current = setInterval(() => {
-        void pollQrStatus(conn.id, deadline)
-      }, QR_POLL_INTERVAL_MS)
+      startPolling(conn.id, deadline)
     } catch {
-      setQrError('Erro de conexão ao iniciar o processo de conexão.')
+      if (mountedRef.current) setQrError('Erro de conexão ao iniciar o processo de conexão.')
     }
-  }, [pollQrStatus, fetchConnections])
+  }, [fetchConnections, startPolling])
 
   const providerLabel = (p: Provider) => (p === 'instagram_meta' ? 'Instagram' : 'WhatsApp')
   const methodLabel = (m: ConnectionMethod) => (m === 'cloud_api' ? 'Cloud API' : 'uazapi')

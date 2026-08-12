@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   Search,
   UserPlus,
@@ -27,6 +27,8 @@ import { Input } from '@/components/ui/Input'
 import { Modal } from '@/components/ui/Modal'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { createClient } from '@/lib/supabase/client'
+import { cacheEntity, readCachedEntity, queueEntityMutation } from '@/lib/offline/repository'
+import { getOfflineScope } from '@/lib/offline/scope'
 import { useDemoStorage } from '@/lib/demo/useDemoStorage'
 
 export interface RealContact {
@@ -63,6 +65,11 @@ export default function ClientesPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [toastMessage, setToastMessage] = useState<string | null>(null)
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => () => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
+  }, [])
 
   // Form States
   const [newContact, setNewContact] = useState({ name: '', phone: '', email: '', notes: '', tags: 'Novo Cliente' })
@@ -70,7 +77,11 @@ export default function ClientesPage() {
 
   const showToast = (msg: string) => {
     setToastMessage(msg)
-    setTimeout(() => setToastMessage(null), 3500)
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
+    toastTimerRef.current = setTimeout(() => {
+      setToastMessage(null)
+      toastTimerRef.current = null
+    }, 3500)
   }
 
   // Function to normalize phone digits
@@ -79,6 +90,16 @@ export default function ClientesPage() {
   const fetchRealContacts = useCallback(async () => {
     setLoading(true)
     setError(null)
+    const offlineScope = await (await import('@/lib/offline/scope')).getOfflineScope()
+    if (!navigator.onLine && offlineScope) {
+      const cached = await readCachedEntity<RealContact[]>(offlineScope, 'contacts')
+      if (cached) {
+        setRealContacts(cached)
+        setSelectedContact(cached[0] || null)
+      } else setError('Sem conexão e sem dados de clientes armazenados neste dispositivo.')
+      setLoading(false)
+      return
+    }
     try {
       const supabase = createClient()
       const { data, error: dbError } = await (supabase as unknown as {
@@ -98,6 +119,7 @@ export default function ClientesPage() {
       } else if (data && data.length > 0) {
         setRealContacts(data)
         setSelectedContact(data[0])
+        if (offlineScope) await cacheEntity(offlineScope, 'contacts', data)
       } else {
         setRealContacts([])
         setSelectedContact(null)
@@ -135,6 +157,20 @@ export default function ClientesPage() {
     const cleanPhone = normalizePhoneString(newContact.phone)
 
     if (viewMode === 'real') {
+      const offlineScope = await getOfflineScope()
+      if (!navigator.onLine && offlineScope) {
+        const optimistic: RealContact = { id: crypto.randomUUID(), name: newContact.name.trim(), phone: cleanPhone || newContact.phone || null, email: newContact.email || null, notes: newContact.notes || null, tags: newContact.tags.split(',').map((t) => t.trim()).filter(Boolean), created_at: new Date().toISOString() }
+        await queueEntityMutation(offlineScope, 'contact.create', { name: optimistic.name, phone: optimistic.phone, email: optimistic.email, notes: optimistic.notes })
+        const next = [optimistic, ...realContacts]
+        setRealContacts(next)
+        setSelectedContact(optimistic)
+        await cacheEntity(offlineScope, 'contacts', next)
+        showToast('Cliente salvo localmente e aguardando sincronização.')
+        resetFiltersForNewItem()
+        setNewContact({ name: '', phone: '', email: '', notes: '', tags: 'Novo Cliente' })
+        setCreateModalOpen(false)
+        return
+      }
       try {
         const supabase = createClient()
 
@@ -243,6 +279,17 @@ export default function ClientesPage() {
     const tagsArray = editContact.tags.split(',').map((t) => t.trim()).filter(Boolean)
 
     if (viewMode === 'real') {
+      const offlineScope = await getOfflineScope()
+      if (!navigator.onLine && offlineScope) {
+        await queueEntityMutation(offlineScope, 'contact.update', { id: editContact.id, name: editContact.name.trim(), phone: editContact.phone || null, email: editContact.email || null, notes: editContact.notes || null, tags: tagsArray })
+        const updated = realContacts.map((c) => c.id === editContact.id ? { ...c, name: editContact.name.trim(), phone: editContact.phone || null, email: editContact.email || null, notes: editContact.notes || null, tags: tagsArray } : c)
+        setRealContacts(updated)
+        setSelectedContact(updated.find((c) => c.id === editContact.id) || updated[0] || null)
+        await cacheEntity(offlineScope, 'contacts', updated)
+        setEditModalOpen(false)
+        showToast('Cliente atualizado localmente e aguardando sincronização.')
+        return
+      }
       try {
         const supabase = createClient()
         const { error: updateError } = await (supabase as unknown as {

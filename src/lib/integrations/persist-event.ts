@@ -1,9 +1,8 @@
-import { createAdminClient } from '@/lib/supabase/admin'
+import { AdminClient } from '@/lib/supabase/admin'
 import { Json } from '@/types/database'
 import { IncomingWebhookEvent, MessageStatusUpdate } from './types'
+import { sendPushToOrganization } from '@/lib/pwa/push'
 
-// Nunca deixa um status "voltar pra trás" se as atualizações chegarem fora de ordem
-// (ex: um "delivered" atrasado chegando depois de um "read" que já processamos).
 const STATUS_RANK: Record<string, number> = { sent: 0, delivered: 1, read: 2 }
 
 interface ConnectionMatch {
@@ -19,23 +18,6 @@ interface ConversationMatch {
   id: string
 }
 
-type AdminDb = {
-  from: (table: string) => {
-    select: (cols: string) => {
-      eq: (col: string, val: string) => {
-        eq: (col: string, val: string) => {
-          maybeSingle: () => Promise<{ data: unknown }>
-          limit: (n: number) => { maybeSingle: () => Promise<{ data: unknown }> }
-        }
-      }
-    }
-    insert: (data: unknown) => {
-      select: (cols: string) => { single: () => Promise<{ data: unknown; error: { message: string } | null }> }
-    }
-    update: (data: unknown) => { eq: (col: string, val: string) => Promise<{ error: unknown }> }
-  }
-}
-
 /**
  * Processes one parsed inbound event (from any provider — Meta or ZAP API): finds which of
  * our registered numbers/pages it belongs to, then finds-or-creates the contact, the
@@ -44,10 +26,10 @@ type AdminDb = {
  * arriving before an admin has finished configuring that number in Integrações.
  */
 export async function persistInboundEvent(
-  admin: ReturnType<typeof createAdminClient>,
+  admin: AdminClient,
   event: IncomingWebhookEvent
 ): Promise<boolean> {
-  const db = admin as unknown as AdminDb
+  const db = admin
 
   const { data: connection } = await db
     .from('integration_connections')
@@ -125,23 +107,13 @@ export async function persistInboundEvent(
   // recurring client's history across several dead-end threads. If more than one
   // conversation already exists for this contact (from before this fix), we reuse the
   // most recently active one and just keep going from there.
-  const { data: existingConversation } = await (
-    db as unknown as {
-      from: (t: string) => {
-        select: (c: string) => {
-          eq: (c: string, v: string) => {
-            order: (c: string, o: { ascending: boolean }) => { limit: (n: number) => { maybeSingle: () => Promise<{ data: ConversationMatch | null }> } }
-          }
-        }
-      }
-    }
-  )
+  const { data: existingConversation } = await db
     .from('conversations')
     .select('id')
     .eq('contact_id', contactId)
     .order('last_message_at', { ascending: false })
     .limit(1)
-    .maybeSingle()
+    .maybeSingle() as { data: ConversationMatch | null; error?: unknown }
 
   let conversationId = existingConversation?.id
 
@@ -198,37 +170,80 @@ export async function persistInboundEvent(
  * Idempotently logs + persists a batch of parsed inbound events. Shared by every
  * webhook route (Meta, ZAP API, ...): logs each event to webhook_events first (skipping
  * ones already processed, e.g. a provider retrying delivery), then calls
- * persistInboundEvent for the new ones. Returns how many were newly persisted.
+ * persistInboundEvent for the new ones. Only marks as processed=true AFTER persistence
+ * succeeds — failed persistence remains retryable. Returns how many were newly persisted.
  */
 export async function processInboundEvents(
-  admin: ReturnType<typeof createAdminClient>,
+  admin: AdminClient,
   events: IncomingWebhookEvent[]
 ): Promise<number> {
-  const db = admin as unknown as {
-    from: (table: string) => {
-      insert: (data: unknown) => Promise<{ error: { code?: string; message: string } | null }>
-    }
-  }
-
   let processedCount = 0
 
   for (const event of events) {
-    const { error: insertError } = await db.from('webhook_events').insert({
-      provider: event.provider,
-      external_event_id: event.externalEventId,
-      event_type: event.eventType,
-      payload: event.rawPayload as Json,
-      processed: true,
-      processed_at: new Date().toISOString(),
-    })
+    const { data: connection } = await admin
+      .from('integration_connections')
+      .select('id, organization_id')
+      .eq('provider', event.provider)
+      .eq('external_identifier', event.recipientId)
+      .maybeSingle()
 
-    if (insertError) {
-      // 23505 = duplicate (already processed, e.g. provider retried delivery) — skip.
+    if (!connection) continue
+
+    // First, check if this event was already processed
+    const { error: checkError, data: existing } = await admin
+      .from('webhook_events')
+      .select('id, processed')
+      .eq('provider', event.provider)
+      .eq('integration_connection_id', connection.id)
+      .eq('external_event_id', event.externalEventId)
+      .maybeSingle() as { error: unknown; data: { id: string; processed: boolean } | null }
+
+    if (!checkError && existing?.processed) {
+      // Already processed — skip
       continue
     }
 
+    // If not found, insert as pending (processed=false initially)
+    if (!existing) {
+      const { error: insertError } = await admin.from('webhook_events').insert({
+        provider: event.provider,
+        external_event_id: event.externalEventId,
+        event_type: event.eventType,
+        payload: event.rawPayload as Json,
+        processed: false,
+        processed_at: null,
+        organization_id: connection.organization_id,
+        integration_connection_id: connection.id,
+      })
+
+      if (insertError) {
+        // 23505 = another concurrent insert already created this event — treat as not-yet-processed
+        if (!('code' in insertError) || insertError.code !== '23505') {
+          // Some other error — skip this event, leave it pending for retry
+          continue
+        }
+      }
+    }
+
+    // Attempt persistence; only mark as processed if it succeeds
     const persisted = await persistInboundEvent(admin, event)
-    if (persisted) processedCount++
+    if (persisted) {
+      // Mark as processed only after persistence succeeded
+      await admin
+        .from('webhook_events')
+        .update({ processed: true, processed_at: new Date().toISOString() })
+        .eq('integration_connection_id', connection.id)
+        .eq('external_event_id', event.externalEventId)
+
+      processedCount++
+      await sendPushToOrganization(admin, connection.organization_id, {
+        title: 'Nova mensagem no Quero Ser Fit CRM',
+        body: event.content || 'Você recebeu uma nova mensagem.',
+        url: `/inbox?conversa=${event.conversationKey || event.senderId}`,
+        tag: `crm-message-${event.externalEventId}`,
+      })
+    }
+    // If persisted=false, the event stays pending — next webhook retry will attempt again
   }
 
   return processedCount
@@ -252,32 +267,35 @@ function shouldApplyStatus(currentStatus: string, nextStatus: MessageStatusUpdat
  * out-of-order/no-op update, doesn't count).
  */
 export async function applyStatusUpdates(
-  admin: ReturnType<typeof createAdminClient>,
-  updates: MessageStatusUpdate[]
+  admin: AdminClient,
+  updates: MessageStatusUpdate[],
+  scope: { connectionId: string; organizationId: string }
 ): Promise<number> {
   if (updates.length === 0) return 0
-
-  const db = admin as unknown as {
-    from: (table: string) => {
-      select: (cols: string) => {
-        eq: (col: string, val: string) => { maybeSingle: () => Promise<{ data: { id: string; status: string } | null }> }
-      }
-      update: (data: unknown) => { eq: (col: string, val: string) => Promise<{ error: unknown }> }
-    }
-  }
 
   let appliedCount = 0
 
   for (const update of updates) {
-    const { data: existing } = await db
+    // The receipt is accepted only for an outbound message in the same tenant and
+    // connection. The relation filter prevents an external id collision from crossing
+    // either organization or WhatsApp connection.
+    const { data: existing } = await admin
       .from('messages')
-      .select('id, status')
+      .select('id, status, conversations!inner(integration_connection_id)')
       .eq('external_id', update.externalId)
+      .eq('organization_id', scope.organizationId)
+      .eq('sender_type', 'user')
+      .eq('conversations.integration_connection_id', scope.connectionId)
       .maybeSingle()
 
     if (!existing || !shouldApplyStatus(existing.status, update.status)) continue
 
-    const { error } = await db.from('messages').update({ status: update.status }).eq('id', existing.id)
+    const { error } = await admin
+      .from('messages')
+      .update({ status: update.status })
+      .eq('id', existing.id)
+      .eq('organization_id', scope.organizationId)
+
     if (!error) appliedCount++
   }
 

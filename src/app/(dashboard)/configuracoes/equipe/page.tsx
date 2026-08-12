@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   UserCheck,
   ShieldCheck,
@@ -32,6 +32,8 @@ import { createClient } from '@/lib/supabase/client'
 import { useDemoStorage } from '@/lib/demo/useDemoStorage'
 import { DemoTeamMember } from '@/lib/demo'
 import { getDefaultPermissionsForRole } from '@/lib/security/permissions'
+import { cacheEntity, readCachedEntity } from '@/lib/offline/repository'
+import { getOfflineScope } from '@/lib/offline/scope'
 
 export interface RealMember {
   user_id: string
@@ -69,13 +71,22 @@ export default function EquipeConfigPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [toast, setToast] = useState<string | null>(null)
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => () => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
+  }, [])
 
   const [newMember, setNewMember] = useState({ fullName: '', email: '', role: 'attendant' as UserRole, password: '' })
   const [creatingMember, setCreatingMember] = useState(false)
 
   const showToast = (msg: string) => {
     setToast(msg)
-    setTimeout(() => setToast(null), 4000)
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
+    toastTimerRef.current = setTimeout(() => {
+      setToast(null)
+      toastTimerRef.current = null
+    }, 4000)
   }
 
   // Generates a readable-but-random temporary password (e.g. "Fit-83Kq47")
@@ -91,6 +102,18 @@ export default function EquipeConfigPage() {
   const fetchRealMembers = useCallback(async () => {
     setLoading(true)
     setError(null)
+    const offlineScope = await getOfflineScope().catch(() => null)
+    if (!navigator.onLine && offlineScope) {
+      const cached = await readCachedEntity<RealMember[]>(offlineScope, 'team')
+      if (cached) {
+        setRealMembers(cached)
+        setError('Você está offline. Exibindo dados da equipe armazenados anteriormente.')
+      } else {
+        setError('Sem conexão e sem dados da equipe armazenados neste dispositivo.')
+      }
+      setLoading(false)
+      return
+    }
     try {
       const supabase = createClient()
       const { data, error: dbError } = await (supabase as unknown as {
@@ -108,11 +131,18 @@ export default function EquipeConfigPage() {
         setViewMode('demo')
       } else if (data && data.length > 0) {
         setRealMembers(data)
+        if (offlineScope) await cacheEntity(offlineScope, 'team', data)
       } else {
         setViewMode('demo')
       }
     } catch {
-      setViewMode('demo')
+      const cached = offlineScope ? await readCachedEntity<RealMember[]>(offlineScope, 'team').catch(() => null) : null
+      if (cached) {
+        setRealMembers(cached)
+        setError('Não foi possível atualizar. Exibindo a última equipe sincronizada.')
+      } else {
+        setViewMode('demo')
+      }
     } finally {
       setLoading(false)
     }
@@ -364,7 +394,7 @@ export default function EquipeConfigPage() {
       setCreatingMember(false)
     } else {
       const invitedObj: DemoTeamMember = {
-        id: `member-${Date.now()}`,
+        id: `member-${crypto.randomUUID().slice(0, 8)}`,
         fullName: newMember.fullName,
         email: newMember.email,
         role: newMember.role,

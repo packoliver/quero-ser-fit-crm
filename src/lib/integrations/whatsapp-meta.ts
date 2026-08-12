@@ -117,8 +117,10 @@ export class MetaWhatsAppProvider implements ICRMIntegrationProvider {
           for (const s of statuses) {
             const id = typeof s.id === 'string' ? s.id : undefined
             const status = typeof s.status === 'string' ? s.status : undefined
+            const metadata = value?.metadata as Record<string, unknown> | undefined
+            const recipientId = typeof metadata?.phone_number_id === 'string' ? metadata.phone_number_id : undefined
             if (id && status && META_STATUS_VALUES.has(status)) {
-              updates.push({ externalId: id, status: status as MessageStatusUpdate['status'] })
+              updates.push({ externalId: id, status: status as MessageStatusUpdate['status'], recipientId })
             }
           }
         }

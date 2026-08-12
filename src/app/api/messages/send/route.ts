@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { createHash, randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
@@ -17,6 +18,7 @@ const sendSchema = z
     content: z.string().max(4096, 'Mensagem muito longa').default(''),
     mediaUrl: z.string().url('URL de mídia inválida').optional(),
     mediaType: z.enum(['image', 'video', 'audio', 'document', 'sticker']).optional(),
+    idempotencyKey: z.string().uuid('Chave de idempotência inválida').optional(),
   })
   .refine((data) => data.content.trim().length > 0 || !!data.mediaUrl, {
     message: 'Mensagem vazia',
@@ -59,9 +61,9 @@ type TypedSupabase = {
 export async function POST(request: NextRequest) {
   try {
     return await handlePost(request)
-  } catch (err) {
+  } catch {
     return NextResponse.json(
-      { error: err instanceof Error ? `Erro inesperado: ${err.message}` : 'Erro inesperado ao enviar mensagem.' },
+      { error: 'Erro interno ao enviar mensagem.' },
       { status: 500 }
     )
   }
@@ -90,7 +92,10 @@ async function handlePost(request: NextRequest) {
     return NextResponse.json({ error: 'Não autenticado.' }, { status: 401 })
   }
 
+  const idempotencyKey = parsed.data.idempotencyKey || randomUUID()
+  const requestHash = createHash('sha256').update(JSON.stringify({ conversationId: parsed.data.conversationId, content: parsed.data.content, mediaUrl: parsed.data.mediaUrl || null, mediaType: parsed.data.mediaType || null })).digest('hex')
   const db = supabase as unknown as TypedSupabase
+
 
   // RLS scopes this select to the caller's own organization automatically.
   const { data: conversationData } = await db
@@ -164,6 +169,27 @@ async function handlePost(request: NextRequest) {
 
   const provider = connection.connection_method === 'uazapi' ? uazapiProvider : conversation.channel_type === 'whatsapp' ? whatsappProvider : instagramProvider
 
+  const attemptsReader = admin as unknown as { from: (table: string) => { select: (columns: string) => { eq: (column: string, value: string) => { eq: (column: string, secondValue: string) => { maybeSingle: () => Promise<{ data: { request_hash: string; status: string; external_id: string | null; error_message: string | null } | null }> } } } } }
+  const { data: existingAttempt } = await attemptsReader.from('outbound_message_attempts').select('request_hash, status, external_id, error_message').eq('organization_id', conversation.organization_id).eq('idempotency_key', idempotencyKey).maybeSingle()
+  if (existingAttempt) {
+    if (existingAttempt.request_hash !== requestHash) return NextResponse.json({ error: 'Chave de idempotência reutilizada com outro conteúdo.' }, { status: 409 })
+    if (existingAttempt.status === 'sent') return NextResponse.json({ success: true, externalId: existingAttempt.external_id, idempotent: true })
+    if (existingAttempt.status === 'failed') return NextResponse.json({ error: existingAttempt.error_message || 'Esta tentativa já falhou.' }, { status: 502 })
+  }
+
+  const attemptsWriter = admin as unknown as { from: (table: string) => { insert: (data: unknown) => Promise<{ error: { message: string } | null }>; update: (data: unknown) => { eq: (column: string, value: string) => { eq: (column: string, secondValue: string) => Promise<{ error: { message: string } | null }> } } } }
+  await attemptsWriter.from('outbound_message_attempts').insert({
+    organization_id: conversation.organization_id,
+    user_id: user.id,
+    idempotency_key: idempotencyKey,
+    conversation_id: conversation.id,
+    content: parsed.data.content,
+    media_url: parsed.data.mediaUrl || null,
+    media_type: parsed.data.mediaType || null,
+    request_hash: requestHash,
+    status: 'pending',
+  })
+
   const result = await provider.sendMessage({
     organizationId: conversation.organization_id,
     conversationId: conversation.id,
@@ -189,10 +215,13 @@ async function handlePost(request: NextRequest) {
   })
 
   if (insertError) {
-    return NextResponse.json({ error: 'Mensagem enviada, mas falhou ao registrar no histórico.' }, { status: 500 })
+    await attemptsWriter.from('outbound_message_attempts').update({ status: 'sent', external_id: result.externalId || null, error_message: 'Histórico local indisponível após envio externo.' }).eq('organization_id', conversation.organization_id).eq('idempotency_key', idempotencyKey)
+    return NextResponse.json({ error: 'Mensagem enviada, mas o histórico local precisa ser reconciliado.', externalId: result.externalId || null }, { status: 503 })
   }
 
   await db.from('conversations').update({ last_message_at: new Date().toISOString() }).eq('id', conversation.id)
+
+  await attemptsWriter.from('outbound_message_attempts').update({ status: result.success ? 'sent' : 'failed', external_id: result.externalId || null, error_message: result.success ? null : (result.error || 'Falha no provedor.') }).eq('organization_id', conversation.organization_id).eq('idempotency_key', idempotencyKey)
 
   if (!result.success) {
     return NextResponse.json({ error: result.error || 'Falha ao enviar mensagem.' }, { status: 502 })

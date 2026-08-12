@@ -48,6 +48,7 @@ export interface DemoTask {
   assigneeId: string
   assigneeName: string
   clientName: string
+  contactId?: string
   priority: 'alta' | 'media' | 'baixa'
   isDemo: true
 }

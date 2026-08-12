@@ -8,6 +8,9 @@ const serverEnvSchema = z.object({
   META_WEBHOOK_VERIFY_TOKEN: z.string().optional(),
   META_APP_SECRET: z.string().optional(),
   INTEGRATION_ENCRYPTION_KEY: z.string().optional(),
+  NEXT_PUBLIC_VAPID_PUBLIC_KEY: z.string().optional(),
+  VAPID_PRIVATE_KEY: z.string().optional(),
+  VAPID_SUBJECT: z.string().url().optional(),
 })
 
 export type ServerEnv = z.infer<typeof serverEnvSchema>
@@ -39,6 +42,9 @@ export function getServerEnv(): ServerEnv {
     // como "não configurada" (undefined), forçando getEncryptionKey() a lançar erro
     // em vez de criptografar silenciosamente com uma chave pública e comprometida.
     INTEGRATION_ENCRYPTION_KEY: isProduction ? (isUnsafeKey ? undefined : envKey) : (envKey || KNOWN_FALLBACK_KEY),
+    NEXT_PUBLIC_VAPID_PUBLIC_KEY: process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || undefined,
+    VAPID_PRIVATE_KEY: process.env.VAPID_PRIVATE_KEY || undefined,
+    VAPID_SUBJECT: process.env.VAPID_SUBJECT || undefined,
   }
 
   const result = serverEnvSchema.safeParse(rawEnv)

@@ -61,11 +61,34 @@ export async function mirrorMediaToStorage(params: {
     }
 
     const mimetype = params.mimetypeHint || res.headers.get('content-type') || undefined
-    const buffer = Buffer.from(await res.arrayBuffer())
-    if (buffer.byteLength > MAX_MEDIA_SIZE_BYTES) {
-      console.error(`mirrorMediaToStorage: arquivo de origem maior que o limite (${buffer.byteLength} bytes)`)
+    if (!res.body) {
+      console.error('mirrorMediaToStorage: resposta sem corpo de mídia')
       return null
     }
+
+    // Read chunked responses with a hard cap. Checking Content-Length alone is not
+    // sufficient because providers may omit it or use transfer-encoding: chunked.
+    const reader = res.body.getReader()
+    const chunks: Uint8Array[] = []
+    let totalBytes = 0
+    try {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        if (!value) continue
+        totalBytes += value.byteLength
+        if (totalBytes > MAX_MEDIA_SIZE_BYTES) {
+          await reader.cancel()
+          console.error(`mirrorMediaToStorage: arquivo de origem excedeu o limite de ${MAX_MEDIA_SIZE_BYTES} bytes`)
+          return null
+        }
+        chunks.push(value)
+      }
+    } finally {
+      reader.releaseLock()
+    }
+
+    const buffer = Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)), totalBytes)
     const ext = guessExtension(mimetype, params.sourceUrl)
     const path = `${params.organizationId}/${params.conversationId || 'inbound'}/${Date.now()}-${randomUUID()}.${ext}`
 

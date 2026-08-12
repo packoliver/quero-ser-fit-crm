@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   Kanban,
   Plus,
@@ -25,6 +25,8 @@ import { EmptyState } from '@/components/ui/EmptyState'
 import { createClient } from '@/lib/supabase/client'
 import { DealStage } from '@/types/database'
 import { useDemoStorage } from '@/lib/demo/useDemoStorage'
+import { cacheEntity, readCachedEntity, queueEntityMutation } from '@/lib/offline/repository'
+import { getOfflineScope } from '@/lib/offline/scope'
 
 export interface RealDeal {
   id: string
@@ -106,18 +108,35 @@ export default function FunilPage() {
   const [error, setError] = useState<string | null>(null)
   const [toastMessage, setToastMessage] = useState<string | null>(null)
   const [draggedId, setDraggedId] = useState<string | null>(null)
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => () => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
+  }, [])
 
   const [newDeal, setNewDeal] = useState({ title: '', contactId: '', value: '', notes: '' })
   const [editDealData, setEditDealData] = useState({ id: '', title: '', value: '', notes: '' })
 
   const showToast = (msg: string) => {
     setToastMessage(msg)
-    setTimeout(() => setToastMessage(null), 3500)
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
+    toastTimerRef.current = setTimeout(() => {
+      setToastMessage(null)
+      toastTimerRef.current = null
+    }, 3500)
   }
 
   const fetchRealDeals = useCallback(async () => {
     setLoading(true)
     setError(null)
+    const offlineScope = await getOfflineScope()
+    if (!navigator.onLine && offlineScope) {
+      const cached = await readCachedEntity<RealDeal[]>(offlineScope, 'deals')
+      if (cached) setRealDeals(cached)
+      else setError('Sem conexão e sem pedidos armazenados neste dispositivo.')
+      setLoading(false)
+      return
+    }
     try {
       const supabase = createClient()
       const { data, error: dbError } = await (supabase as unknown as {
@@ -135,6 +154,7 @@ export default function FunilPage() {
         setViewMode('demo')
       } else if (data) {
         setRealDeals(data)
+        if (offlineScope) await cacheEntity(offlineScope, 'deals', data)
       }
     } catch {
       setViewMode('demo')
@@ -197,11 +217,17 @@ export default function FunilPage() {
     if (dealStage(deal) === newStage) return
 
     if (viewMode === 'real' && isRealDeal(deal)) {
+      const offlineScope = await getOfflineScope()
+      const updates: Record<string, unknown> = { stage: newStage }
+      if (newStage === 'fechado' && !deal.closed_at) updates.closed_at = new Date().toISOString()
+      if (!navigator.onLine && offlineScope) {
+        await queueEntityMutation(offlineScope, 'deal.update', { id: deal.id, ...updates }, null)
+        setRealDeals((prev) => prev.map((d) => (d.id === deal.id ? { ...d, stage: newStage, closed_at: (updates.closed_at as string) || d.closed_at } : d)))
+        showToast('Etapa salva localmente e aguardando sincronização.')
+        return
+      }
       try {
         const supabase = createClient()
-        const updates: Record<string, unknown> = { stage: newStage }
-        if (newStage === 'fechado' && !deal.closed_at) updates.closed_at = new Date().toISOString()
-
         const { error: updateError } = await (supabase as unknown as {
           from: (t: string) => {
             update: (d: unknown) => { eq: (col: string, val: string) => Promise<{ error: { message: string } | null }> }

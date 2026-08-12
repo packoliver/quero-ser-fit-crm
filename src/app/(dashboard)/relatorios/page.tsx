@@ -20,6 +20,8 @@ import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { createClient } from '@/lib/supabase/client'
 import { useDemoStorage } from '@/lib/demo/useDemoStorage'
+import { cacheEntity, readCachedEntity } from '@/lib/offline/repository'
+import { getOfflineScope } from '@/lib/offline/scope'
 
 export interface RealMetrics {
   totalContacts: number
@@ -47,6 +49,7 @@ export default function RelatoriosPage() {
   })
   const [realAttendantPerformance, setRealAttendantPerformance] = useState<RealAttendantPerformance[]>([])
   const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   // Calculations extracted directly from db in real-time
   const totalContacts = db.contacts.length
@@ -84,6 +87,19 @@ export default function RelatoriosPage() {
 
   const fetchRealMetrics = useCallback(async () => {
     setLoading(true)
+    const offlineScope = await getOfflineScope().catch(() => null)
+    if (!navigator.onLine && offlineScope) {
+      const cached = await readCachedEntity<{ metrics: RealMetrics; performance: RealAttendantPerformance[] }>(offlineScope, 'reports')
+      if (cached) {
+        setRealMetrics(cached.metrics)
+        setRealAttendantPerformance(cached.performance)
+        setError('Você está offline. Estes indicadores podem estar desatualizados.')
+      } else {
+        setError('Sem conexão e sem indicadores armazenados neste dispositivo.')
+      }
+      setLoading(false)
+      return
+    }
     try {
       const supabase = createClient()
 
@@ -123,17 +139,24 @@ export default function RelatoriosPage() {
       const convData = (allConvRes.data || []) as Array<{ current_assignee_id: string | null }>
       const taskData = (completedTaskRowsRes.data || []) as Array<{ assigned_to_id: string | null; status: string }>
 
-      setRealAttendantPerformance(
-        membersData.map((m) => ({
-          id: m.user_id,
-          name: m.profiles?.full_name || 'Membro',
-          role: m.role,
-          assignedConvs: convData.filter((c) => c.current_assignee_id === m.user_id).length,
-          completedTasks: taskData.filter((t) => t.assigned_to_id === m.user_id && t.status === 'completed').length,
-        }))
-      )
+      const performance = membersData.map((m) => ({
+        id: m.user_id,
+        name: m.profiles?.full_name || 'Membro',
+        role: m.role,
+        assignedConvs: convData.filter((c) => c.current_assignee_id === m.user_id).length,
+        completedTasks: taskData.filter((t) => t.assigned_to_id === m.user_id && t.status === 'completed').length,
+      }))
+      setRealAttendantPerformance(performance)
+      if (offlineScope) await cacheEntity(offlineScope, 'reports', { metrics: { totalContacts: contactsRes.count || 0, pendingTasks: pendingTasksRes.count || 0, completedTasks: completedTasksRes.count || 0, openConversations: convRes.count || 0 }, performance })
     } catch {
-      setViewMode('demo')
+      const cached = offlineScope ? await readCachedEntity<{ metrics: RealMetrics; performance: RealAttendantPerformance[] }>(offlineScope, 'reports').catch(() => null) : null
+      if (cached) {
+        setRealMetrics(cached.metrics)
+        setRealAttendantPerformance(cached.performance)
+        setError('Não foi possível atualizar. Exibindo indicadores sincronizados anteriormente.')
+      } else {
+        setViewMode('demo')
+      }
     } finally {
       setLoading(false)
     }
@@ -181,6 +204,7 @@ export default function RelatoriosPage() {
           <p className="text-xs text-slate-400 mt-1">
             Indicadores calculados dinamicamente em tempo real com base no armazenamento ativo do CRM.
           </p>
+          {error && <p role="status" className="text-xs text-amber-300 mt-2">{error}</p>}
         </div>
 
         <div className="flex items-center gap-2">

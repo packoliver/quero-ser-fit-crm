@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   CheckSquare,
   Plus,
@@ -24,6 +24,8 @@ import { Input } from '@/components/ui/Input'
 import { Modal } from '@/components/ui/Modal'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { createClient } from '@/lib/supabase/client'
+import { cacheEntity, readCachedEntity, queueEntityMutation } from '@/lib/offline/repository'
+import { getOfflineScope } from '@/lib/offline/scope'
 import { TaskStatus } from '@/types/database'
 import { useDemoStorage } from '@/lib/demo/useDemoStorage'
 
@@ -103,6 +105,11 @@ export default function TarefasPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [toastMessage, setToastMessage] = useState<string | null>(null)
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => () => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
+  }, [])
 
   // Forms State — clientName/assigneeName are free text, used only in demo mode;
   // contactId/assigneeId are real foreign keys, used only in real (Supabase) mode.
@@ -131,12 +138,24 @@ export default function TarefasPage() {
 
   const showToast = (msg: string) => {
     setToastMessage(msg)
-    setTimeout(() => setToastMessage(null), 3500)
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
+    toastTimerRef.current = setTimeout(() => {
+      setToastMessage(null)
+      toastTimerRef.current = null
+    }, 3500)
   }
 
   const fetchRealTasks = useCallback(async () => {
     setLoading(true)
     setError(null)
+    const offlineScope = await getOfflineScope()
+    if (!navigator.onLine && offlineScope) {
+      const cached = await readCachedEntity<RealTask[]>(offlineScope, 'tasks')
+      if (cached) setRealTasks(cached)
+      else setError('Sem conexão e sem tarefas armazenadas neste dispositivo.')
+      setLoading(false)
+      return
+    }
     try {
       const supabase = createClient()
       const typed = supabase as unknown as {
@@ -175,8 +194,7 @@ export default function TarefasPage() {
         profiles: { full_name: string | null } | null
       }>
 
-      setRealTasks(
-        rawTasks.map((t) => ({
+      const mappedTasks = rawTasks.map((t) => ({
           id: t.id,
           title: t.title,
           description: t.description,
@@ -189,7 +207,8 @@ export default function TarefasPage() {
           contact_name: t.contacts?.name || null,
           created_at: t.created_at,
         }))
-      )
+      setRealTasks(mappedTasks)
+      if (offlineScope) await cacheEntity(offlineScope, 'tasks', mappedTasks)
 
       const membersData = (membersRes.data || []) as Array<{ user_id: string; profiles: { full_name: string | null } | null }>
       setRealTeamMembers(membersData.map((m) => ({ id: m.user_id, fullName: m.profiles?.full_name || 'Membro' })))
@@ -215,6 +234,13 @@ export default function TarefasPage() {
     const nextStatus: TaskStatus = task.status === 'completed' ? 'pending' : 'completed'
 
     if (viewMode === 'real' && 'created_at' in task) {
+      const offlineScope = await getOfflineScope()
+      if (!navigator.onLine && offlineScope) {
+        await queueEntityMutation(offlineScope, 'task.update', { id: task.id, status: nextStatus }, null)
+        setRealTasks((prev) => prev.map((t) => (t.id === task.id ? { ...t, status: nextStatus } : t)))
+        showToast('Status salvo localmente e aguardando sincronização.')
+        return
+      }
       try {
         const supabase = createClient()
         const { error: updateError } = await (supabase as unknown as {

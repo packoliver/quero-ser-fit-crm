@@ -67,6 +67,8 @@ export interface IncomingWebhookEvent {
 export interface MessageStatusUpdate {
   externalId: string
   status: 'sent' | 'delivered' | 'read' | 'failed'
+  /** Provider account identifier used to bind the receipt to one connection. */
+  recipientId?: string
 }
 
 export interface ICRMIntegrationProvider {
