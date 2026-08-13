@@ -34,7 +34,7 @@ export async function updateSession(request: NextRequest) {
   } = await supabase.auth.getUser()
 
   const pathname = request.nextUrl.pathname
-  const publicRoutes = ['/login', '/recuperar-senha', '/api/webhooks', '/api/push/vapid-public-key']
+  const publicRoutes = ['/login', '/recuperar-senha', '/politica-de-privacidade', '/api/webhooks', '/api/push/vapid-public-key']
   const isPublicRoute = publicRoutes.some((route) => pathname.startsWith(route))
   const isApiRoute = pathname.startsWith('/api/') && !pathname.startsWith('/api/webhooks')
 
