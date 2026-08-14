@@ -8,6 +8,13 @@ const serverEnvSchema = z.object({
   META_WEBHOOK_VERIFY_TOKEN: z.string().optional(),
   META_APP_ID: z.string().optional(),
   META_APP_SECRET: z.string().optional(),
+  // "Instagram API com login do Instagram" é um app próprio dentro do app da Meta, com
+  // ID e chave secreta SEPARADOS (painel: Instagram → Configuração da API com login do
+  // Instagram). O Business Login e a assinatura dos webhooks do Instagram usam essas
+  // credenciais — usar as da Meta faz o OAuth falhar na troca do code e os webhooks
+  // chegarem com assinatura inválida (401).
+  INSTAGRAM_APP_ID: z.string().optional(),
+  INSTAGRAM_APP_SECRET: z.string().optional(),
   META_OAUTH_REDIRECT_URI: z.string().url().optional(),
   META_OAUTH_SCOPES: z.string().optional(),
   INTEGRATION_ENCRYPTION_KEY: z.string().optional(),
@@ -42,6 +49,8 @@ export function getServerEnv(): ServerEnv {
     META_WEBHOOK_VERIFY_TOKEN: process.env.META_WEBHOOK_VERIFY_TOKEN || undefined,
     META_APP_ID: process.env.META_APP_ID || undefined,
     META_APP_SECRET: process.env.META_APP_SECRET || undefined,
+    INSTAGRAM_APP_ID: process.env.INSTAGRAM_APP_ID || undefined,
+    INSTAGRAM_APP_SECRET: process.env.INSTAGRAM_APP_SECRET || undefined,
     META_OAUTH_REDIRECT_URI: process.env.META_OAUTH_REDIRECT_URI || undefined,
     META_OAUTH_SCOPES: process.env.META_OAUTH_SCOPES || undefined,
     // Em produção, uma chave ausente OU igual ao fallback conhecido de dev é tratada

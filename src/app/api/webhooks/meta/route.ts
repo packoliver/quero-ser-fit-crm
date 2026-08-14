@@ -139,7 +139,16 @@ export async function POST(request: NextRequest) {
   try {
     const env = getServerEnv()
 
-    if (!env.META_APP_SECRET) {
+    // O Instagram assina os webhooks com a chave secreta do APP DO INSTAGRAM, que é
+    // diferente da chave do app da Meta usada pelo WhatsApp. Como o mesmo endpoint
+    // recebe os dois, aceitamos a assinatura de qualquer um dos dois segredos (ambos
+    // são nossos): validar só contra META_APP_SECRET rejeitava todo webhook do
+    // Instagram com 401 e nenhuma mensagem chegava.
+    const candidateSecrets = [env.META_APP_SECRET, env.INSTAGRAM_APP_SECRET].filter(
+      (secret): secret is string => !!secret
+    )
+
+    if (candidateSecrets.length === 0) {
       return NextResponse.json(
         { error: 'Serviço de webhook temporariamente indisponível.' },
         { status: 503 }
@@ -149,7 +158,9 @@ export async function POST(request: NextRequest) {
     const rawBody = await request.text()
     const signatureHeader = request.headers.get('x-hub-signature-256')
 
-    const isSignatureValid = verifyMetaHmacSignature(rawBody, signatureHeader, env.META_APP_SECRET)
+    const isSignatureValid = candidateSecrets.some((secret) =>
+      verifyMetaHmacSignature(rawBody, signatureHeader, secret)
+    )
     if (!isSignatureValid) {
       return NextResponse.json(
         { error: 'Assinatura de segurança inválida ou ausente.' },

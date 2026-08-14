@@ -15,9 +15,31 @@ function base64Url(value: string | Buffer): string {
   return Buffer.from(value).toString('base64url')
 }
 
+/**
+ * O produto "Instagram API com login do Instagram" tem app ID e chave secreta próprios,
+ * exibidos em Instagram → Configuração da API com login do Instagram — diferentes do
+ * app ID/segredo da Meta que aparecem no topo do painel. O Business Login e a troca do
+ * code por token só aceitam as credenciais do Instagram; usar as da Meta devolve
+ * "Error validating verification code" mesmo com o redirect_uri correto.
+ *
+ * Mantemos o fallback pras variáveis META_* pra não quebrar quem já tinha configurado
+ * um app onde os dois valores coincidem, mas o correto é definir INSTAGRAM_APP_ID e
+ * INSTAGRAM_APP_SECRET.
+ */
+function getInstagramAppCredentials(): { appId?: string; appSecret?: string } {
+  const env = getServerEnv()
+  return {
+    appId: env.INSTAGRAM_APP_ID || env.META_APP_ID,
+    appSecret: env.INSTAGRAM_APP_SECRET || env.META_APP_SECRET,
+  }
+}
+
 function stateSignature(value: string): string {
-  const secret = getServerEnv().META_APP_SECRET
-  if (!secret) throw new Error('META_APP_SECRET não configurado.')
+  const env = getServerEnv()
+  // Segredo interno só pra assinar o state do OAuth: qualquer um dos dois serve, desde
+  // que seja o mesmo na criação e na verificação (mesmo processo, mesma ordem).
+  const secret = env.META_APP_SECRET || env.INSTAGRAM_APP_SECRET
+  if (!secret) throw new Error('META_APP_SECRET ou INSTAGRAM_APP_SECRET precisa estar configurado.')
   return createHmac('sha256', secret).update(value).digest('base64url')
 }
 
@@ -52,12 +74,13 @@ export function verifyMetaOAuthState(value: string): OAuthStatePayload | null {
 
 export function buildMetaInstagramOAuthUrl(state: string): string {
   const env = getServerEnv()
-  if (!env.META_APP_ID || !env.META_OAUTH_REDIRECT_URI) {
-    throw new Error('META_APP_ID e META_OAUTH_REDIRECT_URI precisam ser configurados.')
+  const { appId } = getInstagramAppCredentials()
+  if (!appId || !env.META_OAUTH_REDIRECT_URI) {
+    throw new Error('INSTAGRAM_APP_ID e META_OAUTH_REDIRECT_URI precisam ser configurados.')
   }
 
   const params = new URLSearchParams({
-    client_id: env.META_APP_ID,
+    client_id: appId,
     redirect_uri: env.META_OAUTH_REDIRECT_URI,
     response_type: 'code',
     scope: env.META_OAUTH_SCOPES || 'instagram_business_basic,instagram_business_manage_messages',
@@ -68,13 +91,14 @@ export function buildMetaInstagramOAuthUrl(state: string): string {
 
 export async function exchangeMetaInstagramCode(code: string): Promise<{ accessToken: string; userId: string }> {
   const env = getServerEnv()
-  if (!env.META_APP_ID || !env.META_APP_SECRET || !env.META_OAUTH_REDIRECT_URI) {
-    throw new Error('Configuração OAuth da Meta incompleta.')
+  const { appId, appSecret } = getInstagramAppCredentials()
+  if (!appId || !appSecret || !env.META_OAUTH_REDIRECT_URI) {
+    throw new Error('Configuração OAuth do Instagram incompleta.')
   }
 
   const body = new URLSearchParams({
-    client_id: env.META_APP_ID,
-    client_secret: env.META_APP_SECRET,
+    client_id: appId,
+    client_secret: appSecret,
     grant_type: 'authorization_code',
     redirect_uri: env.META_OAUTH_REDIRECT_URI,
     code,
@@ -99,14 +123,14 @@ export async function exchangeMetaInstagramCode(code: string): Promise<{ accessT
  * genérico da Meta, porque o token de 1h já expirou silenciosamente.
  */
 export async function exchangeForLongLivedInstagramToken(shortLivedToken: string): Promise<string> {
-  const env = getServerEnv()
-  if (!env.META_APP_SECRET) {
-    throw new Error('META_APP_SECRET não configurado.')
+  const { appSecret } = getInstagramAppCredentials()
+  if (!appSecret) {
+    throw new Error('INSTAGRAM_APP_SECRET não configurado.')
   }
 
   const params = new URLSearchParams({
     grant_type: 'ig_exchange_token',
-    client_secret: env.META_APP_SECRET,
+    client_secret: appSecret,
     access_token: shortLivedToken,
   })
   const response = await fetch(`https://graph.instagram.com/access_token?${params.toString()}`, {
@@ -120,6 +144,35 @@ export async function exchangeForLongLivedInstagramToken(shortLivedToken: string
     throw new Error(result.error?.message || 'Não foi possível estender a validade do token do Instagram.')
   }
   return result.access_token
+}
+
+/**
+ * Assina a conta recém-conectada nos webhooks de mensagens.
+ *
+ * Assinar o campo `messages` no painel do app não basta: a assinatura do painel só diz
+ * quais campos o APP quer receber. Cada conta profissional ainda precisa ser inscrita
+ * individualmente, e é isso que este POST faz — sem ele o webhook nunca dispara pra essa
+ * conta e o Direct simplesmente não chega, sem nenhum erro visível em lugar nenhum.
+ *
+ * Feito automaticamente no fim do OAuth pra não depender de ninguém lembrar de adicionar
+ * a conta manualmente em "Gerar tokens de acesso" no painel da Meta.
+ */
+export async function subscribeInstagramWebhooks(accessToken: string): Promise<{ ok: boolean; detail?: string }> {
+  try {
+    const params = new URLSearchParams({ subscribed_fields: 'messages' })
+    const response = await fetch(`https://graph.instagram.com/v25.0/me/subscribed_apps?${params.toString()}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${accessToken}` },
+      cache: 'no-store',
+    })
+    const result = await response.json().catch(() => ({})) as { success?: boolean; error?: { message?: string } }
+    if (!response.ok || result.success === false) {
+      return { ok: false, detail: result.error?.message || `HTTP ${response.status}` }
+    }
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, detail: err instanceof Error ? err.message : 'erro de rede' }
+  }
 }
 
 export async function fetchInstagramProfile(accessToken: string): Promise<{ id: string; username?: string }> {

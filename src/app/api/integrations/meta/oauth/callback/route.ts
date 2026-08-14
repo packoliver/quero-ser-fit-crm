@@ -8,6 +8,7 @@ import {
   exchangeMetaInstagramCode,
   fetchInstagramProfile,
   META_OAUTH_STATE_COOKIE,
+  subscribeInstagramWebhooks,
   verifyMetaOAuthState,
 } from '@/lib/integrations/meta-oauth'
 import { logAuditEvent } from '@/lib/security/audit'
@@ -69,6 +70,11 @@ export async function GET(request: Request) {
     }
 
     const profile = await fetchInstagramProfile(accessToken)
+
+    // Inscreve esta conta nos webhooks de mensagens. Sem isso a assinatura feita no
+    // painel do app não basta e nenhum Direct chega — falha silenciosa, sem erro visível.
+    const subscription = await subscribeInstagramWebhooks(accessToken)
+
     const admin = createAdminClient()
     const db = admin as unknown as {
       from: (table: string) => {
@@ -85,7 +91,11 @@ export async function GET(request: Request) {
       external_identifier: profile.id,
       status: 'active',
       encrypted_credentials: encryptToken(accessToken),
-      settings: { instagram_username: profile.username || null, auth_method: 'instagram_login' },
+      settings: {
+        instagram_username: profile.username || null,
+        auth_method: 'instagram_login',
+        ...(subscription.ok ? {} : { webhook_subscription_error: subscription.detail || 'desconhecido' }),
+      },
     }, { onConflict: 'organization_id,provider,external_identifier' }).select('id').single()
 
     if (error || !connection) throw new Error(error?.message || 'Não foi possível salvar a conexão.')
@@ -97,7 +107,13 @@ export async function GET(request: Request) {
       targetId: connection.id,
       details: { provider: 'instagram_meta', connectionMethod: 'oauth', externalIdentifier: profile.id },
     })
-    return redirect(request, 'meta_success', 'Instagram conectado com sucesso.')
+    return redirect(
+      request,
+      'meta_success',
+      subscription.ok
+        ? 'Instagram conectado com sucesso.'
+        : `Instagram conectado, mas a inscrição automática nos webhooks falhou (${subscription.detail}). As mensagens podem não chegar até isso ser resolvido.`
+    )
   } catch (error) {
     return redirect(request, 'meta_error', error instanceof Error ? error.message : 'Falha ao conectar o Instagram.')
   }
