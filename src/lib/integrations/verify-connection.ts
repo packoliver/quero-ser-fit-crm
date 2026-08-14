@@ -6,10 +6,24 @@ export interface VerifyResult {
   resolvedExternalId?: string
 }
 
-/** Validates a Cloud API token/identifier by asking Meta's Graph API for it directly. */
-export async function verifyCloudApiConnection(externalIdentifier: string, accessToken: string): Promise<VerifyResult> {
+/**
+ * Validates a Cloud API token/identifier by asking Meta's Graph API for it directly.
+ *
+ * WhatsApp Cloud API tokens are validated against graph.facebook.com. Instagram Direct
+ * tokens are issued through Instagram Login (graph.instagram.com) and are scoped to that
+ * host — presenting one to graph.facebook.com fails with "Invalid OAuth access token -
+ * Cannot parse access token" even though the token itself is fine, so Instagram must be
+ * verified against graph.instagram.com instead.
+ */
+export async function verifyCloudApiConnection(
+  externalIdentifier: string,
+  accessToken: string,
+  provider: 'whatsapp_cloud_api' | 'instagram_meta' = 'whatsapp_cloud_api'
+): Promise<VerifyResult> {
+  const host = provider === 'instagram_meta' ? 'graph.instagram.com' : 'graph.facebook.com'
+  const apiVersion = provider === 'instagram_meta' ? 'v25.0' : 'v20.0'
   try {
-    const res = await fetch(`https://graph.facebook.com/v20.0/${encodeURIComponent(externalIdentifier)}?fields=id`, {
+    const res = await fetch(`https://${host}/${apiVersion}/${encodeURIComponent(externalIdentifier)}?fields=id`, {
       headers: { Authorization: `Bearer ${accessToken}` },
     })
     const body = await res.json().catch(() => ({}))

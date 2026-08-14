@@ -161,7 +161,11 @@ export async function POST(request: NextRequest) {
 
     if (input.connectionMethod === 'cloud_api') {
       // Validate the token/identifier actually work against Meta's Graph API before saving.
-      const { ok: verifyOk, detail: verifyDetail } = await verifyCloudApiConnection(input.externalIdentifier, input.accessToken)
+      const { ok: verifyOk, detail: verifyDetail } = await verifyCloudApiConnection(
+        input.externalIdentifier,
+        input.accessToken,
+        input.provider === 'instagram_meta' ? 'instagram_meta' : 'whatsapp_cloud_api'
+      )
 
       const { data: inserted, error: insertError } = await adminDb
         .from('integration_connections')

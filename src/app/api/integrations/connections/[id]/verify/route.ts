@@ -132,7 +132,11 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
       if (!connection.external_identifier) {
         return NextResponse.json({ error: 'Conexão sem credenciais salvas — remova e cadastre novamente.' }, { status: 422 })
       }
-      const result = await verifyCloudApiConnection(connection.external_identifier, token)
+      const result = await verifyCloudApiConnection(
+        connection.external_identifier,
+        token,
+        connection.provider === 'instagram_meta' ? 'instagram_meta' : 'whatsapp_cloud_api'
+      )
       ok = result.ok
       detail = result.detail
     }
