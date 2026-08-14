@@ -37,6 +37,49 @@ export const initialSeedDatabase: DemoDatabase = {
 }
 
 /**
+ * Validates the shape of a parsed DemoDatabase to ensure all required arrays are present.
+ * Returns true if valid; logs details on failure.
+ */
+function validateDemoDatabase(parsed: unknown): parsed is DemoDatabase {
+  if (!parsed || typeof parsed !== 'object') {
+    if (process.env.NODE_ENV === 'development') {
+      console.warn('[DemoStorage] Parsed value is not an object')
+    }
+    return false
+  }
+
+  const db = parsed as Record<string, unknown>
+  const required: (keyof DemoDatabase)[] = ['version', 'contacts', 'tasks', 'deals', 'conversations', 'members', 'updatedAt']
+
+  for (const key of required) {
+    if (!(key in db)) {
+      if (process.env.NODE_ENV === 'development') {
+        console.warn(`[DemoStorage] Missing required field: ${String(key)}`)
+      }
+      return false
+    }
+
+    if (key !== 'version' && key !== 'updatedAt') {
+      if (!Array.isArray(db[key])) {
+        if (process.env.NODE_ENV === 'development') {
+          console.warn(`[DemoStorage] Field ${String(key)} is not an array`)
+        }
+        return false
+      }
+    }
+  }
+
+  if (db.version !== DEMO_STORAGE_VERSION) {
+    if (process.env.NODE_ENV === 'development') {
+      console.warn(`[DemoStorage] Version mismatch: expected ${DEMO_STORAGE_VERSION}, got ${db.version}`)
+    }
+    return false
+  }
+
+  return true
+}
+
+/**
  * Returns the current DemoDatabase from localStorage or initializes it with seed defaults.
  */
 export function getDemoDatabase(): DemoDatabase {
@@ -51,32 +94,29 @@ export function getDemoDatabase(): DemoDatabase {
       return initialSeedDatabase
     }
 
-    const parsed = JSON.parse(raw) as Partial<DemoDatabase>
-    if (!parsed || parsed.version !== DEMO_STORAGE_VERSION || !Array.isArray(parsed.contacts)) {
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(raw)
+    } catch (parseErr) {
       if (process.env.NODE_ENV === 'development') {
-        console.warn('[DemoStorage] Versão incompatível ou JSON corrompido. Restaurando dados padrão.')
+        console.warn('[DemoStorage] JSON parse error:', parseErr)
       }
       saveDemoDatabase(initialSeedDatabase)
       return initialSeedDatabase
     }
 
-    // `deals` is newer than the rest of this schema — a localStorage blob saved before
-    // this feature shipped won't have the key at all (still version 1, since the shape
-    // change didn't bump DEMO_STORAGE_VERSION). Backfill it from the seed data instead of
-    // defaulting to an empty array, so returning demo users see the example pipeline too
-    // instead of a permanently empty Funil.
-    return {
-      version: DEMO_STORAGE_VERSION,
-      contacts: parsed.contacts || [],
-      tasks: parsed.tasks || [],
-      deals: parsed.deals || demoDeals,
-      conversations: parsed.conversations || [],
-      members: parsed.members || [],
-      updatedAt: parsed.updatedAt || new Date().toISOString(),
+    if (!validateDemoDatabase(parsed)) {
+      if (process.env.NODE_ENV === 'development') {
+        console.warn('[DemoStorage] Schema validation failed. Restoring defaults.')
+      }
+      saveDemoDatabase(initialSeedDatabase)
+      return initialSeedDatabase
     }
+
+    return parsed
   } catch (err) {
     if (process.env.NODE_ENV === 'development') {
-      console.warn('[DemoStorage] Erro ao carregar localStorage:', err)
+      console.warn('[DemoStorage] Unexpected error loading localStorage:', err)
     }
     saveDemoDatabase(initialSeedDatabase)
     return initialSeedDatabase
@@ -85,9 +125,10 @@ export function getDemoDatabase(): DemoDatabase {
 
 /**
  * Saves DemoDatabase to localStorage and triggers storage change event for UI reactivity.
+ * Returns true on success; false if localStorage write failed (quota exceeded, private mode, etc.)
  */
-export function saveDemoDatabase(db: DemoDatabase): void {
-  if (typeof window === 'undefined') return
+export function saveDemoDatabase(db: DemoDatabase): boolean {
+  if (typeof window === 'undefined') return false
 
   try {
     const updatedDb: DemoDatabase = {
@@ -98,10 +139,12 @@ export function saveDemoDatabase(db: DemoDatabase): void {
     localStorage.setItem(DEMO_STORAGE_KEY, JSON.stringify(updatedDb))
 
     window.dispatchEvent(new CustomEvent(DEMO_STORAGE_EVENT, { detail: updatedDb }))
+    return true
   } catch (err) {
     if (process.env.NODE_ENV === 'development') {
-      console.error('[DemoStorage] Erro ao salvar no localStorage:', err)
+      console.error('[DemoStorage] Failed to write to localStorage:', err)
     }
+    return false
   }
 }
 
@@ -125,7 +168,7 @@ export function saveStoredContact(contact: Omit<DemoContact, 'id' | 'createdAt' 
   const db = getDemoDatabase()
   const newContact: DemoContact = {
     ...contact,
-    id: `c-${Date.now()}`,
+    id: `c-${crypto.randomUUID().slice(0, 8)}`,
     createdAt: new Date().toLocaleDateString('pt-BR'),
     isDemo: true,
   }
@@ -141,11 +184,9 @@ export function updateStoredContact(
 ): DemoContact | null {
   const db = getDemoDatabase()
   let updatedContact: DemoContact | null = null
-  let oldName = ''
 
   const updatedContacts = db.contacts.map((c) => {
     if (c.id === contactId) {
-      oldName = c.name
       updatedContact = { ...c, ...updates }
       return updatedContact
     }
@@ -154,9 +195,9 @@ export function updateStoredContact(
 
   if (updatedContact) {
     const targetContact = updatedContact as DemoContact
-    // Omnichannel Cascade: sync contact name/phone in conversations and tasks
+    // Cascade by ID only — never match by name (names are mutable and non-unique)
     const updatedConversations = db.conversations.map((conv) => {
-      if (conv.contactId === contactId || (oldName && conv.contactName === oldName)) {
+      if (conv.contactId === contactId) {
         return {
           ...conv,
           contactName: targetContact.name,
@@ -167,7 +208,7 @@ export function updateStoredContact(
     })
 
     const updatedTasks = db.tasks.map((task) => {
-      if (oldName && task.clientName === oldName) {
+      if (task.contactId === contactId) {
         return {
           ...task,
           clientName: targetContact.name,
@@ -193,9 +234,9 @@ export function deleteStoredContact(contactId: string): boolean {
 
   const updatedContacts = db.contacts.filter((c) => c.id !== contactId)
 
-  // Omnichannel Cascade: clean up conversations referencing deleted contact to avoid orphan state
+  // Cascade by ID only — never match by name
   const updatedConversations = db.conversations.filter(
-    (conv) => conv.contactId !== contactId && conv.contactName !== targetContact.name
+    (conv) => conv.contactId !== contactId
   )
 
   saveDemoDatabase({
@@ -218,7 +259,7 @@ export function saveStoredTask(task: Omit<DemoTask, 'id' | 'isDemo'>): DemoTask 
   const db = getDemoDatabase()
   const newTask: DemoTask = {
     ...task,
-    id: `t-${Date.now()}`,
+    id: `t-${crypto.randomUUID().slice(0, 8)}`,
     isDemo: true,
   }
 
@@ -290,7 +331,7 @@ export function saveStoredDeal(deal: Omit<DemoDeal, 'id' | 'createdAt' | 'isDemo
   const db = getDemoDatabase()
   const newDeal: DemoDeal = {
     ...deal,
-    id: `d-${Date.now()}`,
+    id: `d-${crypto.randomUUID().slice(0, 8)}`,
     createdAt: new Date().toLocaleDateString('pt-BR'),
     isDemo: true,
   }
@@ -373,7 +414,7 @@ export function addMessageToConversation(
   const updatedConversations = db.conversations.map((conv) => {
     if (conv.id === convId) {
       const newMessage = {
-        id: `msg-${Date.now()}`,
+        id: `msg-${crypto.randomUUID().slice(0, 8)}`,
         senderType,
         senderName,
         content,
@@ -410,7 +451,7 @@ export function addInternalNoteToConversation(
   const updatedConversations = db.conversations.map((conv) => {
     if (conv.id === convId) {
       const newNote = {
-        id: `note-${Date.now()}`,
+        id: `note-${crypto.randomUUID().slice(0, 8)}`,
         author,
         text,
         date: nowTime,
@@ -447,7 +488,7 @@ export function updateConversationAssignee(
         : 'Atendimento liberado (sem responsável).'
 
       const systemMsg = {
-        id: `sys-${Date.now()}`,
+        id: `sys-${crypto.randomUUID().slice(0, 8)}`,
         senderType: 'system' as const,
         senderName: 'Sistema',
         content: systemContent,
@@ -476,6 +517,41 @@ export function updateConversationAssignee(
 // Member Helpers
 // ==========================================
 
+/**
+ * Checks if changing a member's admin status would violate the single-active-admin rule.
+ * Returns true if the change is safe to proceed; false if it would be disallowed.
+ */
+function canChangeAdminStatus(
+  memberId: string,
+  newRole: DemoTeamMember['role'] | null,
+  newStatus: DemoTeamMember['status'] | null
+): boolean {
+  const db = getDemoDatabase()
+  const target = db.members.find((m) => m.id === memberId)
+  if (!target) return true
+
+  // Only restrict if target is currently an active admin
+  if (target.role !== 'admin' || target.status !== 'active') {
+    return true
+  }
+
+  // Count active admins excluding this member
+  const activeAdminCount = db.members.filter(
+    (m) => m.id !== memberId && m.role === 'admin' && m.status === 'active'
+  ).length
+
+  // If there are other active admins, this one can be changed
+  if (activeAdminCount > 0) {
+    return true
+  }
+
+  // This is the sole active admin. Check if the proposed change would remove that status.
+  const wouldRemoveAdminStatus =
+    (newRole !== null && newRole !== 'admin') || (newStatus !== null && newStatus !== 'active')
+
+  return !wouldRemoveAdminStatus
+}
+
 export function getStoredMembers(): DemoTeamMember[] {
   return getDemoDatabase().members
 }
@@ -484,7 +560,7 @@ export function saveStoredMember(member: Omit<DemoTeamMember, 'id' | 'joinedAt' 
   const db = getDemoDatabase()
   const newMember: DemoTeamMember = {
     ...member,
-    id: `att-${Date.now()}`,
+    id: `att-${crypto.randomUUID().slice(0, 8)}`,
     joinedAt: new Date().toLocaleDateString('pt-BR'),
     isDemo: true,
   }
@@ -495,20 +571,15 @@ export function saveStoredMember(member: Omit<DemoTeamMember, 'id' | 'joinedAt' 
 }
 
 export function updateStoredMemberRole(memberId: string, newRole: DemoTeamMember['role']): DemoTeamMember | null {
+  if (!canChangeAdminStatus(memberId, newRole, null)) {
+    if (process.env.NODE_ENV === 'development') {
+      console.warn('[DemoStorage] Operation denied: cannot demote the sole active admin.')
+    }
+    return null
+  }
+
   const db = getDemoDatabase()
   let updatedMember: DemoTeamMember | null = null
-
-  // Last active admin safeguard
-  if (newRole === 'attendant') {
-    const adminCount = db.members.filter((m) => m.role === 'admin' && m.status === 'active').length
-    const target = db.members.find((m) => m.id === memberId)
-    if (target && target.role === 'admin' && adminCount <= 1) {
-      if (process.env.NODE_ENV === 'development') {
-        console.warn('[DemoStorage] Operação negada: não é permitido alterar o único admin ativo.')
-      }
-      return null
-    }
-  }
 
   const updatedMembers = db.members.map((m) => {
     if (m.id === memberId) {
@@ -528,20 +599,15 @@ export function updateStoredMemberStatus(
   memberId: string,
   newStatus: DemoTeamMember['status']
 ): DemoTeamMember | null {
+  if (!canChangeAdminStatus(memberId, null, newStatus)) {
+    if (process.env.NODE_ENV === 'development') {
+      console.warn('[DemoStorage] Operation denied: cannot deactivate the sole active admin.')
+    }
+    return null
+  }
+
   const db = getDemoDatabase()
   let updatedMember: DemoTeamMember | null = null
-
-  // Last active admin safeguard
-  if (newStatus !== 'active') {
-    const adminCount = db.members.filter((m) => m.role === 'admin' && m.status === 'active').length
-    const target = db.members.find((m) => m.id === memberId)
-    if (target && target.role === 'admin' && target.status === 'active' && adminCount <= 1) {
-      if (process.env.NODE_ENV === 'development') {
-        console.warn('[DemoStorage] Operação negada: não é permitido desativar o único admin ativo.')
-      }
-      return null
-    }
-  }
 
   const updatedMembers = db.members.map((m) => {
     if (m.id === memberId) {
@@ -558,17 +624,16 @@ export function updateStoredMemberStatus(
 }
 
 export function deleteStoredMember(memberId: string): boolean {
+  if (!canChangeAdminStatus(memberId, 'attendant', 'inactive')) {
+    if (process.env.NODE_ENV === 'development') {
+      console.warn('[DemoStorage] Operation denied: cannot delete the sole active admin.')
+    }
+    return false
+  }
+
   const db = getDemoDatabase()
   const target = db.members.find((m) => m.id === memberId)
   if (!target) return false
-
-  // Last active admin safeguard
-  if (target.role === 'admin' && target.status === 'active') {
-    const adminCount = db.members.filter((m) => m.role === 'admin' && m.status === 'active').length
-    if (adminCount <= 1) {
-      return false
-    }
-  }
 
   const updatedMembers = db.members.filter((m) => m.id !== memberId)
   if (updatedMembers.length < db.members.length) {

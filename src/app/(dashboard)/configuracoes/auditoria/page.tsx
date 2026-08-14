@@ -6,6 +6,8 @@ import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { createClient } from '@/lib/supabase/client'
+import { cacheEntity, readCachedEntity } from '@/lib/offline/repository'
+import { getOfflineScope } from '@/lib/offline/scope'
 
 interface AuditLogRow {
   id: string
@@ -51,6 +53,16 @@ export default function AuditoriaPage() {
   const [hasMore, setHasMore] = useState(true)
 
   const fetchLogs = useCallback(async (offset: number) => {
+    const offlineScope = await getOfflineScope().catch(() => null)
+    if (!navigator.onLine && offlineScope) {
+      const cached = await readCachedEntity<AuditLogRow[]>(offlineScope, 'audit-logs')
+      if (cached) {
+        if (offset === 0) setLogs(cached)
+        return { rows: offset === 0 ? cached : [], ok: true }
+      }
+      setError('Sem conexão e sem log de auditoria armazenado neste dispositivo.')
+      return { rows: [], ok: false }
+    }
     const supabase = createClient()
     const { data, error: fetchError } = await (supabase as unknown as {
       from: (t: string) => {
@@ -75,6 +87,7 @@ export default function AuditoriaPage() {
       return { rows: [], ok: false }
     }
 
+    if (data && offlineScope && offset === 0) await cacheEntity(offlineScope, 'audit-logs', data)
     return { rows: data || [], ok: true }
   }, [])
 

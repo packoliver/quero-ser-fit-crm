@@ -16,7 +16,7 @@ export type TaskStatus = 'pending' | 'in_progress' | 'completed' | 'cancelled'
 export type DealStage = 'lead' | 'negociando' | 'fechado' | 'entrega' | 'posvenda' | 'perdido'
 export type IntegrationProvider = 'whatsapp_meta' | 'instagram_meta' | 'whatsapp_uazapi'
 export type IntegrationStatus = 'active' | 'inactive' | 'error'
-export type IntegrationConnectionMethod = 'cloud_api' | 'uazapi'
+export type IntegrationConnectionMethod = 'cloud_api' | 'oauth' | 'uazapi'
 
 export interface CustomPermissions {
   // Inbox / Atendimento
@@ -35,6 +35,9 @@ export interface CustomPermissions {
 
   // Tarefas
   create_tasks?: boolean
+  edit_tasks?: boolean
+  create_deals?: boolean
+  edit_deals?: boolean
   assign_tasks_to_others?: boolean
   delete_tasks?: boolean
 
@@ -576,6 +579,8 @@ export interface Database {
           processed: boolean
           processed_at: string | null
           error_message: string | null
+          organization_id: string | null
+          integration_connection_id: string | null
           created_at: string
         }
         Insert: {
@@ -587,6 +592,8 @@ export interface Database {
           processed?: boolean
           processed_at?: string | null
           error_message?: string | null
+          organization_id?: string | null
+          integration_connection_id?: string | null
           created_at?: string
         }
         Update: {
@@ -598,7 +605,44 @@ export interface Database {
           processed?: boolean
           processed_at?: string | null
           error_message?: string | null
+          organization_id?: string | null
+          integration_connection_id?: string | null
           created_at?: string
+        }
+      }
+      push_subscriptions: {
+        Row: {
+          id: string
+          organization_id: string
+          user_id: string
+          endpoint: string
+          p256dh: string
+          auth: string
+          user_agent: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          organization_id: string
+          user_id: string
+          endpoint: string
+          p256dh: string
+          auth: string
+          user_agent?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          organization_id?: string
+          user_id?: string
+          endpoint?: string
+          p256dh?: string
+          auth?: string
+          user_agent?: string | null
+          created_at?: string
+          updated_at?: string
         }
       }
     }

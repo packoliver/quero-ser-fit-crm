@@ -18,6 +18,8 @@ import { Badge } from '@/components/ui/Badge'
 import { Avatar } from '@/components/ui/Avatar'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { createClient } from '@/lib/supabase/client'
+import { cacheEntity, readCachedEntity } from '@/lib/offline/repository'
+import { getOfflineScope } from '@/lib/offline/scope'
 
 interface FollowUpItem {
   conversationId: string
@@ -42,6 +44,18 @@ export default function FollowUpPage() {
   const fetchRealFollowUps = useCallback(async () => {
     setLoading(true)
     setError(null)
+    const offlineScope = await getOfflineScope().catch(() => null)
+    if (!navigator.onLine && offlineScope) {
+      const cached = await readCachedEntity<FollowUpItem[]>(offlineScope, 'follow-up')
+      if (cached) {
+        setItems(cached)
+        setError('Você está offline. Exibindo dados armazenados neste dispositivo.')
+      } else {
+        setError('Sem conexão e sem dados de follow-up armazenados.')
+      }
+      setLoading(false)
+      return
+    }
     try {
       const supabase = createClient()
       const { data, error: dbError } = await (supabase as unknown as {
@@ -87,9 +101,16 @@ export default function FollowUpPage() {
           .sort((a, b) => b.daysSince - a.daysSince)
 
         setItems(built)
+        if (offlineScope) await cacheEntity(offlineScope, 'follow-up', built)
       }
     } catch {
-      setViewMode('demo')
+      const cached = offlineScope ? await readCachedEntity<FollowUpItem[]>(offlineScope, 'follow-up').catch(() => null) : null
+      if (cached) {
+        setItems(cached)
+        setError('Não foi possível atualizar. Exibindo o último follow-up sincronizado.')
+      } else {
+        setViewMode('demo')
+      }
     } finally {
       setLoading(false)
     }

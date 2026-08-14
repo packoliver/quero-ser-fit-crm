@@ -33,15 +33,7 @@ async function resolveMediaForEvents(
   if (needsResolution.length === 0) return events
 
   const connectionCache = new Map<string, ConnectionForMedia | null>()
-  const db = admin as unknown as {
-    from: (t: string) => {
-      select: (c: string) => {
-        eq: (c: string, v: string) => {
-          eq: (c: string, v: string) => { maybeSingle: () => Promise<{ data: ConnectionForMedia | null }> }
-        }
-      }
-    }
-  }
+  const db = admin
 
   return Promise.all(
     events.map(async (event) => {
@@ -183,9 +175,18 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const providerType =
-      request.headers.get('x-meta-provider') ||
-      (jsonBody.object === 'whatsapp_business_account' ? 'whatsapp_meta' : 'instagram_meta')
+    const headerProvider = request.headers.get('x-meta-provider')
+    const providerType = headerProvider || (
+      jsonBody.object === 'whatsapp_business_account'
+        ? 'whatsapp_meta'
+        : jsonBody.object === 'instagram'
+          ? 'instagram_meta'
+          : null
+    )
+
+    if (providerType !== 'whatsapp_meta' && providerType !== 'instagram_meta') {
+      return NextResponse.json({ error: 'Objeto de webhook da Meta não reconhecido.' }, { status: 422 })
+    }
 
     const provider: ICRMIntegrationProvider = providerType === 'whatsapp_meta' ? whatsappProvider : instagramProvider
     const events = provider.parseWebhookPayload(jsonBody)
@@ -197,14 +198,38 @@ export async function POST(request: NextRequest) {
     try {
       admin = createAdminClient()
     } catch {
-      // No SUPABASE_SERVICE_ROLE_KEY configured — accept the webhook (avoid Meta retry
-      // storms) but we can't persist anything without it.
-      return NextResponse.json({ status: 'accepted', processed: 0, warning: 'admin client unavailable' }, { status: 200 })
+      // Persistence is required before acknowledging the provider.
+      return NextResponse.json(
+        { error: 'Serviço de webhook temporariamente indisponível.' },
+        { status: 503 }
+      )
     }
 
     const eventsWithMedia = await resolveMediaForEvents(admin, events)
     const processedCount = await processInboundEvents(admin, eventsWithMedia)
-    const statusUpdateCount = await applyStatusUpdates(admin, statusUpdates)
+
+    // Status updates must be scoped by organization/connection, using recipientId (phone_number_id)
+    // to find the matching connection before applying status changes.
+    let statusUpdateCount = 0
+    if (statusUpdates.length > 0) {
+      for (const update of statusUpdates) {
+        if (!update.recipientId) continue
+
+        const { data: connection } = await admin
+          .from('integration_connections')
+          .select('id, organization_id')
+          .eq('provider', 'whatsapp_meta')
+          .eq('external_identifier', update.recipientId)
+          .maybeSingle() as { data: { id: string; organization_id: string } | null; error?: unknown }
+
+        if (connection) {
+          statusUpdateCount += await applyStatusUpdates(admin, [update], {
+            connectionId: connection.id,
+            organizationId: connection.organization_id,
+          })
+        }
+      }
+    }
 
     return NextResponse.json(
       { status: 'success', processed: processedCount, statusUpdates: statusUpdateCount },

@@ -6,6 +6,9 @@ import { Header } from '@/components/layout/Header'
 import { MobileBottomNav } from '@/components/layout/MobileBottomNav'
 import { createClient } from '@/lib/supabase/client'
 import { UserRole } from '@/types/database'
+import { NetworkStatus } from '@/components/pwa/NetworkStatus'
+import { getOfflineScope } from '@/lib/offline/scope'
+import { replayOfflineMutations } from '@/lib/offline/sync'
 
 export default function DashboardLayout({
   children,
@@ -73,7 +76,14 @@ export default function DashboardLayout({
     }
 
     void resolveRealSession()
+
+    const replay = () => {
+      void getOfflineScope().then((scope) => scope && replayOfflineMutations(scope))
+    }
+    window.addEventListener('online', replay)
+    replay()
     return () => {
+      window.removeEventListener('online', replay)
       cancelled = true
     }
   }, [])
@@ -90,6 +100,7 @@ export default function DashboardLayout({
 
   return (
     <div className="min-h-screen bg-[#0b1320] text-slate-100 flex flex-row w-full overflow-x-hidden">
+      <NetworkStatus />
       {/* Desktop Navigation (Filtered by currentRole) */}
       <DesktopSidebar userRole={currentRole} />
 

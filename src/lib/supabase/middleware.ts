@@ -30,55 +30,41 @@ export async function updateSession(request: NextRequest) {
 
   const {
     data: { user },
+    error: authError,
   } = await supabase.auth.getUser()
 
-  const isUnconfiguredSupabase =
-    !process.env.NEXT_PUBLIC_SUPABASE_URL ||
-    process.env.NEXT_PUBLIC_SUPABASE_URL.includes('placeholder') ||
-    process.env.NEXT_PUBLIC_SUPABASE_URL === ''
-
-  // Check for Supabase auth cookies as a fallback indicator of an active session
-  const hasSupabaseAuthCookies = request.cookies.getAll().some(
-    (c) => c.name.includes('sb-') && c.name.includes('-auth-token')
-  )
-
-  const isDemoSession =
-    request.cookies.get('crm_demo_session')?.value === 'true' ||
-    process.env.NEXT_PUBLIC_ENABLE_DEMO_MODE === 'true' ||
-    isUnconfiguredSupabase
-
   const pathname = request.nextUrl.pathname
-  const publicRoutes = ['/login', '/recuperar-senha', '/api/webhooks']
+  const publicRoutes = ['/login', '/recuperar-senha', '/politica-de-privacidade', '/api/webhooks', '/api/push/vapid-public-key']
   const isPublicRoute = publicRoutes.some((route) => pathname.startsWith(route))
+  const isApiRoute = pathname.startsWith('/api/') && !pathname.startsWith('/api/webhooks')
 
-  // Protection 1: Unauthenticated user accessing protected dashboard routes
-  // Allow if: user is authenticated, OR demo session is active, OR Supabase auth cookies exist
-  if (!user && !isDemoSession && !hasSupabaseAuthCookies && !isPublicRoute && pathname !== '/') {
+  // A verified Supabase user is the only valid authentication signal. Cookies,
+  // demo flags, and placeholder configuration must never grant access.
+  if ((authError || !user) && !isPublicRoute && pathname !== '/') {
+    if (isApiRoute) {
+      return NextResponse.json({ error: 'Não autenticado.' }, { status: 401 })
+    }
     const url = request.nextUrl.clone()
     url.pathname = '/login'
     return NextResponse.redirect(url)
   }
 
-  // Protection 2: Authenticated user accessing login page
   if (user && pathname === '/login') {
     const url = request.nextUrl.clone()
     url.pathname = '/inbox'
     return NextResponse.redirect(url)
   }
 
-  // Protection 3: Role-based URL protection for admin & manager routes
   const isIntegrationsRoute = pathname.startsWith('/configuracoes/integracoes')
   const isEquipeRoute = pathname.startsWith('/configuracoes/equipe')
 
   if (user && (isIntegrationsRoute || isEquipeRoute)) {
-    // Query the user's role from organization_members
-    let role: UserRole | null = null
     try {
-      const { data: member } = await (supabase as unknown as {
+      const { data: member, error: memberError } = await (supabase as unknown as {
         from: (table: string) => {
           select: (cols: string) => {
             eq: (col: string, val: string) => {
-              single: () => Promise<{ data: { role: UserRole } | null }>
+              maybeSingle: () => Promise<{ data: { role: UserRole } | null; error: unknown }>
             }
           }
         }
@@ -86,31 +72,24 @@ export async function updateSession(request: NextRequest) {
         .from('organization_members')
         .select('role')
         .eq('user_id', user.id)
-        .single()
+        .maybeSingle()
 
-      role = member?.role || null
+      const role = memberError ? null : member?.role || null
+      const allowed =
+        (isIntegrationsRoute && role === 'admin') ||
+        (isEquipeRoute && (role === 'admin' || role === 'manager'))
+
+      if (!allowed) {
+        const url = request.nextUrl.clone()
+        url.pathname = '/inbox'
+        return NextResponse.redirect(url)
+      }
     } catch {
-      // If the query fails, allow access (fail-open for the admin user)
-      role = null
-    }
-
-    // If we couldn't determine the role, allow access (the user is authenticated)
-    // This prevents blocking the admin when the DB query fails
-    if (role !== null) {
-      if (isIntegrationsRoute && role !== 'admin') {
-        const url = request.nextUrl.clone()
-        url.pathname = '/inbox'
-        return NextResponse.redirect(url)
-      }
-
-      if (isEquipeRoute && role !== 'admin' && role !== 'manager') {
-        const url = request.nextUrl.clone()
-        url.pathname = '/inbox'
-        return NextResponse.redirect(url)
-      }
+      const url = request.nextUrl.clone()
+      url.pathname = '/inbox'
+      return NextResponse.redirect(url)
     }
   }
 
-  // Also allow access in demo mode (no authenticated user but demo session active)
   return supabaseResponse
 }

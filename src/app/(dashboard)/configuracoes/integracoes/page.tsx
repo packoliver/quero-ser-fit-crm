@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import {
   Phone,
   Info,
@@ -22,7 +23,7 @@ import { Select } from '@/components/ui/Select'
 import { Modal } from '@/components/ui/Modal'
 
 type Provider = 'whatsapp_meta' | 'instagram_meta' | 'whatsapp_uazapi'
-type ConnectionMethod = 'cloud_api' | 'uazapi'
+type ConnectionMethod = 'cloud_api' | 'oauth' | 'uazapi'
 
 interface Connection {
   id: string
@@ -40,6 +41,7 @@ const QR_POLL_INTERVAL_MS = 3000
 const QR_TIMEOUT_MS = 2 * 60 * 1000
 
 export default function IntegracoesConfigPage() {
+  const router = useRouter()
   const [connections, setConnections] = useState<Connection[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -50,6 +52,7 @@ export default function IntegracoesConfigPage() {
   const [formError, setFormError] = useState<string | null>(null)
   const [formWarning, setFormWarning] = useState<string | null>(null)
   const [toast, setToast] = useState<string | null>(null)
+  const [metaConnecting, setMetaConnecting] = useState(false)
 
   const [form, setForm] = useState({
     connectionMethod: 'cloud_api' as ConnectionMethod,
@@ -69,11 +72,18 @@ export default function IntegracoesConfigPage() {
   const [qrTimedOut, setQrTimedOut] = useState(false)
   const [qrError, setQrError] = useState<string | null>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const pollInFlightRef = useRef(false)
+  const mountedRef = useRef(false)
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const showToast = (msg: string) => {
+  const showToast = useCallback((msg: string) => {
     setToast(msg)
-    setTimeout(() => setToast(null), 4000)
-  }
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
+    toastTimerRef.current = setTimeout(() => {
+      setToast(null)
+      toastTimerRef.current = null
+    }, 4000)
+  }, [])
 
   const fetchConnections = useCallback(async () => {
     setLoading(true)
@@ -102,8 +112,26 @@ export default function IntegracoesConfigPage() {
   }, [fetchConnections])
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const success = params.get('meta_success')
+    const error = params.get('meta_error')
+    if (success || error) {
+      window.setTimeout(() => showToast(success || error || ''), 0)
+    }
+    if (success || error) {
+      window.history.replaceState({}, document.title, window.location.pathname)
+      if (success) window.setTimeout(() => void fetchConnections(), 0)
+    }
+  }, [fetchConnections, showToast])
+
+  useEffect(() => {
+    mountedRef.current = true
     return () => {
+      mountedRef.current = false
       if (pollRef.current) clearInterval(pollRef.current)
+      pollRef.current = null
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
+      toastTimerRef.current = null
     }
   }, [])
 
@@ -219,12 +247,13 @@ export default function IntegracoesConfigPage() {
     }
   }
 
-  const stopPolling = () => {
+  const stopPolling = useCallback(() => {
     if (pollRef.current) {
       clearInterval(pollRef.current)
       pollRef.current = null
     }
-  }
+    pollInFlightRef.current = false
+  }, [])
 
   const closeQrModal = () => {
     stopPolling()
@@ -238,9 +267,12 @@ export default function IntegracoesConfigPage() {
 
   const pollQrStatus = useCallback(
     async (connId: string, deadline: number) => {
+      if (!mountedRef.current || pollInFlightRef.current) return
+      pollInFlightRef.current = true
       try {
         const res = await fetch(`/api/integrations/connections/${connId}/connect`)
         const body = await res.json()
+        if (!mountedRef.current) return
         if (!res.ok) {
           setQrError(body.error || 'Falha ao consultar status da conexão.')
           return
@@ -251,7 +283,7 @@ export default function IntegracoesConfigPage() {
           setQrConnected(true)
           stopPolling()
           showToast('WhatsApp conectado com sucesso!')
-          fetchConnections()
+          void fetchConnections()
           return
         }
         if (Date.now() > deadline) {
@@ -259,11 +291,20 @@ export default function IntegracoesConfigPage() {
           stopPolling()
         }
       } catch {
-        setQrError('Erro de conexão ao consultar status.')
+        if (mountedRef.current) setQrError('Erro de conexão ao consultar status.')
+      } finally {
+        pollInFlightRef.current = false
       }
     },
-    [fetchConnections]
+    [fetchConnections, showToast, stopPolling]
   )
+
+  const startPolling = useCallback((connId: string, deadline: number) => {
+    stopPolling()
+    pollRef.current = setInterval(() => {
+      void pollQrStatus(connId, deadline)
+    }, QR_POLL_INTERVAL_MS)
+  }, [pollQrStatus, stopPolling])
 
   const handleOpenQr = useCallback(async (conn: Connection) => {
     setQrModal({ connId: conn.id, label: conn.label })
@@ -289,16 +330,19 @@ export default function IntegracoesConfigPage() {
       }
 
       const deadline = Date.now() + QR_TIMEOUT_MS
-      pollRef.current = setInterval(() => {
-        void pollQrStatus(conn.id, deadline)
-      }, QR_POLL_INTERVAL_MS)
+      startPolling(conn.id, deadline)
     } catch {
-      setQrError('Erro de conexão ao iniciar o processo de conexão.')
+      if (mountedRef.current) setQrError('Erro de conexão ao iniciar o processo de conexão.')
     }
-  }, [pollQrStatus, fetchConnections])
+  }, [fetchConnections, startPolling])
 
   const providerLabel = (p: Provider) => (p === 'instagram_meta' ? 'Instagram' : 'WhatsApp')
-  const methodLabel = (m: ConnectionMethod) => (m === 'cloud_api' ? 'Cloud API' : 'uazapi')
+  const methodLabel = (m: ConnectionMethod) => (m === 'cloud_api' ? 'Cloud API' : m === 'oauth' ? 'Instagram Login' : 'uazapi')
+
+  const connectInstagram = () => {
+    setMetaConnecting(true)
+    router.push('/api/integrations/meta/oauth/start')
+  }
 
   return (
     <div className="p-4 lg:p-8 space-y-6 max-w-7xl mx-auto">
@@ -317,10 +361,16 @@ export default function IntegracoesConfigPage() {
             Conecte quantos números de WhatsApp e páginas de Instagram forem necessários — cada um vira uma conexão independente.
           </p>
         </div>
-        <Button onClick={openModal} variant="primary">
-          <Plus className="w-4 h-4" />
-          <span>Adicionar Número/Página</span>
-        </Button>
+        <div className="flex flex-col sm:flex-row gap-2">
+          <Button onClick={connectInstagram} variant="primary" disabled={metaConnecting} isLoading={metaConnecting}>
+            <Instagram className="w-4 h-4" />
+            <span>Conectar Instagram</span>
+          </Button>
+          <Button onClick={openModal} variant="secondary">
+            <Plus className="w-4 h-4" />
+            <span>Adicionar conexão manual</span>
+          </Button>
+        </div>
       </div>
 
       {loadError && (
@@ -339,7 +389,7 @@ export default function IntegracoesConfigPage() {
       ) : connections.length === 0 ? (
         <Card className="p-8 text-center text-xs text-slate-400 space-y-2">
           <Info className="w-6 h-6 mx-auto text-slate-500" />
-          <p>Nenhuma conexão cadastrada ainda. Clique em &ldquo;Adicionar Número/Página&rdquo; pra começar.</p>
+          <p>Nenhuma conexão cadastrada ainda. Use &ldquo;Conectar Instagram&rdquo; ou adicione uma conexão manual.</p>
         </Card>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -361,7 +411,7 @@ export default function IntegracoesConfigPage() {
                     >
                       {conn.status === 'active' ? 'Ativa' : conn.status === 'error' ? 'Erro' : 'Inativa'}
                     </Badge>
-                    <Badge variant="indigo" icon={conn.connection_method === 'cloud_api' ? <Cloud className="w-3 h-3" /> : <QrCode className="w-3 h-3" />}>
+                    <Badge variant="indigo" icon={conn.connection_method === 'cloud_api' ? <Cloud className="w-3 h-3" /> : conn.connection_method === 'oauth' ? <Instagram className="w-3 h-3" /> : <QrCode className="w-3 h-3" />}>
                       {methodLabel(conn.connection_method)}
                     </Badge>
                   </div>

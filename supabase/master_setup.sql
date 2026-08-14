@@ -656,8 +656,21 @@ CREATE POLICY "Users can view their own organizations" ON public.organizations
 CREATE POLICY "Admins can update their organization" ON public.organizations
     FOR UPDATE USING (public.is_org_admin(id));
 
-CREATE POLICY "Profiles viewable by authenticated users" ON public.profiles
-    FOR SELECT USING (auth.role() = 'authenticated');
+CREATE POLICY "Users view profiles in their organizations" ON public.profiles
+    FOR SELECT USING (
+        id IN (
+            SELECT om2.user_id
+            FROM public.organization_members om1
+            JOIN public.organization_members om2 ON om1.organization_id = om2.organization_id
+            WHERE om1.user_id = auth.uid()
+        )
+    );
+
+CREATE POLICY "Users can update their own profile" ON public.profiles
+    FOR UPDATE USING (id = auth.uid());
+
+CREATE POLICY "Service role can manage profiles" ON public.profiles
+    FOR ALL USING (auth.role() = 'service_role');
 
 CREATE POLICY "Users can update their own profile" ON public.profiles
     FOR UPDATE USING (id = auth.uid());
@@ -710,8 +723,9 @@ CREATE POLICY "Admins can view integration connections" ON public.integration_co
 CREATE POLICY "Admins can modify integration connections" ON public.integration_connections
     FOR ALL USING (public.is_org_admin(organization_id));
 
-CREATE POLICY "Service role or authenticated users can manage webhook events" ON public.webhook_events
-    FOR ALL USING (auth.role() IN ('authenticated', 'service_role'));
+CREATE POLICY "Only service role can manage webhook events" ON public.webhook_events
+    FOR ALL USING (auth.role() = 'service_role')
+    WITH CHECK (auth.role() = 'service_role');
 
 -- Permissions
 -- Step 0 dropped and recreated the `public` schema, which wipes the default table

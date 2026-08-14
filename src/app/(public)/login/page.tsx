@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { Dumbbell, Lock, Mail, AlertCircle, ArrowRight, CheckCircle2, Sparkles } from 'lucide-react'
+import { Dumbbell, Lock, Mail, AlertCircle, ArrowRight } from 'lucide-react'
 import { loginSchema } from '@/lib/validations'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
@@ -29,16 +29,6 @@ export default function LoginPage() {
     setLoading(true)
 
     try {
-      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || ''
-      const isUnconfigured = !supabaseUrl || supabaseUrl.includes('placeholder')
-
-      if (isUnconfigured || process.env.NEXT_PUBLIC_ENABLE_DEMO_MODE === 'true') {
-        document.cookie = 'crm_demo_session=true; path=/'
-        router.push('/')
-        router.refresh()
-        return
-      }
-
       const supabase = createClient()
       const { error: signInError } = await supabase.auth.signInWithPassword({
         email,
@@ -46,18 +36,6 @@ export default function LoginPage() {
       })
 
       if (signInError) {
-        // Se houver falha de rede/conexão com Supabase não configurado localmente
-        if (
-          signInError.message.includes('FetchError') ||
-          signInError.message.includes('Failed to fetch') ||
-          signInError.message.includes('NetworkError')
-        ) {
-          document.cookie = 'crm_demo_session=true; path=/'
-          router.push('/')
-          router.refresh()
-          return
-        }
-
         if (signInError.message.includes('Invalid login credentials')) {
           setError('E-mail ou senha incorretos. Por favor, verifique suas credenciais.')
         } else if (signInError.message.includes('Email not confirmed')) {
@@ -72,20 +50,12 @@ export default function LoginPage() {
       router.push('/')
       router.refresh()
     } catch {
-      document.cookie = 'crm_demo_session=true; path=/'
-      router.push('/')
-      router.refresh()
+      setError('Não foi possível realizar o login no momento. Verifique seus dados ou tente mais tarde.')
+      setLoading(false)
+      return
     } finally {
       setLoading(false)
     }
-  }
-
-  const handleDemoFill = (demoEmail: string) => {
-    setEmail(demoEmail)
-    setPassword('senha123')
-    document.cookie = 'crm_demo_session=true; path=/'
-    router.push('/')
-    router.refresh()
   }
 
   return (
@@ -147,47 +117,6 @@ export default function LoginPage() {
         </Button>
       </form>
 
-      {/* Demo pre-filled buttons */}
-      <div className="mt-8 pt-6 border-t border-slate-800 text-center">
-        <p className="text-xs text-slate-400 mb-3 font-medium flex items-center justify-center gap-1.5">
-          <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
-          <span>Contas de demonstração rápida:</span>
-        </p>
-        <div className="grid grid-cols-3 gap-1.5 text-[11px]">
-          <button
-            type="button"
-            onClick={() => handleDemoFill('comercial@queroserfit.com')}
-            className="p-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-200 flex flex-col items-center gap-1 transition"
-          >
-            <span className="font-semibold text-emerald-400 flex items-center gap-1">
-              <CheckCircle2 className="w-3 h-3" /> Admin
-            </span>
-            <span className="text-[10px] text-slate-400 truncate max-w-full">comercial@...</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => handleDemoFill('gerente@queroserfit.com.br')}
-            className="p-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-200 flex flex-col items-center gap-1 transition"
-          >
-            <span className="font-semibold text-indigo-400 flex items-center gap-1">
-              <CheckCircle2 className="w-3 h-3" /> Gerente
-            </span>
-            <span className="text-[10px] text-slate-400 truncate max-w-full">gerente@...</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => handleDemoFill('carlos@queroserfit.com.br')}
-            className="p-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-200 flex flex-col items-center gap-1 transition"
-          >
-            <span className="font-semibold text-teal-400 flex items-center gap-1">
-              <CheckCircle2 className="w-3 h-3" /> Atendente
-            </span>
-            <span className="text-[10px] text-slate-400 truncate max-w-full">carlos@...</span>
-          </button>
-        </div>
-      </div>
     </div>
   )
 }

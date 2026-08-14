@@ -29,6 +29,7 @@ import {
   Kanban,
   DollarSign,
   Plus,
+  ArrowLeft,
 } from 'lucide-react'
 import { InstagramIcon as Instagram } from '@/components/icons/InstagramIcon'
 import { demoAttendants } from '@/lib/demo'
@@ -39,8 +40,11 @@ import { Input } from '@/components/ui/Input'
 import { Modal } from '@/components/ui/Modal'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { createClient } from '@/lib/supabase/client'
+import { subscribeToPush, unsubscribeFromPush } from '@/lib/pwa/subscribe'
 import { useDemoStorage } from '@/lib/demo/useDemoStorage'
 import { DealStage } from '@/types/database'
+import { cacheEntity, readCachedEntity, queueEntityMutation } from '@/lib/offline/repository'
+import { getOfflineScope } from '@/lib/offline/scope'
 
 type MediaType = 'image' | 'video' | 'audio' | 'document' | 'sticker'
 
@@ -141,6 +145,7 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
 
   // Filters State
   const [selectedConvId, setSelectedConvId] = useState<string>('conv-1')
+  const [mobilePane, setMobilePane] = useState<'list' | 'chat'>('list')
   const [filterQueue, setFilterQueue] = useState<'all' | 'mine' | 'unassigned'>('all')
   const [filterChannel, setFilterChannel] = useState<'all' | 'whatsapp' | 'instagram'>('all')
   const [searchQuery, setSearchQuery] = useState('')
@@ -155,6 +160,8 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
   const [unreadCount, setUnreadCount] = useState(0)
   const selectedConvIdRef = useRef(selectedConvId)
   const originalTitleRef = useRef<string>('')
+  const audioContextRef = useRef<AudioContext | null>(null)
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => {
     selectedConvIdRef.current = selectedConvId
   }, [selectedConvId])
@@ -187,10 +194,17 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
 
   const conversations: UiConversation[] = viewMode === 'real' ? realConversations : storedConversations
   const selectedConversation = conversations.find((c) => c.id === selectedConvId)
+  const showMobileList = mobilePane === 'list' || !selectedConversation
+  const showMobileChat = mobilePane === 'chat' && !!selectedConversation
+
 
   const showToast = (msg: string) => {
     setToastMessage(msg)
-    setTimeout(() => setToastMessage(null), 3500)
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
+    toastTimerRef.current = setTimeout(() => {
+      setToastMessage(null)
+      toastTimerRef.current = null
+    }, 3500)
   }
 
   // Fetch real conversations, their messages/notes, and who's currently logged in.
@@ -334,13 +348,23 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
       })
 
       setRealConversations(built)
+      const offlineScope = user ? await getOfflineScope() : null
+      if (offlineScope) await cacheEntity(offlineScope, 'inbox', built)
 
       if (requestedConvId && !appliedRequestedConvRef.current && built.some((c) => c.id === requestedConvId)) {
         appliedRequestedConvRef.current = true
         setSelectedConvId(requestedConvId)
+        setMobilePane('chat')
       }
     } catch {
-      setErrorMessage('Falha ao carregar conversas reais do Supabase.')
+      const offlineScope = await getOfflineScope().catch(() => null)
+      const cachedInbox = offlineScope ? await readCachedEntity<UiConversation[]>(offlineScope, 'inbox').catch(() => null) : null
+      if (cachedInbox) {
+        setRealConversations(cachedInbox)
+        setErrorMessage('Você está offline. Exibindo conversas armazenadas neste dispositivo.')
+      } else {
+        setErrorMessage('Falha ao carregar conversas reais do Supabase.')
+      }
     } finally {
       setLoadingReal(false)
     }
@@ -377,16 +401,20 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
 
   const toggleNotifications = async () => {
     if (notificationsEnabled) {
-      setNotificationsEnabled(false)
-      localStorage.setItem('inbox_notifications_enabled', 'false')
-      return
-    }
-    if (typeof Notification !== 'undefined' && Notification.permission !== 'granted') {
-      const permission = await Notification.requestPermission()
-      if (permission !== 'granted') {
-        showToast('Permissão de notificação negada pelo navegador.')
+      const unsubscribed = await unsubscribeFromPush()
+      if (!unsubscribed) {
+        showToast('Não foi possível desativar as notificações neste dispositivo.')
         return
       }
+      setNotificationsEnabled(false)
+      localStorage.setItem('inbox_notifications_enabled', 'false')
+      showToast('Notificações desativadas.')
+      return
+    }
+    const pushSubscribed = await subscribeToPush()
+    if (!pushSubscribed) {
+      showToast('Não foi possível ativar as notificações neste dispositivo.')
+      return
     }
     setNotificationsEnabled(true)
     localStorage.setItem('inbox_notifications_enabled', 'true')
@@ -398,8 +426,11 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
   // least one click; the try/catch below just swallows that instead of erroring out.
   const playNotificationSound = () => {
     try {
-      const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
-      const ctx = new AudioCtx()
+      const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+      if (!AudioCtx) return
+      const ctx = audioContextRef.current || new AudioCtx()
+      audioContextRef.current = ctx
+      if (ctx.state === 'suspended') void ctx.resume()
       const now = ctx.currentTime
       ;[880, 1320].forEach((freq, i) => {
         const osc = ctx.createOscillator()
@@ -417,6 +448,15 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
       // Autoplay blocked or unsupported — silently skip, the visual badge still works.
     }
   }
+
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
+      const context = audioContextRef.current
+      audioContextRef.current = null
+      if (context && context.state !== 'closed') void context.close()
+    }
+  }, [])
 
   // Realtime: subscribe to Postgres Changes on `messages` and `conversations` so new
   // inbound messages (from the webhook) and changes made by other attendants (assume,
@@ -545,7 +585,7 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
       const res = await fetch('/api/messages/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ conversationId: selectedConversation.id, content, mediaUrl, mediaType }),
+        body: JSON.stringify({ conversationId: selectedConversation.id, content, mediaUrl, mediaType, idempotencyKey: crypto.randomUUID() }),
       })
       const body = await res.json()
       if (!res.ok) {
@@ -579,7 +619,8 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
     try {
       const supabase = createClient()
       const ext = file.name.includes('.') ? file.name.split('.').pop() : 'bin'
-      const path = `${selectedConversation.organizationId}/${selectedConversation.id}/${Date.now()}-${crypto.randomUUID()}.${ext}`
+      // IDs are generated only after a user selects a file, never during render.
+      const path = `${selectedConversation.organizationId}/${selectedConversation.id}/${crypto.randomUUID()}.${ext}`
 
       const { error: uploadError } = await supabase.storage
         .from('chat-media')
@@ -642,6 +683,20 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
     if (!newNoteText.trim() || !selectedConversation) return
 
     if (viewMode === 'real') {
+      if (!navigator.onLine) {
+        const offlineScope = await getOfflineScope()
+        if (!offlineScope) {
+          setErrorMessage('Sessão indisponível. Conecte-se para salvar a nota.')
+          return
+        }
+        await queueEntityMutation(offlineScope, 'note.create', {
+          conversationId: selectedConversation.id,
+          content: newNoteText.trim(),
+        })
+        setNewNoteText('')
+        showToast('Nota salva localmente e aguardando sincronização.')
+        return
+      }
       try {
         const supabase = createClient()
         const { error } = await (supabase as unknown as {
@@ -775,7 +830,7 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
   const transferOptions = viewMode === 'real' ? realTeamMembers.map((m) => ({ id: m.id, fullName: m.fullName })) : demoAttendants
 
   return (
-    <div className="flex flex-col h-[calc(100vh-4rem)] bg-[#0b1320] text-slate-100 overflow-hidden relative">
+    <div className="flex flex-col h-full min-h-0 bg-[#0b1320] text-slate-100 overflow-hidden relative">
       {/* Header Banner & Mode Selector */}
       <div className="bg-gradient-to-r from-emerald-950 via-teal-950 to-slate-900 border-b border-emerald-800/40 px-4 py-2 flex items-center justify-between text-xs shrink-0">
         <div className="flex items-center gap-2">
@@ -854,7 +909,9 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
       {/* 3-Column Layout */}
       <div className="flex-1 flex min-h-0 overflow-hidden">
         {/* Col 1: Conversations List & Queue Filters */}
-        <div className="w-full md:w-80 lg:w-96 border-r border-slate-800 flex flex-col bg-[#0f172a] shrink-0">
+        <div className={`w-full md:w-80 lg:w-96 border-r border-slate-800 flex flex-col bg-[#0f172a] shrink-0 ${
+          showMobileList ? 'flex' : 'hidden lg:flex'
+        }`}>
           <div className="p-3 border-b border-slate-800 space-y-2.5">
             <Input
               type="text"
@@ -946,7 +1003,10 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                 return (
                   <div
                     key={conv.id}
-                    onClick={() => setSelectedConvId(conv.id)}
+                    onClick={() => {
+                      setSelectedConvId(conv.id)
+                      setMobilePane('chat')
+                    }}
                     className={`p-3.5 cursor-pointer transition flex items-start gap-3 ${
                       isSelected ? 'bg-slate-800/90 border-l-4 border-l-emerald-400' : 'hover:bg-slate-800/40'
                     }`}
@@ -994,13 +1054,24 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
 
         {/* Col 2: Chat Thread */}
         {selectedConversation ? (
-          <div className="flex-1 flex flex-col bg-[#0b1320] min-w-0">
+          <div className={`flex-1 flex flex-col bg-[#0b1320] min-w-0 ${
+            showMobileChat ? 'flex' : 'hidden lg:flex'
+          }`}>
             {/* Thread Header */}
             <div className="p-3.5 border-b border-slate-800 bg-[#0f172a]/90 flex items-center justify-between gap-3 shrink-0">
-              <div className="flex items-center gap-3 min-w-0">
+              <div className="flex items-center gap-3 min-w-0 flex-1">
+                <button
+                  type="button"
+                  onClick={() => setMobilePane('list')}
+                  className="lg:hidden p-2 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition shrink-0"
+                  aria-label="Voltar para a lista de conversas"
+                  title="Voltar para a lista"
+                >
+                  <ArrowLeft className="w-4 h-4" />
+                </button>
                 <Avatar name={selectedConversation.contactName} src={selectedConversation.contactAvatarUrl} size="md" />
                 <div className="min-w-0">
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <h2 className="text-sm font-bold text-slate-100 truncate">{selectedConversation.contactName}</h2>
                     <Badge variant={selectedConversation.channel === 'whatsapp' ? 'emerald' : 'pink'}>
                       {selectedConversation.channel === 'whatsapp' ? 'WhatsApp' : 'Instagram Direct'}
@@ -1015,7 +1086,7 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                 </div>
               </div>
 
-              <div className="flex items-center gap-2 shrink-0">
+              <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
                 {selectedConversation.currentAssigneeId !== effectiveCurrentUserId && (
                   <Button onClick={() => handleAssume(selectedConversation.id)} size="sm" variant="primary">
                     <UserPlus className="w-3.5 h-3.5" />
@@ -1194,7 +1265,7 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                   value={newMessageText}
                   onChange={(e) => setNewMessageText(e.target.value)}
                   disabled={isSendingMessage || uploadingMedia}
-                  className="flex-1 px-4 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-xs text-slate-100 focus:outline-none focus:border-emerald-500 disabled:opacity-50"
+                  className="flex-1 min-w-0 px-4 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-xs text-slate-100 focus:outline-none focus:border-emerald-500 disabled:opacity-50"
                 />
                 <Button type="submit" disabled={!newMessageText.trim() || isSendingMessage || uploadingMedia} size="md" variant="primary">
                   {isSendingMessage ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
