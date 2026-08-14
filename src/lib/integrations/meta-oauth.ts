@@ -92,6 +92,36 @@ export async function exchangeMetaInstagramCode(code: string): Promise<{ accessT
   return { accessToken: result.access_token, userId: String(result.user_id) }
 }
 
+/**
+ * Troca o token de curta duração (válido ~1h, o único que `exchangeMetaInstagramCode`
+ * devolve) por um de longa duração (~60 dias). Sem esse segundo passo a conexão
+ * funciona só na primeira hora — toda reverificação depois disso falha com um erro
+ * genérico da Meta, porque o token de 1h já expirou silenciosamente.
+ */
+export async function exchangeForLongLivedInstagramToken(shortLivedToken: string): Promise<string> {
+  const env = getServerEnv()
+  if (!env.META_APP_SECRET) {
+    throw new Error('META_APP_SECRET não configurado.')
+  }
+
+  const params = new URLSearchParams({
+    grant_type: 'ig_exchange_token',
+    client_secret: env.META_APP_SECRET,
+    access_token: shortLivedToken,
+  })
+  const response = await fetch(`https://graph.instagram.com/access_token?${params.toString()}`, {
+    cache: 'no-store',
+  })
+  const result = await response.json().catch(() => ({})) as { access_token?: string; error?: { message?: string } }
+  if (!response.ok || !result.access_token) {
+    // Não deve travar a conexão inteira: o token de curta duração ainda é válido agora,
+    // então quem chama pode optar por seguir com ele e deixar a próxima reverificação
+    // pegar o problema, em vez de perder a conexão por completo.
+    throw new Error(result.error?.message || 'Não foi possível estender a validade do token do Instagram.')
+  }
+  return result.access_token
+}
+
 export async function fetchInstagramProfile(accessToken: string): Promise<{ id: string; username?: string }> {
   const response = await fetch('https://graph.instagram.com/v25.0/me?fields=user_id,username', {
     headers: { Authorization: `Bearer ${accessToken}` },

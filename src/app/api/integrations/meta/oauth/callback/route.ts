@@ -4,6 +4,7 @@ import { getAuthenticatedUserContext } from '@/lib/auth'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { encryptToken } from '@/lib/security/encryption'
 import {
+  exchangeForLongLivedInstagramToken,
   exchangeMetaInstagramCode,
   fetchInstagramProfile,
   META_OAUTH_STATE_COOKIE,
@@ -50,11 +51,23 @@ export async function GET(request: Request) {
   }
 
   try {
-    const { accessToken, userId } = await exchangeMetaInstagramCode(code)
+    const { accessToken: shortLivedToken, userId } = await exchangeMetaInstagramCode(code)
     // `userId` returned by Instagram is the external Instagram account ID, not
     // the CRM auth user ID stored in the signed state. The profile lookup below
     // is the source of truth for the connection identifier.
     void userId
+
+    // Sem isso a conexão fica válida só ~1h (a duração do token que exchangeMetaInstagramCode
+    // devolve) e toda verificação depois disso falha silenciosamente. Se a extensão falhar,
+    // seguimos com o token curto mesmo assim — a conexão fica ativa por agora, e o erro real
+    // aparece na próxima reverificação em vez de bloquear a conexão inicial.
+    let accessToken = shortLivedToken
+    try {
+      accessToken = await exchangeForLongLivedInstagramToken(shortLivedToken)
+    } catch {
+      // segue com o token de curta duração
+    }
+
     const profile = await fetchInstagramProfile(accessToken)
     const admin = createAdminClient()
     const db = admin as unknown as {
