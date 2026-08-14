@@ -36,8 +36,22 @@ export class MetaInstagramProvider implements ICRMIntegrationProvider {
           const sender = item.sender as { id?: string } | undefined
           const recipient = item.recipient as { id?: string } | undefined
           const message = item.message as
-            | { mid?: string; text?: string; attachments?: Array<{ type?: string; payload?: { url?: string } }> }
+            | {
+                mid?: string
+                text?: string
+                is_echo?: boolean
+                is_self?: boolean
+                attachments?: Array<{ type?: string; payload?: { url?: string } }>
+              }
             | undefined
+
+          // Echoes são cópias das mensagens que a PRÓPRIA conta enviou (pelo CRM ou pelo
+          // app do Instagram), não mensagens recebidas. A notificação de teste do painel
+          // da Meta também vem assim — com is_echo/is_self e recipient.id apontando pra
+          // própria conta conectada, que casa com a nossa conexão. Sem esse filtro, cada
+          // teste no painel e cada resposta enviada viravam uma "mensagem recebida" de um
+          // contato falso (a própria loja) dentro do Inbox.
+          if (message?.is_echo || message?.is_self) continue
 
           if (message && sender?.id) {
             // Diferente da Cloud API do WhatsApp (que exige um segundo hop autenticado

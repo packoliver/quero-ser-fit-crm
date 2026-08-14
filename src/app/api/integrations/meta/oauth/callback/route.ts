@@ -94,6 +94,9 @@ export async function GET(request: Request) {
       settings: {
         instagram_username: profile.username || null,
         auth_method: 'instagram_login',
+        // Guardado pra casar o webhook mesmo se a Meta mandar o outro identificador
+        // da conta em recipient.id (ver fetchInstagramProfile).
+        ...(profile.appScopedId ? { instagram_app_scoped_id: profile.appScopedId } : {}),
         ...(subscription.ok ? {} : { webhook_subscription_error: subscription.detail || 'desconhecido' }),
       },
     }, { onConflict: 'organization_id,provider,external_identifier' }).select('id').single()
