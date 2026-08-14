@@ -94,7 +94,7 @@ export class MetaInstagramProvider implements ICRMIntegrationProvider {
 
     try {
       const res = await fetch(
-        `https://graph.facebook.com/v20.0/${encodeURIComponent(payload.fromExternalId)}/messages`,
+        `https://graph.instagram.com/v25.0/${encodeURIComponent(payload.fromExternalId)}/messages`,
         {
           method: 'POST',
           headers: {

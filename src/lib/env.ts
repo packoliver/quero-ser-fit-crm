@@ -6,7 +6,10 @@ const serverEnvSchema = z.object({
   NEXT_PUBLIC_ENABLE_DEMO_MODE: z.string().optional(),
   SUPABASE_SERVICE_ROLE_KEY: z.string().optional().or(z.literal('')),
   META_WEBHOOK_VERIFY_TOKEN: z.string().optional(),
+  META_APP_ID: z.string().optional(),
   META_APP_SECRET: z.string().optional(),
+  META_OAUTH_REDIRECT_URI: z.string().url().optional(),
+  META_OAUTH_SCOPES: z.string().optional(),
   INTEGRATION_ENCRYPTION_KEY: z.string().optional(),
   NEXT_PUBLIC_VAPID_PUBLIC_KEY: z.string().optional(),
   VAPID_PRIVATE_KEY: z.string().optional(),
@@ -37,7 +40,10 @@ export function getServerEnv(): ServerEnv {
     NEXT_PUBLIC_ENABLE_DEMO_MODE: process.env.NEXT_PUBLIC_ENABLE_DEMO_MODE || 'false',
     SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY || '',
     META_WEBHOOK_VERIFY_TOKEN: process.env.META_WEBHOOK_VERIFY_TOKEN || undefined,
+    META_APP_ID: process.env.META_APP_ID || undefined,
     META_APP_SECRET: process.env.META_APP_SECRET || undefined,
+    META_OAUTH_REDIRECT_URI: process.env.META_OAUTH_REDIRECT_URI || undefined,
+    META_OAUTH_SCOPES: process.env.META_OAUTH_SCOPES || undefined,
     // Em produção, uma chave ausente OU igual ao fallback conhecido de dev é tratada
     // como "não configurada" (undefined), forçando getEncryptionKey() a lançar erro
     // em vez de criptografar silenciosamente com uma chave pública e comprometida.

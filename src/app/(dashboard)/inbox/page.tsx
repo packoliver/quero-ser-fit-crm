@@ -29,6 +29,7 @@ import {
   Kanban,
   DollarSign,
   Plus,
+  ArrowLeft,
 } from 'lucide-react'
 import { InstagramIcon as Instagram } from '@/components/icons/InstagramIcon'
 import { demoAttendants } from '@/lib/demo'
@@ -144,6 +145,7 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
 
   // Filters State
   const [selectedConvId, setSelectedConvId] = useState<string>('conv-1')
+  const [mobilePane, setMobilePane] = useState<'list' | 'chat'>('list')
   const [filterQueue, setFilterQueue] = useState<'all' | 'mine' | 'unassigned'>('all')
   const [filterChannel, setFilterChannel] = useState<'all' | 'whatsapp' | 'instagram'>('all')
   const [searchQuery, setSearchQuery] = useState('')
@@ -192,6 +194,9 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
 
   const conversations: UiConversation[] = viewMode === 'real' ? realConversations : storedConversations
   const selectedConversation = conversations.find((c) => c.id === selectedConvId)
+  const showMobileList = mobilePane === 'list' || !selectedConversation
+  const showMobileChat = mobilePane === 'chat' && !!selectedConversation
+
 
   const showToast = (msg: string) => {
     setToastMessage(msg)
@@ -349,6 +354,7 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
       if (requestedConvId && !appliedRequestedConvRef.current && built.some((c) => c.id === requestedConvId)) {
         appliedRequestedConvRef.current = true
         setSelectedConvId(requestedConvId)
+        setMobilePane('chat')
       }
     } catch {
       const offlineScope = await getOfflineScope().catch(() => null)
@@ -824,7 +830,7 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
   const transferOptions = viewMode === 'real' ? realTeamMembers.map((m) => ({ id: m.id, fullName: m.fullName })) : demoAttendants
 
   return (
-    <div className="flex flex-col h-[calc(100vh-4rem)] bg-[#0b1320] text-slate-100 overflow-hidden relative">
+    <div className="flex flex-col h-full min-h-0 bg-[#0b1320] text-slate-100 overflow-hidden relative">
       {/* Header Banner & Mode Selector */}
       <div className="bg-gradient-to-r from-emerald-950 via-teal-950 to-slate-900 border-b border-emerald-800/40 px-4 py-2 flex items-center justify-between text-xs shrink-0">
         <div className="flex items-center gap-2">
@@ -903,7 +909,9 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
       {/* 3-Column Layout */}
       <div className="flex-1 flex min-h-0 overflow-hidden">
         {/* Col 1: Conversations List & Queue Filters */}
-        <div className="w-full md:w-80 lg:w-96 border-r border-slate-800 flex flex-col bg-[#0f172a] shrink-0">
+        <div className={`w-full md:w-80 lg:w-96 border-r border-slate-800 flex flex-col bg-[#0f172a] shrink-0 ${
+          showMobileList ? 'flex' : 'hidden lg:flex'
+        }`}>
           <div className="p-3 border-b border-slate-800 space-y-2.5">
             <Input
               type="text"
@@ -995,7 +1003,10 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                 return (
                   <div
                     key={conv.id}
-                    onClick={() => setSelectedConvId(conv.id)}
+                    onClick={() => {
+                      setSelectedConvId(conv.id)
+                      setMobilePane('chat')
+                    }}
                     className={`p-3.5 cursor-pointer transition flex items-start gap-3 ${
                       isSelected ? 'bg-slate-800/90 border-l-4 border-l-emerald-400' : 'hover:bg-slate-800/40'
                     }`}
@@ -1043,13 +1054,24 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
 
         {/* Col 2: Chat Thread */}
         {selectedConversation ? (
-          <div className="flex-1 flex flex-col bg-[#0b1320] min-w-0">
+          <div className={`flex-1 flex flex-col bg-[#0b1320] min-w-0 ${
+            showMobileChat ? 'flex' : 'hidden lg:flex'
+          }`}>
             {/* Thread Header */}
             <div className="p-3.5 border-b border-slate-800 bg-[#0f172a]/90 flex items-center justify-between gap-3 shrink-0">
-              <div className="flex items-center gap-3 min-w-0">
+              <div className="flex items-center gap-3 min-w-0 flex-1">
+                <button
+                  type="button"
+                  onClick={() => setMobilePane('list')}
+                  className="lg:hidden p-2 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition shrink-0"
+                  aria-label="Voltar para a lista de conversas"
+                  title="Voltar para a lista"
+                >
+                  <ArrowLeft className="w-4 h-4" />
+                </button>
                 <Avatar name={selectedConversation.contactName} src={selectedConversation.contactAvatarUrl} size="md" />
                 <div className="min-w-0">
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <h2 className="text-sm font-bold text-slate-100 truncate">{selectedConversation.contactName}</h2>
                     <Badge variant={selectedConversation.channel === 'whatsapp' ? 'emerald' : 'pink'}>
                       {selectedConversation.channel === 'whatsapp' ? 'WhatsApp' : 'Instagram Direct'}
@@ -1064,7 +1086,7 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                 </div>
               </div>
 
-              <div className="flex items-center gap-2 shrink-0">
+              <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
                 {selectedConversation.currentAssigneeId !== effectiveCurrentUserId && (
                   <Button onClick={() => handleAssume(selectedConversation.id)} size="sm" variant="primary">
                     <UserPlus className="w-3.5 h-3.5" />
@@ -1243,7 +1265,7 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                   value={newMessageText}
                   onChange={(e) => setNewMessageText(e.target.value)}
                   disabled={isSendingMessage || uploadingMedia}
-                  className="flex-1 px-4 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-xs text-slate-100 focus:outline-none focus:border-emerald-500 disabled:opacity-50"
+                  className="flex-1 min-w-0 px-4 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-xs text-slate-100 focus:outline-none focus:border-emerald-500 disabled:opacity-50"
                 />
                 <Button type="submit" disabled={!newMessageText.trim() || isSendingMessage || uploadingMedia} size="md" variant="primary">
                   {isSendingMessage ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}

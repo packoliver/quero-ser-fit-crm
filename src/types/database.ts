@@ -16,7 +16,7 @@ export type TaskStatus = 'pending' | 'in_progress' | 'completed' | 'cancelled'
 export type DealStage = 'lead' | 'negociando' | 'fechado' | 'entrega' | 'posvenda' | 'perdido'
 export type IntegrationProvider = 'whatsapp_meta' | 'instagram_meta' | 'whatsapp_uazapi'
 export type IntegrationStatus = 'active' | 'inactive' | 'error'
-export type IntegrationConnectionMethod = 'cloud_api' | 'uazapi'
+export type IntegrationConnectionMethod = 'cloud_api' | 'oauth' | 'uazapi'
 
 export interface CustomPermissions {
   // Inbox / Atendimento

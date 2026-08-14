@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import {
   Phone,
   Info,
@@ -22,7 +23,7 @@ import { Select } from '@/components/ui/Select'
 import { Modal } from '@/components/ui/Modal'
 
 type Provider = 'whatsapp_meta' | 'instagram_meta' | 'whatsapp_uazapi'
-type ConnectionMethod = 'cloud_api' | 'uazapi'
+type ConnectionMethod = 'cloud_api' | 'oauth' | 'uazapi'
 
 interface Connection {
   id: string
@@ -40,6 +41,7 @@ const QR_POLL_INTERVAL_MS = 3000
 const QR_TIMEOUT_MS = 2 * 60 * 1000
 
 export default function IntegracoesConfigPage() {
+  const router = useRouter()
   const [connections, setConnections] = useState<Connection[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -50,6 +52,7 @@ export default function IntegracoesConfigPage() {
   const [formError, setFormError] = useState<string | null>(null)
   const [formWarning, setFormWarning] = useState<string | null>(null)
   const [toast, setToast] = useState<string | null>(null)
+  const [metaConnecting, setMetaConnecting] = useState(false)
 
   const [form, setForm] = useState({
     connectionMethod: 'cloud_api' as ConnectionMethod,
@@ -107,6 +110,19 @@ export default function IntegracoesConfigPage() {
     }, 0)
     return () => clearTimeout(timer)
   }, [fetchConnections])
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const success = params.get('meta_success')
+    const error = params.get('meta_error')
+    if (success || error) {
+      window.setTimeout(() => showToast(success || error || ''), 0)
+    }
+    if (success || error) {
+      window.history.replaceState({}, document.title, window.location.pathname)
+      if (success) window.setTimeout(() => void fetchConnections(), 0)
+    }
+  }, [fetchConnections, showToast])
 
   useEffect(() => {
     mountedRef.current = true
@@ -321,7 +337,12 @@ export default function IntegracoesConfigPage() {
   }, [fetchConnections, startPolling])
 
   const providerLabel = (p: Provider) => (p === 'instagram_meta' ? 'Instagram' : 'WhatsApp')
-  const methodLabel = (m: ConnectionMethod) => (m === 'cloud_api' ? 'Cloud API' : 'uazapi')
+  const methodLabel = (m: ConnectionMethod) => (m === 'cloud_api' ? 'Cloud API' : m === 'oauth' ? 'Instagram Login' : 'uazapi')
+
+  const connectInstagram = () => {
+    setMetaConnecting(true)
+    router.push('/api/integrations/meta/oauth/start')
+  }
 
   return (
     <div className="p-4 lg:p-8 space-y-6 max-w-7xl mx-auto">
@@ -340,10 +361,16 @@ export default function IntegracoesConfigPage() {
             Conecte quantos números de WhatsApp e páginas de Instagram forem necessários — cada um vira uma conexão independente.
           </p>
         </div>
-        <Button onClick={openModal} variant="primary">
-          <Plus className="w-4 h-4" />
-          <span>Adicionar Número/Página</span>
-        </Button>
+        <div className="flex flex-col sm:flex-row gap-2">
+          <Button onClick={connectInstagram} variant="primary" disabled={metaConnecting} isLoading={metaConnecting}>
+            <Instagram className="w-4 h-4" />
+            <span>Conectar Instagram</span>
+          </Button>
+          <Button onClick={openModal} variant="secondary">
+            <Plus className="w-4 h-4" />
+            <span>Adicionar conexão manual</span>
+          </Button>
+        </div>
       </div>
 
       {loadError && (
@@ -362,7 +389,7 @@ export default function IntegracoesConfigPage() {
       ) : connections.length === 0 ? (
         <Card className="p-8 text-center text-xs text-slate-400 space-y-2">
           <Info className="w-6 h-6 mx-auto text-slate-500" />
-          <p>Nenhuma conexão cadastrada ainda. Clique em &ldquo;Adicionar Número/Página&rdquo; pra começar.</p>
+          <p>Nenhuma conexão cadastrada ainda. Use &ldquo;Conectar Instagram&rdquo; ou adicione uma conexão manual.</p>
         </Card>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -384,7 +411,7 @@ export default function IntegracoesConfigPage() {
                     >
                       {conn.status === 'active' ? 'Ativa' : conn.status === 'error' ? 'Erro' : 'Inativa'}
                     </Badge>
-                    <Badge variant="indigo" icon={conn.connection_method === 'cloud_api' ? <Cloud className="w-3 h-3" /> : <QrCode className="w-3 h-3" />}>
+                    <Badge variant="indigo" icon={conn.connection_method === 'cloud_api' ? <Cloud className="w-3 h-3" /> : conn.connection_method === 'oauth' ? <Instagram className="w-3 h-3" /> : <QrCode className="w-3 h-3" />}>
                       {methodLabel(conn.connection_method)}
                     </Badge>
                   </div>

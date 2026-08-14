@@ -175,9 +175,18 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const providerType =
-      request.headers.get('x-meta-provider') ||
-      (jsonBody.object === 'whatsapp_business_account' ? 'whatsapp_meta' : 'instagram_meta')
+    const headerProvider = request.headers.get('x-meta-provider')
+    const providerType = headerProvider || (
+      jsonBody.object === 'whatsapp_business_account'
+        ? 'whatsapp_meta'
+        : jsonBody.object === 'instagram'
+          ? 'instagram_meta'
+          : null
+    )
+
+    if (providerType !== 'whatsapp_meta' && providerType !== 'instagram_meta') {
+      return NextResponse.json({ error: 'Objeto de webhook da Meta não reconhecido.' }, { status: 422 })
+    }
 
     const provider: ICRMIntegrationProvider = providerType === 'whatsapp_meta' ? whatsappProvider : instagramProvider
     const events = provider.parseWebhookPayload(jsonBody)
