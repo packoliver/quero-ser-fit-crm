@@ -136,19 +136,16 @@ export async function GET(request: NextRequest) {
  * write access to these tables.
  */
 export async function POST(request: NextRequest) {
+  console.log('[Meta Webhook] POST recebido em', new Date().toISOString())
   try {
     const env = getServerEnv()
 
-    // O Instagram assina os webhooks com a chave secreta do APP DO INSTAGRAM, que é
-    // diferente da chave do app da Meta usada pelo WhatsApp. Como o mesmo endpoint
-    // recebe os dois, aceitamos a assinatura de qualquer um dos dois segredos (ambos
-    // são nossos): validar só contra META_APP_SECRET rejeitava todo webhook do
-    // Instagram com 401 e nenhuma mensagem chegava.
     const candidateSecrets = [env.META_APP_SECRET, env.INSTAGRAM_APP_SECRET].filter(
       (secret): secret is string => !!secret
     )
 
     if (candidateSecrets.length === 0) {
+      console.error('[Meta Webhook] Erro: Nenhum segredo configurado (META_APP_SECRET / INSTAGRAM_APP_SECRET)')
       return NextResponse.json(
         { error: 'Serviço de webhook temporariamente indisponível.' },
         { status: 503 }
@@ -162,6 +159,10 @@ export async function POST(request: NextRequest) {
       verifyMetaHmacSignature(rawBody, signatureHeader, secret)
     )
     if (!isSignatureValid) {
+      console.error('[Meta Webhook] Erro: Assinatura HMAC inválida ou ausente.', {
+        signatureHeader,
+        candidateSecretsCount: candidateSecrets.length,
+      })
       return NextResponse.json(
         { error: 'Assinatura de segurança inválida ou ausente.' },
         { status: 401 }
@@ -172,6 +173,7 @@ export async function POST(request: NextRequest) {
     try {
       jsonBody = JSON.parse(rawBody) as Record<string, unknown>
     } catch {
+      console.error('[Meta Webhook] Erro: Payload não é um JSON válido.')
       return NextResponse.json(
         { error: 'Formato de payload inválido.' },
         { status: 400 }
@@ -180,6 +182,7 @@ export async function POST(request: NextRequest) {
 
     const payloadValidation = genericPayloadSchema.safeParse(jsonBody)
     if (!payloadValidation.success) {
+      console.error('[Meta Webhook] Erro: Schema genérico do payload falhou.', payloadValidation.error)
       return NextResponse.json(
         { error: 'Estrutura de evento não reconhecida.' },
         { status: 422 }
@@ -196,20 +199,21 @@ export async function POST(request: NextRequest) {
     )
 
     if (providerType !== 'whatsapp_meta' && providerType !== 'instagram_meta') {
+      console.error('[Meta Webhook] Erro: Objeto do webhook não reconhecido:', jsonBody.object)
       return NextResponse.json({ error: 'Objeto de webhook da Meta não reconhecido.' }, { status: 422 })
     }
 
     const provider: ICRMIntegrationProvider = providerType === 'whatsapp_meta' ? whatsappProvider : instagramProvider
     const events = provider.parseWebhookPayload(jsonBody)
-    // Same webhook call carries both new messages and delivery/read receipts for
-    // messages we sent (as a separate `statuses` array) — only WhatsApp exposes this.
+    console.log('[Meta Webhook] Eventos extraídos do payload:', events.length, events)
+
     const statusUpdates = provider.parseStatusUpdates?.(jsonBody) || []
 
     let admin
     try {
       admin = createAdminClient()
-    } catch {
-      // Persistence is required before acknowledging the provider.
+    } catch (err) {
+      console.error('[Meta Webhook] Erro ao criar cliente admin do Supabase:', err)
       return NextResponse.json(
         { error: 'Serviço de webhook temporariamente indisponível.' },
         { status: 503 }
