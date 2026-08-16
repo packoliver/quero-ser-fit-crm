@@ -248,11 +248,13 @@ export async function processInboundEvents(
     if (!connection) continue
 
     // First, check if this event was already processed
+    // Note: webhook_events table only has: id, provider, external_event_id, event_type,
+    // payload, processed, processed_at, error_message, created_at
+    // (no organization_id or integration_connection_id columns)
     const { error: checkError, data: existing } = await admin
       .from('webhook_events')
       .select('id, processed')
       .eq('provider', event.provider)
-      .eq('integration_connection_id', connection.id)
       .eq('external_event_id', event.externalEventId)
       .maybeSingle() as { error: unknown; data: { id: string; processed: boolean } | null }
 
@@ -270,15 +272,13 @@ export async function processInboundEvents(
         payload: event.rawPayload as Json,
         processed: false,
         processed_at: null,
-        organization_id: connection.organization_id,
-        integration_connection_id: connection.id,
       })
 
       if (insertError) {
         // 23505 = another concurrent insert already created this event — treat as not-yet-processed
         if (!('code' in insertError) || insertError.code !== '23505') {
-          // Some other error — skip this event, leave it pending for retry
-          continue
+          console.error('[processInboundEvents] Erro ao inserir webhook_event (não é duplicata):', insertError)
+          // Still try to persist — log failure but don't block message saving
         }
       }
     }
@@ -290,7 +290,7 @@ export async function processInboundEvents(
       await admin
         .from('webhook_events')
         .update({ processed: true, processed_at: new Date().toISOString() })
-        .eq('integration_connection_id', connection.id)
+        .eq('provider', event.provider)
         .eq('external_event_id', event.externalEventId)
 
       processedCount++
