@@ -190,7 +190,7 @@ export async function POST(request: NextRequest) {
     const providerType = headerProvider || (
       jsonBody.object === 'whatsapp_business_account'
         ? 'whatsapp_meta'
-        : jsonBody.object === 'instagram'
+        : jsonBody.object === 'instagram' || jsonBody.object === 'page'
           ? 'instagram_meta'
           : null
     )

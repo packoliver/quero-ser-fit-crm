@@ -31,11 +31,26 @@ export class MetaInstagramProvider implements ICRMIntegrationProvider {
     try {
       const entryArray = (body.entry as Array<Record<string, unknown>>) || []
       for (const entry of entryArray) {
-        const messaging = (entry.messaging as Array<Record<string, unknown>>) || []
-        for (const item of messaging) {
+        const entryId = typeof entry.id === 'string' ? entry.id : ''
+
+        const messagingList: Array<Record<string, unknown>> = []
+
+        if (Array.isArray(entry.messaging)) {
+          messagingList.push(...(entry.messaging as Array<Record<string, unknown>>))
+        }
+
+        if (Array.isArray(entry.changes)) {
+          for (const change of entry.changes as Array<Record<string, unknown>>) {
+            if (change.field === 'messages' && change.value && typeof change.value === 'object') {
+              messagingList.push(change.value as Record<string, unknown>)
+            }
+          }
+        }
+
+        for (const item of messagingList) {
           const sender = item.sender as { id?: string } | undefined
           const recipient = item.recipient as { id?: string } | undefined
-          const message = item.message as
+          const message = (item.message || item.messaging) as
             | {
                 mid?: string
                 text?: string
@@ -74,7 +89,7 @@ export class MetaInstagramProvider implements ICRMIntegrationProvider {
               externalEventId: message.mid || `ig_msg_${Date.now()}`,
               eventType: 'instagram_direct',
               senderId: sender.id,
-              recipientId: recipient?.id || '',
+              recipientId: recipient?.id || entryId,
               content: message.text || '',
               timestamp,
               rawPayload: item,
