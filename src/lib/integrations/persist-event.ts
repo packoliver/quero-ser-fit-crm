@@ -18,43 +18,51 @@ interface ConversationMatch {
   id: string
 }
 
-async function findMatchingConnection(
-  admin: AdminClient,
+/**
+ * Descobre a qual conexão registrada um evento pertence.
+ *
+ * O caminho normal é casar `recipientId` com `external_identifier`. Para o Instagram há
+ * um segundo caminho: a Meta expõe dois identificadores pra mesma conta (o `user_id` da
+ * conta profissional e o `id` app-scoped) e não é documentado com clareza qual deles vem
+ * como `recipient.id` no webhook. Se salvamos um e ela manda o outro, a mensagem seria
+ * descartada em silêncio — nenhum log, nenhum erro, só "não chega nada". Por isso o
+ * fallback para o identificador alternativo guardado em settings.
+ */
+async function findConnectionForEvent(
+  db: AdminClient,
   event: IncomingWebhookEvent
 ): Promise<ConnectionMatch | null> {
+  const { data: direct } = await db
+    .from('integration_connections')
+    .select('id, organization_id')
+    .eq('provider', event.provider)
+    .eq('external_identifier', event.recipientId)
+    .maybeSingle()
+
+  if (direct) return direct as ConnectionMatch
+
+  if (event.provider !== 'instagram_meta') return null
+
   if (event.recipientId) {
-    const { data: directMatch } = await admin
-      .from('integration_connections')
-      .select('id, organization_id')
-      .eq('provider', event.provider)
-      .eq('external_identifier', event.recipientId)
-      .maybeSingle()
-
-    if (directMatch) return directMatch as ConnectionMatch
-
-    if (event.provider === 'instagram_meta') {
-      const { data: scopedMatch } = await admin
-        .from('integration_connections')
-        .select('id, organization_id')
-        .eq('provider', 'instagram_meta')
-        .filter('settings->>instagram_app_scoped_id', 'eq', event.recipientId)
-        .maybeSingle()
-
-      if (scopedMatch) return scopedMatch as ConnectionMatch
-    }
-  }
-
-  // Fallback: For Instagram Meta, if there is only 1 active connection, route to it
-  if (event.provider === 'instagram_meta') {
-    const { data: activeConnections } = await admin
+    const { data: byAppScopedId } = await db
       .from('integration_connections')
       .select('id, organization_id')
       .eq('provider', 'instagram_meta')
-      .eq('status', 'active')
+      .filter('settings->>instagram_app_scoped_id', 'eq', event.recipientId)
+      .maybeSingle()
 
-    if (activeConnections && activeConnections.length === 1) {
-      return activeConnections[0] as ConnectionMatch
-    }
+    if (byAppScopedId) return byAppScopedId as ConnectionMatch
+  }
+
+  // Fallback 3: For Instagram Meta, if there is only 1 active connection, route to it
+  const { data: activeConnections } = await db
+    .from('integration_connections')
+    .select('id, organization_id')
+    .eq('provider', 'instagram_meta')
+    .eq('status', 'active')
+
+  if (activeConnections && activeConnections.length === 1) {
+    return activeConnections[0] as ConnectionMatch
   }
 
   return null
@@ -73,7 +81,7 @@ export async function persistInboundEvent(
 ): Promise<boolean> {
   const db = admin
 
-  const matchedConnection = await findMatchingConnection(admin, event)
+  const matchedConnection = await findConnectionForEvent(db, event)
   if (!matchedConnection) {
     return false
   }
@@ -215,7 +223,7 @@ export async function processInboundEvents(
   let processedCount = 0
 
   for (const event of events) {
-    const connection = await findMatchingConnection(admin, event)
+    const connection = await findConnectionForEvent(admin, event)
 
     if (!connection) continue
 

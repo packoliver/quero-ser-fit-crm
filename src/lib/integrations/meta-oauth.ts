@@ -175,12 +175,34 @@ export async function subscribeInstagramWebhooks(accessToken: string): Promise<{
   }
 }
 
-export async function fetchInstagramProfile(accessToken: string): Promise<{ id: string; username?: string }> {
-  const response = await fetch('https://graph.instagram.com/v25.0/me?fields=user_id,username', {
+/**
+ * Busca `id` E `user_id` de propósito. A Meta expõe dois identificadores pra mesma conta
+ * (o app-scoped `id` e o `user_id` da conta profissional) e a documentação não deixa
+ * claro qual deles aparece como `recipient.id` nos webhooks de mensagem. Se guardarmos
+ * só um e a Meta mandar o outro, nenhuma conexão casa e a mensagem é descartada em
+ * silêncio — sem erro em log nenhum, que é o pior modo de falhar. Guardamos os dois e
+ * aceitamos qualquer um na hora de casar o webhook.
+ */
+export async function fetchInstagramProfile(
+  accessToken: string
+): Promise<{ id: string; appScopedId?: string; username?: string }> {
+  const response = await fetch('https://graph.instagram.com/v25.0/me?fields=id,user_id,username', {
     headers: { Authorization: `Bearer ${accessToken}` },
     cache: 'no-store',
   })
-  const result = await response.json().catch(() => ({})) as { user_id?: string; username?: string; error?: { message?: string } }
-  if (!response.ok || !result.user_id) throw new Error(result.error?.message || 'Não foi possível identificar a conta do Instagram.')
-  return { id: result.user_id, username: result.username }
+  const result = await response.json().catch(() => ({})) as {
+    id?: string
+    user_id?: string
+    username?: string
+    error?: { message?: string }
+  }
+  const primaryId = result.user_id || result.id
+  if (!response.ok || !primaryId) {
+    throw new Error(result.error?.message || 'Não foi possível identificar a conta do Instagram.')
+  }
+  return {
+    id: primaryId,
+    appScopedId: result.id && result.id !== primaryId ? result.id : undefined,
+    username: result.username,
+  }
 }
