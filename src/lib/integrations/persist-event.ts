@@ -2,12 +2,15 @@ import { AdminClient } from '@/lib/supabase/admin'
 import { Json } from '@/types/database'
 import { IncomingWebhookEvent, MessageStatusUpdate } from './types'
 import { sendPushToOrganization } from '@/lib/pwa/push'
+import { decryptToken } from '@/lib/security/encryption'
+import { fetchInstagramUserProfile } from './instagram-meta'
 
 const STATUS_RANK: Record<string, number> = { sent: 0, delivered: 1, read: 2 }
 
 interface ConnectionMatch {
   id: string
   organization_id: string
+  encrypted_credentials?: string | null
 }
 
 interface ContactMatch {
@@ -34,7 +37,7 @@ async function findConnectionForEvent(
 ): Promise<ConnectionMatch | null> {
   const { data: direct } = await db
     .from('integration_connections')
-    .select('id, organization_id')
+    .select('id, organization_id, encrypted_credentials')
     .eq('provider', event.provider)
     .eq('external_identifier', event.recipientId)
     .maybeSingle()
@@ -46,7 +49,7 @@ async function findConnectionForEvent(
   if (event.recipientId) {
     const { data: byAppScopedId } = await db
       .from('integration_connections')
-      .select('id, organization_id')
+      .select('id, organization_id, encrypted_credentials')
       .eq('provider', 'instagram_meta')
       .filter('settings->>instagram_app_scoped_id', 'eq', event.recipientId)
       .maybeSingle()
@@ -57,7 +60,7 @@ async function findConnectionForEvent(
   // Fallback 3: For Instagram Meta, route to the registered Instagram connection
   const { data: instagramConnections } = await db
     .from('integration_connections')
-    .select('id, organization_id')
+    .select('id, organization_id, encrypted_credentials')
     .eq('provider', 'instagram_meta')
     .order('updated_at', { ascending: false })
 
@@ -98,7 +101,26 @@ export async function persistInboundEvent(
   // their own. Providers that don't set it (Meta/Instagram, both 1:1-only) fall back to
   // senderId, which is exactly the old behavior for them.
   const contactExternalId = event.conversationKey || event.senderId
-  const contactName = event.conversationName || event.senderName || contactExternalId
+  let contactName = event.conversationName || event.senderName || contactExternalId
+  let avatarUrl = event.conversationAvatarUrl || null
+
+  // Se for Instagram e tivermos as credenciais, busca automaticamente o nome, @username e foto de perfil na Meta
+  if (channelType === 'instagram' && matchedConnection.encrypted_credentials) {
+    try {
+      const accessToken = decryptToken(matchedConnection.encrypted_credentials)
+      const profile = await fetchInstagramUserProfile(accessToken, contactExternalId)
+      if (profile) {
+        if (profile.name || profile.username) {
+          contactName = profile.name || `@${profile.username}`
+        }
+        if (profile.profilePic) {
+          avatarUrl = profile.profilePic
+        }
+      }
+    } catch (err) {
+      console.warn('[persistInboundEvent] Não foi possível consultar perfil do Instagram:', err)
+    }
+  }
 
   // 1. Find or create the contact via its channel identity.
   const { data: existingChannel } = await db
@@ -119,7 +141,7 @@ export async function persistInboundEvent(
         phone: channelType === 'whatsapp' ? contactExternalId : null,
         status: 'active',
         is_group: !!event.isGroup,
-        avatar_url: event.conversationAvatarUrl || null,
+        avatar_url: avatarUrl,
       })
       .select('id')
       .single()
@@ -145,12 +167,14 @@ export async function persistInboundEvent(
     if (channelError) {
       console.error('[persistInboundEvent] Erro ao criar canal de contato:', channelError)
     }
-  } else if (event.conversationAvatarUrl) {
-    // Best-effort refresh — a contact's WhatsApp photo can change, and the very first
-    // message that created this contact might have arrived before uazapi had resolved
-    // a photo yet. Never overwrites a known photo with nothing; only writes when this
-    // event actually carries one.
-    await db.from('contacts').update({ avatar_url: event.conversationAvatarUrl }).eq('id', contactId)
+  } else {
+    // Atualiza nome e foto caso tenhamos obtido novas informações do perfil
+    const updates: Record<string, unknown> = {}
+    if (avatarUrl) updates.avatar_url = avatarUrl
+    if (contactName && contactName !== contactExternalId) updates.name = contactName
+    if (Object.keys(updates).length > 0) {
+      await db.from('contacts').update(updates).eq('id', contactId)
+    }
   }
 
   // 2. Find or reuse this contact's conversation. Matched by contact_id ALONE — NOT also

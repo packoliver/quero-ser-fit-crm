@@ -150,3 +150,41 @@ export class MetaInstagramProvider implements ICRMIntegrationProvider {
     }
   }
 }
+
+/**
+ * Consulta nome, username e foto de perfil de um usuário do Instagram (IGSID) via Meta Graph API.
+ */
+export async function fetchInstagramUserProfile(
+  accessToken: string,
+  igsid: string
+): Promise<{ name?: string; username?: string; profilePic?: string } | null> {
+  try {
+    const res = await fetch(
+      `https://graph.instagram.com/v25.0/${encodeURIComponent(igsid)}?fields=name,username,profile_pic&access_token=${encodeURIComponent(accessToken)}`
+    )
+    if (res.ok) {
+      const data = await res.json()
+      return {
+        name: data.name || (data.username ? `@${data.username}` : undefined),
+        username: data.username,
+        profilePic: data.profile_pic,
+      }
+    }
+
+    const fbRes = await fetch(
+      `https://graph.facebook.com/v25.0/${encodeURIComponent(igsid)}?fields=name,username,profile_pic&access_token=${encodeURIComponent(accessToken)}`
+    )
+    if (fbRes.ok) {
+      const fbData = await fbRes.json()
+      return {
+        name: fbData.name || (fbData.username ? `@${fbData.username}` : undefined),
+        username: fbData.username,
+        profilePic: fbData.profile_pic,
+      }
+    }
+  } catch (err) {
+    console.error('[fetchInstagramUserProfile] Erro ao consultar perfil do Instagram:', err)
+  }
+  return null
+}
+
