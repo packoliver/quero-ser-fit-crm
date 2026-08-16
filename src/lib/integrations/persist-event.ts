@@ -54,15 +54,15 @@ async function findConnectionForEvent(
     if (byAppScopedId) return byAppScopedId as ConnectionMatch
   }
 
-  // Fallback 3: For Instagram Meta, if there is only 1 active connection, route to it
-  const { data: activeConnections } = await db
+  // Fallback 3: For Instagram Meta, route to the registered Instagram connection
+  const { data: instagramConnections } = await db
     .from('integration_connections')
     .select('id, organization_id')
     .eq('provider', 'instagram_meta')
-    .eq('status', 'active')
+    .order('updated_at', { ascending: false })
 
-  if (activeConnections && activeConnections.length === 1) {
-    return activeConnections[0] as ConnectionMatch
+  if (instagramConnections && instagramConnections.length > 0) {
+    return instagramConnections[0] as ConnectionMatch
   }
 
   return null
