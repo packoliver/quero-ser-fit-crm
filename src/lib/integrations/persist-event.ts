@@ -83,6 +83,10 @@ export async function persistInboundEvent(
 
   const matchedConnection = await findConnectionForEvent(db, event)
   if (!matchedConnection) {
+    console.log('[persistInboundEvent] Nenhum registro de conexão encontrado para o evento:', {
+      provider: event.provider,
+      recipientId: event.recipientId,
+    })
     return false
   }
 
@@ -120,10 +124,13 @@ export async function persistInboundEvent(
       .select('id')
       .single()
 
-    if (contactError || !newContact) return false
+    if (contactError || !newContact) {
+      console.error('[persistInboundEvent] Erro ao criar contato no Supabase:', contactError)
+      return false
+    }
     contactId = (newContact as ContactMatch).id
 
-    await db
+    const { error: channelError } = await db
       .from('contact_channels')
       .insert({
         organization_id: matchedConnection.organization_id,
@@ -134,6 +141,10 @@ export async function persistInboundEvent(
       })
       .select('contact_id')
       .single()
+
+    if (channelError) {
+      console.error('[persistInboundEvent] Erro ao criar canal de contato:', channelError)
+    }
   } else if (event.conversationAvatarUrl) {
     // Best-effort refresh — a contact's WhatsApp photo can change, and the very first
     // message that created this contact might have arrived before uazapi had resolved
@@ -174,7 +185,10 @@ export async function persistInboundEvent(
       .select('id')
       .single()
 
-    if (convError || !newConversation) return false
+    if (convError || !newConversation) {
+      console.error('[persistInboundEvent] Erro ao criar conversa no Supabase:', convError)
+      return false
+    }
     conversationId = (newConversation as ConversationMatch).id
   } else {
     // Always point at the connection THIS message actually came in on — keeps outbound
@@ -187,7 +201,7 @@ export async function persistInboundEvent(
 
   // 3. Insert the message itself. For a group, the conversation belongs to the group as
   // a whole, but we still record which specific member sent this particular message.
-  await db
+  const { error: msgError } = await db
     .from('messages')
     .insert({
       organization_id: matchedConnection.organization_id,
@@ -206,6 +220,12 @@ export async function persistInboundEvent(
     .select('id')
     .single()
 
+  if (msgError) {
+    console.error('[persistInboundEvent] Erro ao inserir mensagem no Supabase:', msgError)
+    return false
+  }
+
+  console.log('[persistInboundEvent] Mensagem salva com sucesso no Supabase! Conversation ID:', conversationId)
   return true
 }
 
