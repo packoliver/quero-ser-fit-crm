@@ -60,7 +60,7 @@ export class MetaInstagramProvider implements ICRMIntegrationProvider {
               externalEventId: message.mid || `ig_msg_${Date.now()}`,
               eventType: 'instagram_direct',
               senderId: sender.id,
-              recipientId: recipient?.id || '',
+              recipientId: recipient?.id || (typeof entry.id === 'string' ? entry.id : ''),
               content: message.text || '',
               timestamp,
               rawPayload: item,

@@ -18,6 +18,48 @@ interface ConversationMatch {
   id: string
 }
 
+async function findMatchingConnection(
+  admin: AdminClient,
+  event: IncomingWebhookEvent
+): Promise<ConnectionMatch | null> {
+  if (event.recipientId) {
+    const { data: directMatch } = await admin
+      .from('integration_connections')
+      .select('id, organization_id')
+      .eq('provider', event.provider)
+      .eq('external_identifier', event.recipientId)
+      .maybeSingle()
+
+    if (directMatch) return directMatch as ConnectionMatch
+
+    if (event.provider === 'instagram_meta') {
+      const { data: scopedMatch } = await admin
+        .from('integration_connections')
+        .select('id, organization_id')
+        .eq('provider', 'instagram_meta')
+        .filter('settings->>instagram_app_scoped_id', 'eq', event.recipientId)
+        .maybeSingle()
+
+      if (scopedMatch) return scopedMatch as ConnectionMatch
+    }
+  }
+
+  // Fallback: For Instagram Meta, if there is only 1 active connection, route to it
+  if (event.provider === 'instagram_meta') {
+    const { data: activeConnections } = await admin
+      .from('integration_connections')
+      .select('id, organization_id')
+      .eq('provider', 'instagram_meta')
+      .eq('status', 'active')
+
+    if (activeConnections && activeConnections.length === 1) {
+      return activeConnections[0] as ConnectionMatch
+    }
+  }
+
+  return null
+}
+
 /**
  * Processes one parsed inbound event (from any provider — Meta or ZAP API): finds which of
  * our registered numbers/pages it belongs to, then finds-or-creates the contact, the
@@ -31,14 +73,7 @@ export async function persistInboundEvent(
 ): Promise<boolean> {
   const db = admin
 
-  const { data: connection } = await db
-    .from('integration_connections')
-    .select('id, organization_id')
-    .eq('provider', event.provider)
-    .eq('external_identifier', event.recipientId)
-    .maybeSingle()
-
-  const matchedConnection = connection as ConnectionMatch | null
+  const matchedConnection = await findMatchingConnection(admin, event)
   if (!matchedConnection) {
     return false
   }
@@ -180,12 +215,7 @@ export async function processInboundEvents(
   let processedCount = 0
 
   for (const event of events) {
-    const { data: connection } = await admin
-      .from('integration_connections')
-      .select('id, organization_id')
-      .eq('provider', event.provider)
-      .eq('external_identifier', event.recipientId)
-      .maybeSingle()
+    const connection = await findMatchingConnection(admin, event)
 
     if (!connection) continue
 
