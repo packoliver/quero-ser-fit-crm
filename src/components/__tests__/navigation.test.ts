@@ -2,9 +2,9 @@ import { describe, it, expect } from 'vitest'
 import { getNavItemsForRole } from '@/lib/navigation'
 
 describe('Navegação e Permissões de Menu por Perfil (Fase 2)', () => {
-  it('deve retornar todas as 11 opções de menu para o perfil Administrador', () => {
+  it('deve retornar todas as 12 opções de menu para o perfil Administrador', () => {
     const adminNav = getNavItemsForRole('admin')
-    expect(adminNav.length).toBe(11)
+    expect(adminNav.length).toBe(12)
 
     const labels = adminNav.map((n) => n.label)
     expect(labels).toContain('Conversas')
@@ -17,6 +17,7 @@ describe('Navegação e Permissões de Menu por Perfil (Fase 2)', () => {
     expect(labels).toContain('Automações')
     expect(labels).toContain('Equipe')
     expect(labels).toContain('Integrações')
+    expect(labels).toContain('API Pública')
     expect(labels).toContain('Auditoria')
   })
 

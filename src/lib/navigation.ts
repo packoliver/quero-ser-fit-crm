@@ -10,6 +10,7 @@ import {
   History,
   Zap,
   Clock,
+  Code2,
   type LucideIcon,
 } from 'lucide-react'
 import { UserRole } from '@/types/database'
@@ -34,14 +35,15 @@ export const allNavItems: NavItem[] = [
   { href: '/configuracoes/horario-atendimento', label: 'Automações', icon: Clock, adminOnly: true },
   { href: '/configuracoes/equipe', label: 'Equipe', icon: UserCheck, adminOnly: true },
   { href: '/configuracoes/integracoes', label: 'Integrações', icon: Share2, adminOnly: true },
+  { href: '/configuracoes/api', label: 'API Pública', icon: Code2, adminOnly: true },
   { href: '/configuracoes/auditoria', label: 'Auditoria', icon: History, adminOnly: true },
 ]
 
 // Nav items only full admins should see, even though they're not literally about
-// billing/danger-zone stuff — integrations hold live API credentials, and the audit
-// log is the security trail itself, so managers (who can otherwise do most admin
-// things) are deliberately excluded from both.
-const ADMIN_ONLY_HREFS = ['/configuracoes/integracoes', '/configuracoes/auditoria']
+// billing/danger-zone stuff — integrations and API keys hold live credentials, and the
+// audit log is the security trail itself, so managers (who can otherwise do most admin
+// things) are deliberately excluded from all three.
+const ADMIN_ONLY_HREFS = ['/configuracoes/integracoes', '/configuracoes/api', '/configuracoes/auditoria']
 
 export function getNavItemsForRole(role: UserRole): NavItem[] {
   if (role === 'admin') {
