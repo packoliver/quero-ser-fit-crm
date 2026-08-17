@@ -609,6 +609,28 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
     }
   }, [viewMode, fetchRealData, notificationsEnabled])
 
+  // Rede de segurança pra quando o socket do Realtime morre em silêncio — celular com a
+  // tela apagada, notebook que dormiu, troca de Wi-Fi — e não volta sozinho a tempo. O
+  // navegador não avisa esse app quando isso acontece, então em vez de tentar detectar o
+  // socket morto, força uma busca silenciosa toda vez que a aba volta a ficar visível,
+  // a janela recupera o foco, ou a conexão volta — cobrindo exatamente "abri o
+  // celular/computador de novo e a mensagem não tinha aparecido" sem precisar de F5 manual.
+  useEffect(() => {
+    if (viewMode !== 'real') return
+    const resync = () => void fetchRealData(true)
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') resync()
+    }
+    document.addEventListener('visibilitychange', handleVisibility)
+    window.addEventListener('focus', resync)
+    window.addEventListener('online', resync)
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibility)
+      window.removeEventListener('focus', resync)
+      window.removeEventListener('online', resync)
+    }
+  }, [viewMode, fetchRealData])
+
   // Handle Assume Conversation
   const handleAssume = async (convId: string) => {
     setErrorMessage(null)
