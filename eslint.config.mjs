@@ -12,6 +12,14 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // ffmpeg-core.js/ffmpeg.js são builds minificados de terceiros copiados de
+    // node_modules em runtime (ver scripts/copy-ffmpeg-core.js) — nunca editados aqui,
+    // não versionados (ver .gitignore), não faz sentido lintar.
+    "public/ffmpeg/**",
+    // Scripts de Node.js puro rodados fora do bundler do Next.js (via `node
+    // scripts/*.js`, inclusive no postinstall) — CommonJS é o formato natural aqui, sem
+    // "type": "module" no package.json.
+    "scripts/**",
   ]),
 ]);
 

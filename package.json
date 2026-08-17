@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "postinstall": "node scripts/copy-ffmpeg-core.js",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
@@ -12,6 +13,8 @@
     "check": "node src/scripts/run-checks.js"
   },
   "dependencies": {
+    "@ffmpeg/core": "^0.12.10",
+    "@ffmpeg/ffmpeg": "^0.12.15",
     "@supabase/ssr": "^0.12.4",
     "@supabase/supabase-js": "^2.112.1",
     "clsx": "^2.1.1",

@@ -55,6 +55,7 @@ import { SLA_BREACH_MINUTES, minutesSince } from '@/lib/sla'
 import { cacheEntity, readCachedEntity, queueEntityMutation } from '@/lib/offline/repository'
 import { getOfflineScope } from '@/lib/offline/scope'
 import { PipelineStage, PipelineStageRow, DEFAULT_PIPELINE_STAGES, mapPipelineStageRow } from '@/lib/pipeline/stages'
+import { compressImageIfLarge, compressVideo, CompressProgress } from '@/lib/media/compress'
 
 type MediaType = 'image' | 'video' | 'audio' | 'document' | 'sticker'
 
@@ -200,6 +201,9 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
   const [newMessageText, setNewMessageText] = useState('')
   const [isSendingMessage, setIsSendingMessage] = useState(false)
   const [uploadingMedia, setUploadingMedia] = useState(false)
+  // Progresso da compressão de foto/vídeo grande demais pro limite de 24MB (ver
+  // src/lib/media/compress.ts) — null quando não está comprimindo nada.
+  const [compressionProgress, setCompressionProgress] = useState<CompressProgress | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const cameraInputRef = useRef<HTMLInputElement>(null)
   const [newNoteText, setNewNoteText] = useState('')
@@ -813,9 +817,38 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
   // request body limit), then sends the message with the resulting public URL. Shared
   // by both the paperclip (any file) and the camera (photo capture) inputs.
   const handleFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
+    let file = e.target.files?.[0]
     e.target.value = ''
     if (!file || !selectedConversation || viewMode !== 'real' || !selectedConversation.organizationId) return
+
+    setErrorMessage(null)
+
+    // Foto grande (câmera moderna facilmente passa de 8-15MB): comprime sempre que valer
+    // a pena, rápido via Canvas — não é exclusivo de quando estoura o limite, também
+    // deixa o envio mais rápido numa conexão de dados fraca.
+    if (file.type.startsWith('image/')) {
+      file = await compressImageIfLarge(file)
+    }
+
+    // Vídeo grande demais pro limite: tenta comprimir com ffmpeg.wasm (mais pesado — só
+    // entra em ação quando realmente precisa). Mostra o progresso porque isso pode levar
+    // de alguns segundos a mais de um minuto, dependendo do aparelho e do tamanho do vídeo.
+    if (file.type.startsWith('video/') && file.size > MAX_MEDIA_SIZE_BYTES) {
+      try {
+        const compressed = await compressVideo(file, MAX_MEDIA_SIZE_BYTES, setCompressionProgress)
+        if (compressed) {
+          file = compressed
+        } else {
+          setErrorMessage(
+            'Não foi possível comprimir esse vídeo o suficiente pra caber no limite de 24MB — tente um vídeo mais curto ou grave em qualidade menor.'
+          )
+          setCompressionProgress(null)
+          return
+        }
+      } finally {
+        setCompressionProgress(null)
+      }
+    }
 
     if (file.size > MAX_MEDIA_SIZE_BYTES) {
       setErrorMessage('Arquivo maior que 24MB — esse é o limite de anexo do Instagram/WhatsApp. Comprima o vídeo/foto e tente de novo.')
@@ -823,7 +856,6 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
     }
 
     setUploadingMedia(true)
-    setErrorMessage(null)
     try {
       const supabase = createClient()
       const ext = file.name.includes('.') ? file.name.split('.').pop() : 'bin'
@@ -1500,6 +1532,32 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                   </div>
                 </div>
               )}
+
+              {/* Video Compression Progress — pode levar de segundos a mais de um minuto
+                  num vídeo grande/aparelho mais fraco, então mostra progresso em vez de
+                  só um spinner genérico. */}
+              {compressionProgress && (
+                <div className="flex justify-start my-2">
+                  <div className="bg-slate-900 border border-slate-800 px-3.5 py-2 rounded-2xl text-slate-400 text-xs flex items-center gap-2 min-w-[220px]">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-400 shrink-0" />
+                    <div className="flex-1">
+                      <span>
+                        {compressionProgress.stage === 'loading'
+                          ? 'Preparando compressão de vídeo...'
+                          : `Comprimindo vídeo... ${Math.round(compressionProgress.ratio * 100)}%`}
+                      </span>
+                      {compressionProgress.stage === 'compressing' && (
+                        <div className="mt-1.5 h-1 bg-slate-800 rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-emerald-500 transition-all"
+                            style={{ width: `${Math.round(compressionProgress.ratio * 100)}%` }}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Message Input Form — closed conversations require an explicit reopen
@@ -1528,12 +1586,12 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                       className="hidden"
                       accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx"
                       onChange={handleFileSelected}
-                      disabled={uploadingMedia || isSendingMessage}
+                      disabled={uploadingMedia || isSendingMessage || !!compressionProgress}
                     />
                     <button
                       type="button"
                       onClick={() => fileInputRef.current?.click()}
-                      disabled={uploadingMedia || isSendingMessage}
+                      disabled={uploadingMedia || isSendingMessage || !!compressionProgress}
                       title="Anexar imagem, vídeo, áudio ou documento"
                       className="p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-slate-400 hover:text-emerald-400 hover:border-emerald-700 transition disabled:opacity-50 shrink-0"
                     >
@@ -1549,12 +1607,12 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                       accept="image/*"
                       capture="environment"
                       onChange={handleFileSelected}
-                      disabled={uploadingMedia || isSendingMessage}
+                      disabled={uploadingMedia || isSendingMessage || !!compressionProgress}
                     />
                     <button
                       type="button"
                       onClick={() => cameraInputRef.current?.click()}
-                      disabled={uploadingMedia || isSendingMessage}
+                      disabled={uploadingMedia || isSendingMessage || !!compressionProgress}
                       title="Tirar foto"
                       className="p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-slate-400 hover:text-emerald-400 hover:border-emerald-700 transition disabled:opacity-50 shrink-0"
                     >
@@ -1565,7 +1623,7 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                       <button
                         type="button"
                         onClick={() => setQuickRepliesOpen((v) => !v)}
-                        disabled={isSendingMessage || uploadingMedia}
+                        disabled={isSendingMessage || uploadingMedia || !!compressionProgress}
                         title="Respostas rápidas"
                         className="p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-slate-400 hover:text-emerald-400 hover:border-emerald-700 transition disabled:opacity-50"
                       >
@@ -1604,10 +1662,10 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                   placeholder="Digite sua resposta..."
                   value={newMessageText}
                   onChange={(e) => setNewMessageText(e.target.value)}
-                  disabled={isSendingMessage || uploadingMedia}
+                  disabled={isSendingMessage || uploadingMedia || !!compressionProgress}
                   className="flex-1 min-w-0 px-4 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-xs text-slate-100 focus:outline-none focus:border-emerald-500 disabled:opacity-50"
                 />
-                <Button type="submit" disabled={!newMessageText.trim() || isSendingMessage || uploadingMedia} size="md" variant="primary">
+                <Button type="submit" disabled={!newMessageText.trim() || isSendingMessage || uploadingMedia || !!compressionProgress} size="md" variant="primary">
                   {isSendingMessage ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
                 </Button>
               </div>

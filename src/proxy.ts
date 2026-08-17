@@ -12,8 +12,11 @@ export const config = {
      * - _next/static (static files)
      * - _next/image (image optimization files)
      * - favicon.ico (favicon file)
+     * - ffmpeg/ (motor de compressão de vídeo — arquivo estático, ver
+     *   scripts/copy-ffmpeg-core.js; precisa ser buscável mesmo antes/sem sessão
+     *   totalmente resolvida, e não tem por que passar pela checagem de auth)
      * - public assets (svg, png, jpg, etc.)
      */
-    '/((?!_next/static|_next/image|favicon.ico|manifest.json|sw.js|offline.html|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
+    '/((?!_next/static|_next/image|favicon.ico|manifest.json|sw.js|offline.html|ffmpeg/|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
   ],
 }

@@ -17,6 +17,11 @@
 /.next/
 /out/
 
+# ffmpeg-core.wasm (~32MB) é copiado de node_modules/@ffmpeg/core pelo script
+# postinstall (scripts/copy-ffmpeg-core.js) — não faz sentido versionar um binário
+# grande que já vem de uma dependência do package.json.
+/public/ffmpeg/
+
 # production
 /build
 
