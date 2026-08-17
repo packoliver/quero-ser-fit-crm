@@ -140,6 +140,16 @@ export class MetaInstagramProvider implements ICRMIntegrationProvider {
       const body = await res.json().catch(() => ({}))
 
       if (!res.ok) {
+        // A mensagem exibida pro agente é só `error.message` — curta demais pra diagnosticar
+        // por quê a Meta rejeitou o anexo (ex: "Upload attachment failure." não diz se é
+        // formato, tamanho real ou URL inacessível). O objeto completo (code, error_subcode,
+        // fbtrace_id) vai só pro log do servidor, onde dá pra cruzar com a documentação da Meta.
+        console.error('[MetaInstagramProvider.sendMessage] Erro retornado pela Graph API:', {
+          status: res.status,
+          mediaType: payload.mediaType,
+          mediaUrl: payload.mediaUrl,
+          error: body?.error,
+        })
         return { success: false, error: body?.error?.message || `Falha HTTP ${res.status} ao enviar Direct do Instagram.` }
       }
 
