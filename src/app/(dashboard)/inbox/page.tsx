@@ -54,6 +54,7 @@ import { hasPermission } from '@/lib/security/permissions'
 import { SLA_BREACH_MINUTES, minutesSince } from '@/lib/sla'
 import { cacheEntity, readCachedEntity, queueEntityMutation } from '@/lib/offline/repository'
 import { getOfflineScope } from '@/lib/offline/scope'
+import { PipelineStage, PipelineStageRow, DEFAULT_PIPELINE_STAGES, mapPipelineStageRow } from '@/lib/pipeline/stages'
 
 type MediaType = 'image' | 'video' | 'audio' | 'document' | 'sticker'
 
@@ -130,18 +131,6 @@ interface InlineDeal {
   stage: DealStage
   value: number | null
 }
-
-// Mesmo conjunto de etapas do Funil (src/app/(dashboard)/funil/page.tsx) — duplicado
-// aqui de propósito: essa aba só precisa do rótulo e da cor de cada etapa pro widget
-// compacto "Pedido" da conversa, sem puxar o resto da página do Funil.
-const DEAL_STAGES: Array<{ key: DealStage; label: string; variant: 'slate' | 'amber' | 'emerald' | 'teal' | 'indigo' | 'rose' }> = [
-  { key: 'lead', label: 'Lead', variant: 'slate' },
-  { key: 'negociando', label: 'Negociando', variant: 'amber' },
-  { key: 'fechado', label: 'Fechado', variant: 'emerald' },
-  { key: 'entrega', label: 'Entrega', variant: 'teal' },
-  { key: 'posvenda', label: 'Pós-venda', variant: 'indigo' },
-  { key: 'perdido', label: 'Perdido', variant: 'rose' },
-]
 
 const formatTime = (iso: string) =>
   new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
@@ -261,6 +250,10 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
   // Inbox pra separar "já vendeu, vai pra entrega" etc. Real-mode only: precisa de um
   // contact_id de verdade pra anexar o pedido a alguém.
   const [realDeals, setRealDeals] = useState<InlineDeal[]>([])
+  // Etapas do funil configuradas pelo admin em Configurações > Etapas do Funil (ver
+  // src/lib/pipeline/stages.ts) — DEFAULT_PIPELINE_STAGES é só rede de segurança
+  // enquanto isso ainda não carregou.
+  const [dealStages, setDealStages] = useState<PipelineStage[]>(DEFAULT_PIPELINE_STAGES)
   const [newDealTitle, setNewDealTitle] = useState('')
   const [newDealStage, setNewDealStage] = useState<DealStage>('lead')
   const [newDealValue, setNewDealValue] = useState('')
@@ -309,7 +302,7 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
       } = await typed.auth.getUser()
       setCurrentUserRealId(user?.id || null)
 
-      const [convRes, msgRes, noteRes, membersRes, profilesRes, dealsRes, myMembershipRes] = await Promise.all([
+      const [convRes, msgRes, noteRes, membersRes, profilesRes, dealsRes, stagesRes, myMembershipRes] = await Promise.all([
         typed
           .from('conversations')
           .select('id, organization_id, status, channel_type, current_assignee_id, last_message_at, contact_id, csat_score, contacts(name, phone, is_group, avatar_url), profiles(full_name)')
@@ -324,6 +317,9 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
         // Pedidos (Funil) — pra mostrar/gerenciar o pedido de um contato direto na aba
         // "Pedido" do próprio Inbox, sem precisar abrir o Funil.
         typed.from('deals').select('id, title, contact_id, stage, value').order!('created_at', { ascending: false }),
+        // Etapas do funil configuradas pelo admin — ver comentário na declaração de
+        // dealStages logo acima, no topo do componente.
+        typed.from('pipeline_stages').select('id, key, label, color, position, is_won, is_lost').order!('position', { ascending: true }),
         // Papel + overrides de permissão do próprio usuário logado — controla, por ex., se
         // o botão de excluir mensagem aparece (a API confere de novo no servidor de
         // qualquer forma; isso aqui é só pra não mostrar um botão que vai dar 403).
@@ -370,6 +366,12 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
 
       setRealTeamMembers(membersData.map((m) => ({ id: m.user_id, fullName: m.profiles?.full_name || 'Membro' })))
       setRealDeals((dealsRes.data || []) as InlineDeal[])
+      const stagesData = (stagesRes.data || []) as PipelineStageRow[]
+      if (stagesData.length) {
+        const mapped = stagesData.map(mapPipelineStageRow)
+        setDealStages(mapped)
+        setNewDealStage((prev) => (mapped.some((s) => s.key === prev) ? prev : mapped[0].key))
+      }
 
       const myMembership = myMembershipRes.data as { role: UserRole; permissions: CustomPermissions | null } | null
       setCurrentUserRole(myMembership?.role || null)
@@ -937,7 +939,7 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
           contact_id: selectedConversation.contactId,
           stage: newDealStage,
           value: parsedValue,
-          ...(newDealStage === 'fechado' ? { closed_at: new Date().toISOString() } : {}),
+          ...(dealStages.find((s) => s.key === newDealStage)?.isWon ? { closed_at: new Date().toISOString() } : {}),
         })
         .select('id, title, contact_id, stage, value')
         .single()
@@ -950,7 +952,7 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
       setRealDeals((prev) => [created, ...prev])
       setNewDealTitle('')
       setNewDealValue('')
-      setNewDealStage('lead')
+      setNewDealStage(dealStages[0]?.key || 'lead')
       showToast('Pedido criado no Funil!')
     } catch {
       setErrorMessage('Erro ao criar o pedido.')
@@ -963,7 +965,7 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
     try {
       const supabase = createClient()
       const updates: Record<string, unknown> = { stage }
-      if (stage === 'fechado') updates.closed_at = new Date().toISOString()
+      if (dealStages.find((s) => s.key === stage)?.isWon) updates.closed_at = new Date().toISOString()
 
       const { error } = await (supabase as unknown as {
         from: (t: string) => {
@@ -980,7 +982,7 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
       }
 
       setRealDeals((prev) => prev.map((d) => (d.id === dealId ? { ...d, stage } : d)))
-      showToast(`Pedido movido para "${DEAL_STAGES.find((s) => s.key === stage)?.label}"!`)
+      showToast(`Pedido movido para "${dealStages.find((s) => s.key === stage)?.label}"!`)
     } catch {
       setErrorMessage('Erro ao mover o pedido.')
     }
@@ -1719,12 +1721,12 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                           {realDeals
                             .filter((d) => d.contact_id === selectedConversation.contactId)
                             .map((deal) => {
-                              const stageInfo = DEAL_STAGES.find((s) => s.key === deal.stage)
+                              const stageInfo = dealStages.find((s) => s.key === deal.stage)
                               return (
                                 <div key={deal.id} className="bg-slate-900/80 p-3 rounded-xl border border-slate-800 space-y-2">
                                   <div className="flex items-start justify-between gap-2">
                                     <span className="font-semibold text-slate-200 leading-snug">{deal.title}</span>
-                                    <Badge variant={stageInfo?.variant}>{stageInfo?.label}</Badge>
+                                    <Badge variant={stageInfo?.color}>{stageInfo?.label || deal.stage}</Badge>
                                   </div>
                                   {deal.value != null && (
                                     <span className="flex items-center gap-1 text-emerald-400 font-semibold text-[11px]">
@@ -1738,7 +1740,7 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                                     className="w-full bg-slate-950 border border-slate-800 text-slate-300 rounded-lg px-2 py-1.5 text-[11px] focus:outline-none focus:border-emerald-500"
                                     aria-label="Mover pedido para outra etapa"
                                   >
-                                    {DEAL_STAGES.map((s) => (
+                                    {dealStages.map((s) => (
                                       <option key={s.key} value={s.key}>
                                         Mover: {s.label}
                                       </option>
@@ -1773,7 +1775,7 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                         onChange={(e) => setNewDealStage(e.target.value as DealStage)}
                         className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-slate-100 focus:outline-none focus:border-emerald-500 text-xs"
                       >
-                        {DEAL_STAGES.map((s) => (
+                        {dealStages.map((s) => (
                           <option key={s.key} value={s.key}>
                             {s.label}
                           </option>

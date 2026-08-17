@@ -13,7 +13,10 @@ export type AssignmentStatus = 'active' | 'transferred' | 'released'
 export type SenderType = 'contact' | 'user' | 'system'
 export type MessageStatus = 'sent' | 'delivered' | 'read' | 'failed'
 export type TaskStatus = 'pending' | 'in_progress' | 'completed' | 'cancelled'
-export type DealStage = 'lead' | 'negociando' | 'fechado' | 'entrega' | 'posvenda' | 'perdido'
+// Antes era um union fixo ('lead' | 'negociando' | ...). Desde pipeline_stages (etapas
+// do funil customizáveis pelo admin, ver src/lib/pipeline/stages.ts) virou texto livre —
+// a etapa válida é a `key` de uma linha em pipeline_stages da própria organização.
+export type DealStage = string
 export type IntegrationProvider = 'whatsapp_meta' | 'instagram_meta' | 'whatsapp_uazapi'
 export type IntegrationStatus = 'active' | 'inactive' | 'error'
 export type IntegrationConnectionMethod = 'cloud_api' | 'oauth' | 'uazapi'
@@ -40,6 +43,9 @@ export interface CustomPermissions {
   edit_deals?: boolean
   assign_tasks_to_others?: boolean
   delete_tasks?: boolean
+
+  // Funil
+  manage_pipeline_stages?: boolean
 
   // Relatórios
   view_reports?: boolean
@@ -489,6 +495,46 @@ export interface Database {
           notes?: string | null
           assigned_to_id?: string | null
           closed_at?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+      }
+      pipeline_stages: {
+        Row: {
+          id: string
+          organization_id: string
+          key: string
+          label: string
+          color: string
+          position: number
+          is_won: boolean
+          is_lost: boolean
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          // Auto-filled from the caller's organization membership by a DB trigger when
+          // omitted — see trg_autofill_org_pipeline_stages in 20260817000000_pipeline_stages.sql.
+          organization_id?: string
+          key: string
+          label: string
+          color?: string
+          position?: number
+          is_won?: boolean
+          is_lost?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          organization_id?: string
+          key?: string
+          label?: string
+          color?: string
+          position?: number
+          is_won?: boolean
+          is_lost?: boolean
           created_at?: string
           updated_at?: string
         }

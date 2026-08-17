@@ -11,6 +11,7 @@ import {
   Zap,
   Clock,
   Code2,
+  ListOrdered,
   type LucideIcon,
 } from 'lucide-react'
 import { UserRole } from '@/types/database'
@@ -33,6 +34,10 @@ export const allNavItems: NavItem[] = [
   // Inbox, igual tags — não mexe com credenciais nem dados sensíveis.
   { href: '/configuracoes/respostas-rapidas', label: 'Respostas Rápidas', icon: Zap },
   { href: '/configuracoes/horario-atendimento', label: 'Automações', icon: Clock, adminOnly: true },
+  // Não é sobre credenciais — é a lista de etapas do Kanban (Lead, Fechado, Perdido...).
+  // adminOnly:true só pra não poluir o menu de quem atende; gerente continua vendo,
+  // igual "Automações" (ver ADMIN_ONLY_HREFS logo abaixo pro que é restrito só a admin).
+  { href: '/configuracoes/funil', label: 'Etapas do Funil', icon: ListOrdered, adminOnly: true },
   { href: '/configuracoes/equipe', label: 'Equipe', icon: UserCheck, adminOnly: true },
   { href: '/configuracoes/integracoes', label: 'Integrações', icon: Share2, adminOnly: true },
   { href: '/configuracoes/api', label: 'API Pública', icon: Code2, adminOnly: true },

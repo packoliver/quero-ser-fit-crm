@@ -18,7 +18,7 @@ import {
 } from 'lucide-react'
 import { DemoDeal } from '@/lib/demo'
 import { Button } from '@/components/ui/Button'
-import { Badge, BadgeProps } from '@/components/ui/Badge'
+import { Badge } from '@/components/ui/Badge'
 import { Input } from '@/components/ui/Input'
 import { Modal } from '@/components/ui/Modal'
 import { EmptyState } from '@/components/ui/EmptyState'
@@ -27,6 +27,7 @@ import { DealStage } from '@/types/database'
 import { useDemoStorage } from '@/lib/demo/useDemoStorage'
 import { cacheEntity, readCachedEntity, queueEntityMutation } from '@/lib/offline/repository'
 import { getOfflineScope } from '@/lib/offline/scope'
+import { PipelineStage, PipelineStageRow, DEFAULT_PIPELINE_STAGES, mapPipelineStageRow } from '@/lib/pipeline/stages'
 
 export interface RealDeal {
   id: string
@@ -45,15 +46,6 @@ interface RealContactOption {
   name: string
   phone: string | null
 }
-
-const STAGES: Array<{ key: DealStage; label: string; variant: NonNullable<BadgeProps['variant']> }> = [
-  { key: 'lead', label: 'Lead', variant: 'slate' },
-  { key: 'negociando', label: 'Negociando', variant: 'amber' },
-  { key: 'fechado', label: 'Fechado', variant: 'emerald' },
-  { key: 'entrega', label: 'Entrega', variant: 'teal' },
-  { key: 'posvenda', label: 'Pós-venda', variant: 'indigo' },
-  { key: 'perdido', label: 'Perdido', variant: 'rose' },
-]
 
 const formatCurrency = (value: number | null) =>
   value == null ? null : value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
@@ -96,6 +88,7 @@ export default function FunilPage() {
   const [viewMode, setViewMode] = useState<'demo' | 'real'>('real')
   const [realDeals, setRealDeals] = useState<RealDeal[]>([])
   const [realContacts, setRealContacts] = useState<RealContactOption[]>([])
+  const [stages, setStages] = useState<PipelineStage[]>([])
 
   const [createModalOpen, setCreateModalOpen] = useState(false)
   const [editModalOpen, setEditModalOpen] = useState(false)
@@ -186,16 +179,41 @@ export default function FunilPage() {
     }
   }, [])
 
+  // Etapas do Kanban — configuradas pelo admin em Configurações > Etapas do Funil (ver
+  // src/lib/pipeline/stages.ts). Silencioso em caso de erro: activeStages cai pro modelo
+  // padrão embutido no código, então o board não fica vazio por uma falha de rede aqui.
+  const fetchStages = useCallback(async () => {
+    try {
+      const supabase = createClient()
+      const { data } = await (supabase as unknown as {
+        from: (t: string) => {
+          select: (c: string) => {
+            order: (col: string, opt: { ascending: boolean }) => Promise<{ data: PipelineStageRow[] | null }>
+          }
+        }
+      })
+        .from('pipeline_stages')
+        .select('id, key, label, color, position, is_won, is_lost')
+        .order('position', { ascending: true })
+
+      setStages((data || []).map(mapPipelineStageRow))
+    } catch {
+      // silencioso — ver comentário acima
+    }
+  }, [])
+
   useEffect(() => {
     const timer = setTimeout(() => {
       void fetchRealDeals()
       void fetchRealContacts()
+      void fetchStages()
     }, 0)
     return () => clearTimeout(timer)
-  }, [fetchRealDeals, fetchRealContacts])
+  }, [fetchRealDeals, fetchRealContacts, fetchStages])
 
-  // Realtime: um card que outra vendedora mover aparece pra todo mundo sem precisar
-  // atualizar a página — mesmo padrão de debounce usado no Inbox.
+  // Realtime: um card que outra vendedora mover (ou uma etapa que o admin renomear)
+  // aparece pra todo mundo sem precisar atualizar a página — mesmo padrão de debounce
+  // usado no Inbox.
   useEffect(() => {
     if (viewMode !== 'real') return
     const supabase = createClient()
@@ -204,16 +222,28 @@ export default function FunilPage() {
       if (debounceTimer) clearTimeout(debounceTimer)
       debounceTimer = setTimeout(() => void fetchRealDeals(), 400)
     }
+    let stagesDebounceTimer: ReturnType<typeof setTimeout> | null = null
+    const scheduleStagesRefresh = () => {
+      if (stagesDebounceTimer) clearTimeout(stagesDebounceTimer)
+      stagesDebounceTimer = setTimeout(() => void fetchStages(), 400)
+    }
     const channel = supabase
       .channel('funil-realtime')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'deals' }, scheduleRefresh)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'pipeline_stages' }, scheduleStagesRefresh)
       .subscribe()
 
     return () => {
       if (debounceTimer) clearTimeout(debounceTimer)
+      if (stagesDebounceTimer) clearTimeout(stagesDebounceTimer)
       supabase.removeChannel(channel)
     }
-  }, [viewMode, fetchRealDeals])
+  }, [viewMode, fetchRealDeals, fetchStages])
+
+  // Etapas ativas do board: no modo real usa as configuradas pelo admin (com o modelo
+  // padrão como rede de segurança enquanto ainda não carregaram ou se a org não tiver
+  // nenhuma); no modo demo sempre usa o modelo padrão, já que não há organização real.
+  const activeStages: PipelineStage[] = viewMode === 'real' ? (stages.length ? stages : DEFAULT_PIPELINE_STAGES) : DEFAULT_PIPELINE_STAGES
 
   const moveDeal = async (deal: AnyDeal, newStage: DealStage) => {
     if (dealStage(deal) === newStage) return
@@ -221,7 +251,7 @@ export default function FunilPage() {
     if (viewMode === 'real' && isRealDeal(deal)) {
       const offlineScope = await getOfflineScope()
       const updates: Record<string, unknown> = { stage: newStage }
-      if (newStage === 'fechado' && !deal.closed_at) updates.closed_at = new Date().toISOString()
+      if (activeStages.find((s) => s.key === newStage)?.isWon && !deal.closed_at) updates.closed_at = new Date().toISOString()
       if (!navigator.onLine && offlineScope) {
         await queueEntityMutation(offlineScope, 'deal.update', { id: deal.id, ...updates }, null)
         setRealDeals((prev) => prev.map((d) => (d.id === deal.id ? { ...d, stage: newStage, closed_at: (updates.closed_at as string) || d.closed_at } : d)))
@@ -247,13 +277,13 @@ export default function FunilPage() {
         setRealDeals((prev) =>
           prev.map((d) => (d.id === deal.id ? { ...d, stage: newStage, closed_at: (updates.closed_at as string) || d.closed_at } : d))
         )
-        showToast(`Pedido movido para "${STAGES.find((s) => s.key === newStage)?.label}"!`)
+        showToast(`Pedido movido para "${activeStages.find((s) => s.key === newStage)?.label}"!`)
       } catch {
         setError('Erro ao mover o pedido.')
       }
     } else {
       updateDemoDealStage(deal.id, newStage)
-      showToast(`Pedido movido para "${STAGES.find((s) => s.key === newStage)?.label}"!`)
+      showToast(`Pedido movido para "${activeStages.find((s) => s.key === newStage)?.label}"!`)
     }
   }
 
@@ -287,7 +317,7 @@ export default function FunilPage() {
             contact_id: newDeal.contactId,
             value: parsedValue,
             notes: newDeal.notes || null,
-            stage: 'lead',
+            stage: activeStages[0]?.key || 'lead',
           })
           .select('id, title, contact_id, value, stage, notes, created_at, closed_at, contacts(name, phone)')
           .single()
@@ -311,7 +341,7 @@ export default function FunilPage() {
         contactId: newDeal.contactId,
         contactName: contact?.name || 'Cliente',
         value: parsedValue,
-        stage: 'lead',
+        stage: activeStages[0]?.key || 'lead',
         notes: newDeal.notes,
       })
       showToast('Pedido adicionado ao funil!')
@@ -502,7 +532,7 @@ export default function FunilPage() {
         />
       ) : (
         <div className="flex gap-4 overflow-x-auto pb-4 -mx-4 px-4 lg:mx-0 lg:px-0">
-          {STAGES.map((stage) => {
+          {activeStages.map((stage) => {
             const stageDeals = activeDealList.filter((d) => dealStage(d) === stage.key)
             const stageValueTotal = stageDeals.reduce((sum, d) => sum + (dealValue(d) || 0), 0)
 
@@ -526,7 +556,7 @@ export default function FunilPage() {
                 }`}
               >
                 <div className="p-3.5 border-b border-slate-800 shrink-0 flex items-center justify-between">
-                  <Badge variant={stage.variant}>{stage.label}</Badge>
+                  <Badge variant={stage.color}>{stage.label}</Badge>
                   <div className="text-right">
                     <div className="text-[11px] text-slate-400 font-mono">{stageDeals.length} pedido{stageDeals.length === 1 ? '' : 's'}</div>
                     {stageValueTotal > 0 && (
@@ -579,7 +609,7 @@ export default function FunilPage() {
                             className="flex-1 bg-slate-950 border border-slate-800 text-slate-300 rounded-lg px-2 py-1 text-[10px] focus:outline-none focus:border-emerald-500"
                             aria-label="Mover pedido para outra etapa"
                           >
-                            {STAGES.map((s) => (
+                            {activeStages.map((s) => (
                               <option key={s.key} value={s.key}>
                                 Mover: {s.label}
                               </option>

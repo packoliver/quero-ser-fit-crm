@@ -21,6 +21,7 @@ export const DEFAULT_ADMIN_PERMISSIONS: CustomPermissions = {
   export_reports: true,
   manage_attendants: true,
   manage_integrations: true,
+  manage_pipeline_stages: true,
 }
 
 export const DEFAULT_MANAGER_PERMISSIONS: CustomPermissions = {
@@ -44,6 +45,7 @@ export const DEFAULT_MANAGER_PERMISSIONS: CustomPermissions = {
   export_reports: true,
   manage_attendants: true,
   manage_integrations: false,
+  manage_pipeline_stages: true,
 }
 
 export const DEFAULT_ATTENDANT_PERMISSIONS: CustomPermissions = {
@@ -67,6 +69,7 @@ export const DEFAULT_ATTENDANT_PERMISSIONS: CustomPermissions = {
   export_reports: false,
   manage_attendants: false,
   manage_integrations: false,
+  manage_pipeline_stages: false,
 }
 
 export function getDefaultPermissionsForRole(role: UserRole): CustomPermissions {
