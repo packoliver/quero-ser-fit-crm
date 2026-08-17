@@ -32,6 +32,8 @@ import {
   mapPipelineStageRow,
   slugifyStageKey,
 } from '@/lib/pipeline/stages'
+import { UserRole, CustomPermissions } from '@/types/database'
+import { hasPermission } from '@/lib/security/permissions'
 
 const COLOR_LABELS: Record<StageColor, string> = {
   slate: 'Cinza',
@@ -59,6 +61,46 @@ export default function EtapasDoFunilPage() {
 
   const [deleteTarget, setDeleteTarget] = useState<PipelineStage | null>(null)
   const [seeding, setSeeding] = useState(false)
+
+  // Papel + overrides de permissão do usuário logado — controla se os controles de
+  // criar/editar/excluir/reordenar aparecem (mesma lógica de canDeleteMessages no
+  // Inbox). O item de menu já fica escondido de atendentes (adminOnly em
+  // navigation.ts), mas isso cobre o caso de um admin ter revogado
+  // manage_pipeline_stages de um gerente específico via permissões granulares.
+  const [currentUserRole, setCurrentUserRole] = useState<UserRole | null>(null)
+  const [currentUserPermissions, setCurrentUserPermissions] = useState<CustomPermissions | null>(null)
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const supabase = createClient() as unknown as {
+        auth: { getUser: () => Promise<{ data: { user: { id: string } | null } }> }
+        from: (t: string) => {
+          select: (c: string) => {
+            eq: (col: string, val: string) => { limit: (n: number) => { maybeSingle: () => Promise<{ data: { role: UserRole; permissions: CustomPermissions | null } | null }> } }
+          }
+        }
+      }
+      supabase.auth.getUser().then(({ data: { user } }) => {
+        if (!user) return
+        supabase
+          .from('organization_members')
+          .select('role, permissions')
+          .eq('user_id', user.id)
+          .limit(1)
+          .maybeSingle()
+          .then(({ data }) => {
+            setCurrentUserRole(data?.role || null)
+            setCurrentUserPermissions(data?.permissions || null)
+          })
+      })
+    }, 0)
+    return () => clearTimeout(timer)
+  }, [])
+
+  // Antes do papel carregar, currentUserRole é null → hasPermission trata como
+  // 'attendant' (o menos privilegiado), então os controles não piscam aparecendo e
+  // sumindo pra quem não pode usá-los.
+  const canManageStages = hasPermission(currentUserRole || 'attendant', currentUserPermissions, 'manage_pipeline_stages')
 
   useEffect(() => () => {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
@@ -319,28 +361,36 @@ export default function EtapasDoFunilPage() {
             renomeie, reordene ou exclua etapas sem depender de ninguém mexer no código.
           </p>
         </div>
-        <Button onClick={openCreate} variant="primary">
-          <Plus className="w-4 h-4" />
-          <span>Nova Etapa</span>
-        </Button>
+        {canManageStages && (
+          <Button onClick={openCreate} variant="primary">
+            <Plus className="w-4 h-4" />
+            <span>Nova Etapa</span>
+          </Button>
+        )}
       </div>
 
       {!loading && stages.length === 0 ? (
         <EmptyState
           icon={<ListOrdered className="w-6 h-6" />}
           title="Nenhuma etapa configurada ainda"
-          description="Sem etapas, o Funil e a aba Pedido do Inbox ficam vazios. Comece do zero ou use o modelo padrão (Lead, Negociando, Fechado, Entrega, Pós-venda, Perdido) como ponto de partida."
+          description={
+            canManageStages
+              ? 'Sem etapas, o Funil e a aba Pedido do Inbox ficam vazios. Comece do zero ou use o modelo padrão (Lead, Negociando, Fechado, Entrega, Pós-venda, Perdido) como ponto de partida.'
+              : 'Sem etapas, o Funil e a aba Pedido do Inbox ficam vazios. Peça para um admin ou gerente configurar as etapas.'
+          }
           action={
-            <div className="flex flex-wrap items-center justify-center gap-2">
-              <Button onClick={handleSeedDefaults} variant="secondary" disabled={seeding}>
-                <Sparkles className="w-4 h-4" />
-                <span>{seeding ? 'Criando...' : 'Usar modelo padrão'}</span>
-              </Button>
-              <Button onClick={openCreate} variant="primary">
-                <Plus className="w-4 h-4" />
-                <span>Criar primeira etapa</span>
-              </Button>
-            </div>
+            canManageStages ? (
+              <div className="flex flex-wrap items-center justify-center gap-2">
+                <Button onClick={handleSeedDefaults} variant="secondary" disabled={seeding}>
+                  <Sparkles className="w-4 h-4" />
+                  <span>{seeding ? 'Criando...' : 'Usar modelo padrão'}</span>
+                </Button>
+                <Button onClick={openCreate} variant="primary">
+                  <Plus className="w-4 h-4" />
+                  <span>Criar primeira etapa</span>
+                </Button>
+              </div>
+            ) : undefined
           }
         />
       ) : (
@@ -358,26 +408,28 @@ export default function EtapasDoFunilPage() {
               {stages.map((stage, index) => (
                 <div key={stage.id} className="p-4 flex items-center justify-between gap-3 hover:bg-slate-800/40 transition">
                   <div className="flex items-center gap-3 min-w-0">
-                    <div className="flex flex-col shrink-0">
-                      <button
-                        type="button"
-                        onClick={() => void moveStage(index, -1)}
-                        disabled={index === 0}
-                        className="p-0.5 text-slate-500 hover:text-emerald-400 disabled:opacity-20 disabled:hover:text-slate-500 transition"
-                        title="Mover pra cima"
-                      >
-                        <ChevronUp className="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => void moveStage(index, 1)}
-                        disabled={index === stages.length - 1}
-                        className="p-0.5 text-slate-500 hover:text-emerald-400 disabled:opacity-20 disabled:hover:text-slate-500 transition"
-                        title="Mover pra baixo"
-                      >
-                        <ChevronDown className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
+                    {canManageStages && (
+                      <div className="flex flex-col shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => void moveStage(index, -1)}
+                          disabled={index === 0}
+                          className="p-0.5 text-slate-500 hover:text-emerald-400 disabled:opacity-20 disabled:hover:text-slate-500 transition"
+                          title="Mover pra cima"
+                        >
+                          <ChevronUp className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void moveStage(index, 1)}
+                          disabled={index === stages.length - 1}
+                          className="p-0.5 text-slate-500 hover:text-emerald-400 disabled:opacity-20 disabled:hover:text-slate-500 transition"
+                          title="Mover pra baixo"
+                        >
+                          <ChevronDown className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    )}
                     <div className="min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
                         <Badge variant={stage.color}>{stage.label}</Badge>
@@ -394,24 +446,26 @@ export default function EtapasDoFunilPage() {
                       </div>
                     </div>
                   </div>
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    <button
-                      type="button"
-                      onClick={() => openEdit(stage)}
-                      className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-400 hover:text-emerald-400 transition"
-                      title="Editar etapa"
-                    >
-                      <Pencil className="w-3.5 h-3.5" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void requestDelete(stage)}
-                      className="p-1.5 rounded-lg bg-slate-900 hover:bg-rose-950/60 border border-slate-700 hover:border-rose-800 text-slate-400 hover:text-rose-400 transition"
-                      title="Excluir etapa"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
+                  {canManageStages && (
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => openEdit(stage)}
+                        className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-400 hover:text-emerald-400 transition"
+                        title="Editar etapa"
+                      >
+                        <Pencil className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void requestDelete(stage)}
+                        className="p-1.5 rounded-lg bg-slate-900 hover:bg-rose-950/60 border border-slate-700 hover:border-rose-800 text-slate-400 hover:text-rose-400 transition"
+                        title="Excluir etapa"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>

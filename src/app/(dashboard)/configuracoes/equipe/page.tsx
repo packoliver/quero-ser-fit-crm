@@ -946,6 +946,26 @@ export default function EquipeConfigPage() {
               </div>
             </div>
 
+            {/* Category: Funil */}
+            <div className="p-3 bg-slate-900/80 rounded-xl border border-slate-800 space-y-2.5">
+              <div className="flex items-center gap-2 font-bold text-slate-200">
+                <BarChart3 className="w-4 h-4 text-teal-400" />
+                <span>Funil de Vendas</span>
+              </div>
+
+              <div className="space-y-2 pt-1">
+                <label className="flex items-center justify-between cursor-pointer p-1.5 rounded-lg hover:bg-slate-800/60 transition">
+                  <span className="text-slate-300 font-medium">Configurar etapas do funil (criar, renomear, excluir)</span>
+                  <input
+                    type="checkbox"
+                    checked={!!editingPermissions.manage_pipeline_stages}
+                    onChange={() => togglePermission('manage_pipeline_stages')}
+                    className="w-4 h-4 accent-emerald-500 rounded cursor-pointer"
+                  />
+                </label>
+              </div>
+            </div>
+
             {/* Category: Relatórios & Equipe */}
             <div className="p-3 bg-slate-900/80 rounded-xl border border-slate-800 space-y-2.5">
               <div className="flex items-center gap-2 font-bold text-slate-200">

@@ -992,7 +992,12 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
   const filteredConversations = conversations.filter((c) => {
     const effectiveCurrentUserId = viewMode === 'real' ? currentUserRealId : currentUserId
     const isMine = c.currentAssigneeId === effectiveCurrentUserId
-    const isUnassigned = !c.currentAssigneeId || c.status === 'open'
+    // Só "currentAssigneeId ausente" conta como não-atribuída. Não usar `status === 'open'`
+    // aqui: persist-event.ts força status de volta pra 'open' a cada mensagem nova do
+    // cliente, mesmo numa conversa já atribuída — usar isso pra decidir "fila" fazia uma
+    // conversa que já é de uma vendedora reaparecer como "Fila de Espera" pro time
+    // inteiro assim que o cliente mandasse qualquer mensagem de acompanhamento.
+    const isUnassigned = !c.currentAssigneeId
 
     const matchesQueue =
       filterQueue === 'all' ? true : filterQueue === 'mine' ? isMine : isUnassigned
@@ -1143,7 +1148,7 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                 }`}
                 suppressHydrationWarning
               >
-                Fila ({conversations.filter((c) => !c.currentAssigneeId || c.status === 'open').length})
+                Fila ({conversations.filter((c) => !c.currentAssigneeId).length})
               </button>
             </div>
 
@@ -1236,7 +1241,7 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                           <Badge variant="slate" icon={<Archive className="w-3 h-3" />}>
                             Encerrada
                           </Badge>
-                        ) : !conv.currentAssigneeId || conv.status === 'open' ? (
+                        ) : !conv.currentAssigneeId ? (
                           <Badge variant="amber">Fila de Espera</Badge>
                         ) : (
                           <Badge variant="teal" icon={<User className="w-3 h-3" />}>
