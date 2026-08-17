@@ -36,6 +36,7 @@ import {
   RotateCcw,
   Zap,
   AlertTriangle,
+  Star,
 } from 'lucide-react'
 import { InstagramIcon as Instagram } from '@/components/icons/InstagramIcon'
 import { demoAttendants } from '@/lib/demo'
@@ -99,6 +100,9 @@ interface UiConversation {
   /** De quem foi a última mensagem — só interessa quando é 'contact': significa que a
    * conversa está esperando resposta da equipe agora (usado no aviso de SLA). */
   lastMessageSenderType?: 'contact' | 'user' | 'system'
+  /** Nota 1-5 dada pelo cliente (CSAT) — null enquanto não avaliado, ou se CSAT nunca
+   * foi pedido pra essa conversa. */
+  csatScore?: number | null
   status: 'open' | 'assigned' | 'closed' | 'archived'
   currentAssigneeId: string | null
   currentAssigneeName: string | null
@@ -308,7 +312,7 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
       const [convRes, msgRes, noteRes, membersRes, profilesRes, dealsRes, myMembershipRes] = await Promise.all([
         typed
           .from('conversations')
-          .select('id, organization_id, status, channel_type, current_assignee_id, last_message_at, contact_id, contacts(name, phone, is_group, avatar_url), profiles(full_name)')
+          .select('id, organization_id, status, channel_type, current_assignee_id, last_message_at, contact_id, csat_score, contacts(name, phone, is_group, avatar_url), profiles(full_name)')
           .order!('last_message_at', { ascending: false }),
         typed.from('messages').select('id, conversation_id, sender_type, sender_id, content, media_url, media_type, status, metadata, created_at').order!('created_at', { ascending: true }),
         typed.from('internal_notes').select('id, conversation_id, content, created_at, author_id, profiles(full_name)').order!('created_at', { ascending: false }),
@@ -334,6 +338,7 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
         current_assignee_id: string | null
         last_message_at: string
         contact_id: string
+        csat_score: number | null
         contacts: { name: string | null; phone: string | null; is_group: boolean | null; avatar_url: string | null } | null
         profiles: { full_name: string | null } | null
       }>
@@ -427,6 +432,7 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
           lastMessageTime: lastMsg?.time || formatTime(conv.last_message_at),
           lastMessageAtIso: lastRawMsg?.created_at || conv.last_message_at,
           lastMessageSenderType: lastRawMsg?.sender_type,
+          csatScore: conv.csat_score,
           status: conv.status,
           currentAssigneeId: conv.current_assignee_id,
           currentAssigneeName: conv.profiles?.full_name || null,
@@ -685,6 +691,10 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
           return
         }
         showToast('Conversa encerrada.')
+        // Melhor esforço: só dispara se a organização tiver CSAT ligado (a rota decide
+        // isso sozinha) — nunca bloqueia nem mostra erro pro atendente se falhar, o
+        // fechamento da conversa já aconteceu de qualquer forma.
+        fetch(`/api/conversations/${convId}/request-csat`, { method: 'POST' }).catch(() => {})
         fetchRealData()
       } catch {
         setErrorMessage('Erro ao encerrar a conversa.')
@@ -1618,6 +1628,23 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                     </div>
                   </div>
                 </div>
+
+                {typeof selectedConversation.csatScore === 'number' && (
+                  <div>
+                    <h3 className="text-slate-400 uppercase font-semibold text-[10px] tracking-wider mb-2">
+                      Avaliação do Cliente
+                    </h3>
+                    <div className="bg-slate-900/80 p-3 rounded-xl border border-slate-800 flex items-center gap-1">
+                      {[1, 2, 3, 4, 5].map((n) => (
+                        <Star
+                          key={n}
+                          className={`w-4 h-4 ${n <= selectedConversation.csatScore! ? 'text-amber-400 fill-amber-400' : 'text-slate-700'}`}
+                        />
+                      ))}
+                      <span className="text-slate-300 font-semibold ml-1">{selectedConversation.csatScore}/5</span>
+                    </div>
+                  </div>
+                )}
 
                 <div>
                   <h3 className="text-slate-400 uppercase font-semibold text-[10px] tracking-wider mb-2">Tags</h3>

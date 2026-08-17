@@ -14,7 +14,7 @@ describe('Navegação e Permissões de Menu por Perfil (Fase 2)', () => {
     expect(labels).toContain('Tarefas')
     expect(labels).toContain('Relatórios')
     expect(labels).toContain('Respostas Rápidas')
-    expect(labels).toContain('Horário de Atendimento')
+    expect(labels).toContain('Automações')
     expect(labels).toContain('Equipe')
     expect(labels).toContain('Integrações')
     expect(labels).toContain('Auditoria')

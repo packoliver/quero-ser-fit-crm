@@ -31,7 +31,7 @@ export const allNavItems: NavItem[] = [
   // Não é admin-only: é uma biblioteca de textos prontos pra equipe inteira usar no
   // Inbox, igual tags — não mexe com credenciais nem dados sensíveis.
   { href: '/configuracoes/respostas-rapidas', label: 'Respostas Rápidas', icon: Zap },
-  { href: '/configuracoes/horario-atendimento', label: 'Horário de Atendimento', icon: Clock, adminOnly: true },
+  { href: '/configuracoes/horario-atendimento', label: 'Automações', icon: Clock, adminOnly: true },
   { href: '/configuracoes/equipe', label: 'Equipe', icon: UserCheck, adminOnly: true },
   { href: '/configuracoes/integracoes', label: 'Integrações', icon: Share2, adminOnly: true },
   { href: '/configuracoes/auditoria', label: 'Auditoria', icon: History, adminOnly: true },

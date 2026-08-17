@@ -5,6 +5,7 @@ import { sendPushToOrganization } from '@/lib/pwa/push'
 import { decryptToken } from '@/lib/security/encryption'
 import { fetchInstagramUserProfile } from './instagram-meta'
 import { maybeSendAutoReply } from './auto-reply'
+import { maybeCaptureCsatReply } from './csat'
 
 const STATUS_RANK: Record<string, number> = { sent: 0, delivered: 1, read: 2 }
 
@@ -331,10 +332,11 @@ export async function processInboundEvents(
         tag: `crm-message-${event.externalEventId}`,
       })
 
-      // Resposta automática fora do horário — não bloqueia o processamento do webhook
-      // se falhar (maybeSendAutoReply nunca lança exceção).
+      // Resposta automática fora do horário e captura de avaliação (CSAT) — nenhuma das
+      // duas bloqueia o processamento do webhook se falhar (ambas nunca lançam exceção).
       if (persistResult.conversationId) {
         await maybeSendAutoReply(admin, event, connection, persistResult.conversationId)
+        await maybeCaptureCsatReply(admin, event, connection, persistResult.conversationId)
       }
     }
     // If persistResult.success is false, the event stays pending — next webhook retry will attempt again
