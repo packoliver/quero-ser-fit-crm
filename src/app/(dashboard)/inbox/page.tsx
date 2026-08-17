@@ -58,7 +58,15 @@ import { PipelineStage, PipelineStageRow, DEFAULT_PIPELINE_STAGES, mapPipelineSt
 
 type MediaType = 'image' | 'video' | 'audio' | 'document' | 'sticker'
 
-const MAX_MEDIA_SIZE_BYTES = 25 * 1024 * 1024 // 25MB — mesmo limite do bucket no Supabase
+// O bucket chat-media no Supabase está configurado com file_size_limit = 26214400 (exatos
+// 25MB) — e é também o teto real do Instagram Direct pra anexos de vídeo, então não dá
+// pra simplesmente aumentar esse número (a Meta rejeitaria o envio de qualquer forma).
+// A checagem no navegador fica um pouco ABAIXO do limite do bucket (24MB, não 25MB) de
+// propósito: o upload em si carrega alguns bytes de overhead além do tamanho puro do
+// arquivo, então um arquivo que passa num `size > 25MB` local pode ainda assim estourar
+// o limite de 25MB do lado do Supabase — sem essa margem, isso resultava no erro técnico
+// cru do Supabase aparecendo pro usuário em vez da mensagem amigável de "reduza o tamanho".
+const MAX_MEDIA_SIZE_BYTES = 24 * 1024 * 1024 // 24MB — margem de segurança abaixo do limite de 25MB do bucket/Instagram
 
 function detectMediaType(mime: string): MediaType {
   if (mime.startsWith('image/')) return 'image'
@@ -810,7 +818,7 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
     if (!file || !selectedConversation || viewMode !== 'real' || !selectedConversation.organizationId) return
 
     if (file.size > MAX_MEDIA_SIZE_BYTES) {
-      setErrorMessage('Arquivo maior que 25MB — reduza o tamanho e tente de novo.')
+      setErrorMessage('Arquivo maior que 24MB — esse é o limite de anexo do Instagram/WhatsApp. Comprima o vídeo/foto e tente de novo.')
       return
     }
 
@@ -827,7 +835,17 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
         .upload(path, file, { contentType: file.type || undefined })
 
       if (uploadError) {
-        setErrorMessage(`Falha ao enviar arquivo: ${uploadError.message}`)
+        // O Supabase devolve um texto técnico cru ("Attachment size exceeds allowable
+        // limit... upload the file in chunks") quando o arquivo passa pela checagem de
+        // 24MB acima mas ainda assim estoura o limite de 25MB do bucket (o upload real
+        // carrega um pouco de overhead além do tamanho puro do arquivo) — troca por uma
+        // mensagem amigável igual à checagem local em vez de mostrar o texto cru.
+        const isSizeError = /size|limit|large|chunk/i.test(uploadError.message)
+        setErrorMessage(
+          isSizeError
+            ? 'Arquivo grande demais para o limite de anexo (24MB) — comprima o vídeo/foto e tente de novo.'
+            : `Falha ao enviar arquivo: ${uploadError.message}`
+        )
         return
       }
 

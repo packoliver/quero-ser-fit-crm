@@ -2,7 +2,11 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { randomUUID } from 'crypto'
 
 const BUCKET = 'chat-media'
-const MAX_MEDIA_SIZE_BYTES = 25 * 1024 * 1024 // 25MB — mesmo limite configurado no bucket
+// Um pouco abaixo do file_size_limit real do bucket (25MB) de propósito — o upload em si
+// carrega algum overhead além do tamanho puro do arquivo, então cortar exatamente em 25MB
+// aqui podia deixar passar um arquivo que ainda assim estoura o limite no upload real pro
+// Storage (mesmo raciocínio do MAX_MEDIA_SIZE_BYTES do lado do navegador, em inbox/page.tsx).
+const MAX_MEDIA_SIZE_BYTES = 24 * 1024 * 1024 // 24MB — margem de segurança abaixo do limite de 25MB do bucket
 
 const EXTENSION_BY_MIME: Record<string, string> = {
   'image/jpeg': 'jpg',
