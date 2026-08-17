@@ -17,6 +17,7 @@ import {
   Trash2,
   AlertTriangle,
   CheckCircle2,
+  Download,
   X,
 } from 'lucide-react'
 import { DemoContact } from '@/lib/demo'
@@ -30,6 +31,8 @@ import { createClient } from '@/lib/supabase/client'
 import { cacheEntity, readCachedEntity, queueEntityMutation } from '@/lib/offline/repository'
 import { getOfflineScope } from '@/lib/offline/scope'
 import { useDemoStorage } from '@/lib/demo/useDemoStorage'
+import { UserRole, CustomPermissions } from '@/types/database'
+import { hasPermission } from '@/lib/security/permissions'
 
 export interface RealContact {
   id: string
@@ -69,6 +72,38 @@ export default function ClientesPage() {
 
   useEffect(() => () => {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
+  }, [])
+
+  // Papel + overrides de permissão do usuário logado — só usado aqui pra decidir se o
+  // botão "Exportar CSV" aparece (mesma lógica de canDeleteMessages no Inbox).
+  const [currentUserRole, setCurrentUserRole] = useState<UserRole | null>(null)
+  const [currentUserPermissions, setCurrentUserPermissions] = useState<CustomPermissions | null>(null)
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const supabase = createClient() as unknown as {
+        auth: { getUser: () => Promise<{ data: { user: { id: string } | null } }> }
+        from: (t: string) => {
+          select: (c: string) => {
+            eq: (col: string, val: string) => { limit: (n: number) => { maybeSingle: () => Promise<{ data: { role: UserRole; permissions: CustomPermissions | null } | null }> } }
+          }
+        }
+      }
+      supabase.auth.getUser().then(({ data: { user } }) => {
+        if (!user) return
+        supabase
+          .from('organization_members')
+          .select('role, permissions')
+          .eq('user_id', user.id)
+          .limit(1)
+          .maybeSingle()
+          .then(({ data }) => {
+            setCurrentUserRole(data?.role || null)
+            setCurrentUserPermissions(data?.permissions || null)
+          })
+      })
+    }, 0)
+    return () => clearTimeout(timer)
   }, [])
 
   // Form States
@@ -425,6 +460,45 @@ export default function ClientesPage() {
     return matchesSearch && matchesTag
   })
 
+  const isRealContactEntry = (c: RealContact | DemoContact): c is RealContact => !('isDemo' in c)
+
+  const canExportClients = hasPermission(currentUserRole || 'attendant', currentUserPermissions, 'export_clients')
+
+  // Exporta exatamente o que está na tela (respeitando busca + filtro de tag ativos) —
+  // não a base inteira por baixo dos panos, pra bater com o que o atendente está vendo.
+  const handleExportCsv = () => {
+    const escapeCsvField = (value: string) => {
+      const escaped = value.replace(/"/g, '""')
+      return /[",\n]/.test(value) ? `"${escaped}"` : escaped
+    }
+
+    const headers = ['Nome', 'Telefone', 'E-mail', 'Tags', 'Notas', 'Cadastrado em']
+    const rows = filteredContacts.map((c) => {
+      const createdAt = isRealContactEntry(c) ? c.created_at : c.createdAt
+      return [
+        c.name,
+        c.phone || '',
+        c.email || '',
+        (c.tags || []).join('; '),
+        c.notes || '',
+        createdAt ? new Date(createdAt).toLocaleDateString('pt-BR') : '',
+      ]
+    })
+
+    // ﻿ (BOM) garante que o Excel abra acentos (á, ã, ç) certos em vez de "mojibake".
+    const csvContent = '\uFEFF' + [headers, ...rows].map((row) => row.map((cell) => escapeCsvField(String(cell))).join(',')).join('\r\n')
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `clientes-quero-ser-fit-${new Date().toISOString().slice(0, 10)}.csv`
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    URL.revokeObjectURL(url)
+    showToast(`${filteredContacts.length} cliente(s) exportado(s) em CSV.`)
+  }
+
   return (
     <div className="p-4 lg:p-8 space-y-6 max-w-7xl mx-auto relative">
       {/* Toast Notification */}
@@ -486,6 +560,13 @@ export default function ClientesPage() {
           {viewMode === 'real' && (
             <Button variant="secondary" onClick={fetchRealContacts}>
               <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+            </Button>
+          )}
+
+          {canExportClients && filteredContacts.length > 0 && (
+            <Button variant="secondary" onClick={handleExportCsv} title="Exporta os clientes visíveis na lista atual (respeitando busca e filtro de tag)">
+              <Download className="w-4 h-4" />
+              <span>Exportar CSV</span>
             </Button>
           )}
 

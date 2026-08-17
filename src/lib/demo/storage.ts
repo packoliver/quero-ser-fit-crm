@@ -513,6 +513,42 @@ export function updateConversationAssignee(
   return updatedConv
 }
 
+/** Closes or reopens a conversation — the demo-mode counterpart of close_conversation_atomic /
+ * reopen_conversation_atomic (see 20260816000000_conversation_close_reopen_rpc.sql). */
+export function updateConversationStatus(
+  convId: string,
+  status: 'open' | 'closed'
+): DemoConversation | null {
+  const db = getDemoDatabase()
+  let updatedConv: DemoConversation | null = null
+  const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+
+  const updatedConversations = db.conversations.map((conv) => {
+    if (conv.id === convId) {
+      const systemMsg = {
+        id: `sys-${crypto.randomUUID().slice(0, 8)}`,
+        senderType: 'system' as const,
+        senderName: 'Sistema',
+        content: status === 'closed' ? 'Conversa encerrada.' : 'Conversa reaberta.',
+        time: nowTime,
+      }
+
+      updatedConv = {
+        ...conv,
+        status,
+        messages: [...conv.messages, systemMsg],
+      }
+      return updatedConv
+    }
+    return conv
+  })
+
+  if (updatedConv) {
+    saveDemoDatabase({ ...db, conversations: updatedConversations })
+  }
+  return updatedConv
+}
+
 // ==========================================
 // Member Helpers
 // ==========================================

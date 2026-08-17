@@ -2,6 +2,7 @@
 
 import { Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
+import Link from 'next/link'
 import {
   Search,
   Send,
@@ -31,6 +32,9 @@ import {
   Plus,
   ArrowLeft,
   Trash2,
+  Archive,
+  RotateCcw,
+  Zap,
 } from 'lucide-react'
 import { InstagramIcon as Instagram } from '@/components/icons/InstagramIcon'
 import { demoAttendants } from '@/lib/demo'
@@ -99,6 +103,13 @@ interface RealTeamMember {
   fullName: string
 }
 
+interface QuickReplyOption {
+  id: string
+  shortcut: string | null
+  title: string
+  content: string
+}
+
 interface InlineDeal {
   id: string
   title: string
@@ -133,6 +144,7 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
     addMessage,
     addInternalNote,
     updateAssignee,
+    updateConversationStatus,
   } = useDemoStorage()
 
   const [viewMode, setViewMode] = useState<'demo' | 'real'>(
@@ -186,6 +198,51 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
   const [targetAttendantId, setTargetAttendantId] = useState('att-2')
   const [deleteMessageId, setDeleteMessageId] = useState<string | null>(null)
   const [deletingMessage, setDeletingMessage] = useState(false)
+
+  // Respostas rápidas — biblioteca compartilhada da organização (ver
+  // /configuracoes/respostas-rapidas). Carregada uma vez (muda raramente) em vez de
+  // entrar no polling de fetchRealData.
+  const [quickReplies, setQuickReplies] = useState<QuickReplyOption[]>([])
+  const [quickRepliesOpen, setQuickRepliesOpen] = useState(false)
+  const quickRepliesRef = useRef<HTMLDivElement>(null)
+
+  // Carrega a biblioteca de respostas rápidas uma vez (muda raramente, então não entra
+  // no polling/realtime de fetchRealData).
+  useEffect(() => {
+    if (viewMode !== 'real') return
+    let cancelled = false
+    const timer = setTimeout(() => {
+      const supabase = createClient()
+      ;(supabase as unknown as {
+        from: (t: string) => {
+          select: (c: string) => {
+            order: (col: string, opt: { ascending: boolean }) => Promise<{ data: QuickReplyOption[] | null }>
+          }
+        }
+      })
+        .from('quick_replies')
+        .select('id, shortcut, title, content')
+        .order('title', { ascending: true })
+        .then(({ data }) => {
+          if (!cancelled) setQuickReplies(data || [])
+        })
+    }, 0)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [viewMode])
+
+  // Fecha o dropdown de respostas rápidas ao clicar fora dele.
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (quickRepliesRef.current && !quickRepliesRef.current.contains(e.target as Node)) {
+        setQuickRepliesOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
 
   // Pedido (funil) inline na própria conversa — pra vendedora não precisar sair do
   // Inbox pra separar "já vendeu, vai pra entrega" etc. Real-mode only: precisa de um
@@ -595,6 +652,59 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
     setTransferModalOpen(false)
   }
 
+  // Handle Close/Reopen Conversation. A closed conversation reopens on its own the
+  // moment the client writes again (persist-event.ts forces status back to 'open' on
+  // every inbound message) — these two are for the attendant side: closing to get it
+  // off the active queue, or reopening by hand (closed by mistake, or to send one more
+  // message before the client replies).
+  const handleCloseConversation = async (convId: string) => {
+    setErrorMessage(null)
+    if (viewMode === 'real') {
+      try {
+        const supabase = createClient()
+        const { data: success, error: rpcError } = await (supabase as unknown as {
+          rpc: (fn: string, params: { p_conversation_id: string }) => Promise<{ data: boolean; error: { message: string } | null }>
+        }).rpc('close_conversation_atomic', { p_conversation_id: convId })
+
+        if (rpcError || !success) {
+          setErrorMessage('Não foi possível encerrar a conversa.')
+          return
+        }
+        showToast('Conversa encerrada.')
+        fetchRealData()
+      } catch {
+        setErrorMessage('Erro ao encerrar a conversa.')
+      }
+    } else {
+      updateConversationStatus(convId, 'closed')
+      showToast('Conversa encerrada!')
+    }
+  }
+
+  const handleReopenConversation = async (convId: string) => {
+    setErrorMessage(null)
+    if (viewMode === 'real') {
+      try {
+        const supabase = createClient()
+        const { data: success, error: rpcError } = await (supabase as unknown as {
+          rpc: (fn: string, params: { p_conversation_id: string }) => Promise<{ data: boolean; error: { message: string } | null }>
+        }).rpc('reopen_conversation_atomic', { p_conversation_id: convId })
+
+        if (rpcError || !success) {
+          setErrorMessage('Não foi possível reabrir a conversa.')
+          return
+        }
+        showToast('Conversa reaberta.')
+        fetchRealData()
+      } catch {
+        setErrorMessage('Erro ao reabrir a conversa.')
+      }
+    } else {
+      updateConversationStatus(convId, 'open')
+      showToast('Conversa reaberta!')
+    }
+  }
+
   // Handle Delete Message — confirmation happens via the modal (deleteMessageId set),
   // the actual deletion is server-side (checks `delete_messages` permission again,
   // never trusts `canDeleteMessages` alone) at DELETE /api/messages/[id].
@@ -683,6 +793,14 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
     } finally {
       setUploadingMedia(false)
     }
+  }
+
+  // Insere o conteúdo de uma resposta rápida no campo de texto — acrescenta numa nova
+  // linha se já tiver algo digitado, em vez de sobrescrever o que o atendente começou a
+  // escrever.
+  const handleInsertQuickReply = (reply: QuickReplyOption) => {
+    setNewMessageText((prev) => (prev.trim() ? `${prev}\n${reply.content}` : reply.content))
+    setQuickRepliesOpen(false)
   }
 
   // Handle Send Message
@@ -877,6 +995,9 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
   // privilegiado), então o botão não pisca aparecendo e sumindo pra quem não pode usá-lo.
   const canDeleteMessages =
     viewMode === 'real' && hasPermission(currentUserRole || 'attendant', currentUserPermissions, 'delete_messages')
+  const canCloseConversations =
+    viewMode === 'real' && hasPermission(currentUserRole || 'attendant', currentUserPermissions, 'close_conversations')
+  const isConversationClosed = selectedConversation?.status === 'closed'
 
   return (
     <div className="flex flex-col h-full min-h-0 bg-[#0b1320] text-slate-100 overflow-hidden relative">
@@ -1085,7 +1206,11 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                           </Badge>
                         )}
 
-                        {!conv.currentAssigneeId || conv.status === 'open' ? (
+                        {conv.status === 'closed' ? (
+                          <Badge variant="slate" icon={<Archive className="w-3 h-3" />}>
+                            Encerrada
+                          </Badge>
+                        ) : !conv.currentAssigneeId || conv.status === 'open' ? (
                           <Badge variant="amber">Fila de Espera</Badge>
                         ) : (
                           <Badge variant="teal" icon={<User className="w-3 h-3" />}>
@@ -1147,8 +1272,29 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                   <ArrowRightLeft className="w-3.5 h-3.5" />
                   <span>Transferir</span>
                 </Button>
+
+                {canCloseConversations && (
+                  isConversationClosed ? (
+                    <Button onClick={() => handleReopenConversation(selectedConversation.id)} size="sm" variant="secondary">
+                      <RotateCcw className="w-3.5 h-3.5" />
+                      <span>Reabrir</span>
+                    </Button>
+                  ) : (
+                    <Button onClick={() => handleCloseConversation(selectedConversation.id)} size="sm" variant="secondary">
+                      <Archive className="w-3.5 h-3.5" />
+                      <span>Encerrar</span>
+                    </Button>
+                  )
+                )}
               </div>
             </div>
+
+            {isConversationClosed && (
+              <div className="bg-slate-800/60 border-b border-slate-700 px-4 py-2 text-xs text-slate-300 flex items-center gap-2 shrink-0">
+                <Archive className="w-4 h-4 text-slate-400 shrink-0" />
+                <span>Esta conversa está encerrada. Ela reabre sozinha se o cliente escrever de novo.</span>
+              </div>
+            )}
 
             {isHandledByOther && (
               <div className="bg-amber-950/60 border-b border-amber-800/60 px-4 py-2 text-xs text-amber-300 flex items-center gap-2 shrink-0">
@@ -1276,7 +1422,22 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
               )}
             </div>
 
-            {/* Message Input Form */}
+            {/* Message Input Form — closed conversations require an explicit reopen
+                before typing again, so "encerrar" actually takes it off the active
+                queue instead of just being a label nobody notices. */}
+            {isConversationClosed ? (
+              <div className="p-3 border-t border-slate-800 bg-[#0f172a] shrink-0 flex items-center justify-between gap-3">
+                <span className="text-xs text-slate-400">Conversa encerrada — reabra pra continuar respondendo.</span>
+                <Button
+                  onClick={() => handleReopenConversation(selectedConversation.id)}
+                  size="sm"
+                  variant="secondary"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  <span>Reabrir</span>
+                </Button>
+              </div>
+            ) : (
             <form onSubmit={handleSendMessage} className="p-3 border-t border-slate-800 bg-[#0f172a] shrink-0">
               <div className="flex items-center gap-2">
                 {viewMode === 'real' && (
@@ -1319,6 +1480,43 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                     >
                       <Camera className="w-4 h-4" />
                     </button>
+
+                    <div className="relative shrink-0" ref={quickRepliesRef}>
+                      <button
+                        type="button"
+                        onClick={() => setQuickRepliesOpen((v) => !v)}
+                        disabled={isSendingMessage || uploadingMedia}
+                        title="Respostas rápidas"
+                        className="p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-slate-400 hover:text-emerald-400 hover:border-emerald-700 transition disabled:opacity-50"
+                      >
+                        <Zap className="w-4 h-4" />
+                      </button>
+
+                      {quickRepliesOpen && (
+                        <div className="absolute bottom-full mb-2 left-0 w-72 max-h-64 overflow-y-auto bg-[#131f37] border border-slate-700 rounded-2xl shadow-2xl py-2 z-50 text-xs">
+                          {quickReplies.length === 0 ? (
+                            <div className="px-4 py-3 text-slate-400">
+                              Nenhuma resposta rápida cadastrada.{' '}
+                              <Link href="/configuracoes/respostas-rapidas" className="text-emerald-400 hover:underline">
+                                Criar agora
+                              </Link>
+                            </div>
+                          ) : (
+                            quickReplies.map((reply) => (
+                              <button
+                                key={reply.id}
+                                type="button"
+                                onClick={() => handleInsertQuickReply(reply)}
+                                className="w-full text-left px-4 py-2 hover:bg-slate-800 transition"
+                              >
+                                <p className="font-semibold text-slate-200">{reply.title}</p>
+                                <p className="text-slate-400 line-clamp-1">{reply.content}</p>
+                              </button>
+                            ))
+                          )}
+                        </div>
+                      )}
+                    </div>
                   </>
                 )}
                 <input
@@ -1334,6 +1532,7 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                 </Button>
               </div>
             </form>
+            )}
           </div>
         ) : (
           /* Empty State when no conversation selected */

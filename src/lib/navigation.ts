@@ -8,6 +8,7 @@ import {
   UserCheck,
   Share2,
   History,
+  Zap,
   type LucideIcon,
 } from 'lucide-react'
 import { UserRole } from '@/types/database'
@@ -26,6 +27,9 @@ export const allNavItems: NavItem[] = [
   { href: '/follow-up', label: 'Follow-up', icon: Clock3 },
   { href: '/tarefas', label: 'Tarefas', icon: CheckSquare },
   { href: '/relatorios', label: 'Relatórios', icon: BarChart3, adminOnly: false },
+  // Não é admin-only: é uma biblioteca de textos prontos pra equipe inteira usar no
+  // Inbox, igual tags — não mexe com credenciais nem dados sensíveis.
+  { href: '/configuracoes/respostas-rapidas', label: 'Respostas Rápidas', icon: Zap },
   { href: '/configuracoes/equipe', label: 'Equipe', icon: UserCheck, adminOnly: true },
   { href: '/configuracoes/integracoes', label: 'Integrações', icon: Share2, adminOnly: true },
   { href: '/configuracoes/auditoria', label: 'Auditoria', icon: History, adminOnly: true },
