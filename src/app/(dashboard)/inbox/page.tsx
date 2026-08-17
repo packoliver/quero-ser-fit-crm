@@ -30,6 +30,7 @@ import {
   DollarSign,
   Plus,
   ArrowLeft,
+  Trash2,
 } from 'lucide-react'
 import { InstagramIcon as Instagram } from '@/components/icons/InstagramIcon'
 import { demoAttendants } from '@/lib/demo'
@@ -42,7 +43,8 @@ import { EmptyState } from '@/components/ui/EmptyState'
 import { createClient } from '@/lib/supabase/client'
 import { subscribeToPush, unsubscribeFromPush } from '@/lib/pwa/subscribe'
 import { useDemoStorage } from '@/lib/demo/useDemoStorage'
-import { DealStage } from '@/types/database'
+import { DealStage, UserRole, CustomPermissions } from '@/types/database'
+import { hasPermission } from '@/lib/security/permissions'
 import { cacheEntity, readCachedEntity, queueEntityMutation } from '@/lib/offline/repository'
 import { getOfflineScope } from '@/lib/offline/scope'
 
@@ -142,6 +144,12 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
   const [loadingReal, setLoadingReal] = useState(false)
   const [realTeamMembers, setRealTeamMembers] = useState<RealTeamMember[]>([])
   const [currentUserRealId, setCurrentUserRealId] = useState<string | null>(null)
+  // Papel + overrides de permissão do usuário logado — determina, por ex., se o botão de
+  // excluir mensagem aparece. Carregado uma vez junto com o resto dos dados reais;
+  // default 'attendant' (o menos privilegiado) enquanto ainda não chegou, mesma lógica
+  // de "falha pro lado seguro" usada em (dashboard)/layout.tsx pro role do menu.
+  const [currentUserRole, setCurrentUserRole] = useState<UserRole | null>(null)
+  const [currentUserPermissions, setCurrentUserPermissions] = useState<CustomPermissions | null>(null)
 
   // Filters State
   const [selectedConvId, setSelectedConvId] = useState<string>('conv-1')
@@ -176,6 +184,8 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
   const [activeTabRight, setActiveTabRight] = useState<'info' | 'notes' | 'pedido'>('info')
   const [transferModalOpen, setTransferModalOpen] = useState(false)
   const [targetAttendantId, setTargetAttendantId] = useState('att-2')
+  const [deleteMessageId, setDeleteMessageId] = useState<string | null>(null)
+  const [deletingMessage, setDeletingMessage] = useState(false)
 
   // Pedido (funil) inline na própria conversa — pra vendedora não precisar sair do
   // Inbox pra separar "já vendeu, vai pra entrega" etc. Real-mode only: precisa de um
@@ -229,7 +239,7 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
       } = await typed.auth.getUser()
       setCurrentUserRealId(user?.id || null)
 
-      const [convRes, msgRes, noteRes, membersRes, profilesRes, dealsRes] = await Promise.all([
+      const [convRes, msgRes, noteRes, membersRes, profilesRes, dealsRes, myMembershipRes] = await Promise.all([
         typed
           .from('conversations')
           .select('id, organization_id, status, channel_type, current_assignee_id, last_message_at, contact_id, contacts(name, phone, is_group, avatar_url), profiles(full_name)')
@@ -244,6 +254,10 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
         // Pedidos (Funil) — pra mostrar/gerenciar o pedido de um contato direto na aba
         // "Pedido" do próprio Inbox, sem precisar abrir o Funil.
         typed.from('deals').select('id, title, contact_id, stage, value').order!('created_at', { ascending: false }),
+        // Papel + overrides de permissão do próprio usuário logado — controla, por ex., se
+        // o botão de excluir mensagem aparece (a API confere de novo no servidor de
+        // qualquer forma; isso aqui é só pra não mostrar um botão que vai dar 403).
+        typed.from('organization_members').select('role, permissions').eq!('user_id', user?.id || '').limit(1).maybeSingle(),
       ])
 
       const convData = (convRes.data || []) as Array<{
@@ -285,6 +299,10 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
 
       setRealTeamMembers(membersData.map((m) => ({ id: m.user_id, fullName: m.profiles?.full_name || 'Membro' })))
       setRealDeals((dealsRes.data || []) as InlineDeal[])
+
+      const myMembership = myMembershipRes.data as { role: UserRole; permissions: CustomPermissions | null } | null
+      setCurrentUserRole(myMembership?.role || null)
+      setCurrentUserPermissions(myMembership?.permissions || null)
 
       const built: UiConversation[] = convData.map((conv) => {
         const msgs = msgData
@@ -577,6 +595,30 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
     setTransferModalOpen(false)
   }
 
+  // Handle Delete Message — confirmation happens via the modal (deleteMessageId set),
+  // the actual deletion is server-side (checks `delete_messages` permission again,
+  // never trusts `canDeleteMessages` alone) at DELETE /api/messages/[id].
+  const confirmDeleteMessage = async () => {
+    if (!deleteMessageId) return
+    setDeletingMessage(true)
+    setErrorMessage(null)
+    try {
+      const res = await fetch(`/api/messages/${deleteMessageId}`, { method: 'DELETE' })
+      const body = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setErrorMessage(body.error || 'Falha ao excluir mensagem.')
+        return
+      }
+      showToast('Mensagem excluída.')
+      setDeleteMessageId(null)
+      fetchRealData()
+    } catch {
+      setErrorMessage('Erro de conexão ao excluir mensagem.')
+    } finally {
+      setDeletingMessage(false)
+    }
+  }
+
   // Sends a message in real mode — text-only or with an already-uploaded media URL attached.
   const sendRealMessage = async (content: string, mediaUrl?: string, mediaType?: MediaType) => {
     if (!selectedConversation) return
@@ -828,6 +870,13 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
     selectedConversation.currentAssigneeId !== effectiveCurrentUserId
 
   const transferOptions = viewMode === 'real' ? realTeamMembers.map((m) => ({ id: m.id, fullName: m.fullName })) : demoAttendants
+
+  // Só no modo real — o modo demo não tem um papel de verdade por trás, e a API que
+  // realmente apaga a mensagem não existe nesse modo de qualquer forma. Antes do papel
+  // carregar, `currentUserRole` é null → hasPermission trata como 'attendant' (o menos
+  // privilegiado), então o botão não pisca aparecendo e sumindo pra quem não pode usá-lo.
+  const canDeleteMessages =
+    viewMode === 'real' && hasPermission(currentUserRole || 'attendant', currentUserPermissions, 'delete_messages')
 
   return (
     <div className="flex flex-col h-full min-h-0 bg-[#0b1320] text-slate-100 overflow-hidden relative">
@@ -1134,11 +1183,24 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                 return (
                   <div
                     key={msg.id}
-                    className={`flex gap-2 max-w-[80%] md:max-w-[70%] ${isMe ? 'ml-auto flex-row-reverse' : 'mr-auto'}`}
+                    className={`group flex gap-2 max-w-[80%] md:max-w-[70%] ${isMe ? 'ml-auto flex-row-reverse' : 'mr-auto'}`}
                   >
                     {showGroupAvatar && <Avatar name={msg.senderName} src={msg.senderAvatarUrl} size="sm" className="mt-4" />}
                     <div className={`flex flex-col min-w-0 ${isMe ? 'items-end' : 'items-start'}`}>
-                    <span className="text-[10px] text-slate-500 mb-1 px-1">{msg.senderName}</span>
+                    <div className={`flex items-center gap-1.5 mb-1 px-1 ${isMe ? 'flex-row-reverse' : ''}`}>
+                      <span className="text-[10px] text-slate-500">{msg.senderName}</span>
+                      {canDeleteMessages && (
+                        <button
+                          type="button"
+                          onClick={() => setDeleteMessageId(msg.id)}
+                          title="Excluir mensagem"
+                          aria-label="Excluir mensagem"
+                          className="opacity-0 group-hover:opacity-100 focus:opacity-100 transition text-slate-500 hover:text-rose-400"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </button>
+                      )}
+                    </div>
                     <div
                       className={`p-3 rounded-2xl text-xs leading-relaxed ${
                         isFailed
@@ -1512,6 +1574,28 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
             </Button>
             <Button variant="primary" onClick={handleTransfer}>
               Confirmar Transferência
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Delete Message Confirmation Modal */}
+      <Modal
+        isOpen={!!deleteMessageId}
+        onClose={() => setDeleteMessageId(null)}
+        title="Excluir Mensagem"
+        icon={<Trash2 className="w-5 h-5" />}
+      >
+        <div className="space-y-4 text-xs">
+          <p className="text-slate-300">
+            Tem certeza que deseja excluir esta mensagem? Ela some da conversa pra todo mundo no CRM — essa ação não pode ser desfeita.
+          </p>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="secondary" onClick={() => setDeleteMessageId(null)} disabled={deletingMessage}>
+              Cancelar
+            </Button>
+            <Button variant="danger" onClick={confirmDeleteMessage} isLoading={deletingMessage}>
+              Excluir
             </Button>
           </div>
         </div>
