@@ -191,6 +191,12 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
   const [unreadCount, setUnreadCount] = useState(0)
   const selectedConvIdRef = useRef(selectedConvId)
   const originalTitleRef = useRef<string>('')
+  // Trava síncrona contra clique/toque duplo no "Enviar" — `isSendingMessage` (estado do
+  // React) só reflete no DOM depois de um re-render, então dois cliques bem rápidos (ou
+  // um duplo-toque no celular) podiam os dois passar pela checagem de `isSendingMessage`
+  // antes do primeiro clique desabilitar o botão, mandando a mesma mensagem 2x pro
+  // cliente. Um ref muda na hora, sem esperar re-render, então cobre essa janela de corrida.
+  const isSendingRef = useRef(false)
   const audioContextRef = useRef<AudioContext | null>(null)
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => {
@@ -792,6 +798,10 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
   // Sends a message in real mode — text-only or with an already-uploaded media URL attached.
   const sendRealMessage = async (content: string, mediaUrl?: string, mediaType?: MediaType) => {
     if (!selectedConversation) return
+    // Ver comentário de isSendingRef acima: se uma segunda chamada já entrou aqui
+    // enquanto a primeira ainda está em voo, aborta esta em vez de mandar em duplicado.
+    if (isSendingRef.current) return
+    isSendingRef.current = true
     setIsSendingMessage(true)
     try {
       const res = await fetch('/api/messages/send', {
@@ -808,6 +818,7 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
       setErrorMessage('Erro de conexão ao enviar mensagem.')
     } finally {
       setIsSendingMessage(false)
+      isSendingRef.current = false
     }
   }
 
@@ -904,7 +915,7 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
   // Handle Send Message
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!newMessageText.trim() || !selectedConversation || isSendingMessage) return
+    if (!newMessageText.trim() || !selectedConversation || isSendingMessage || isSendingRef.current) return
 
     const textToSend = newMessageText
     setNewMessageText('')
@@ -914,6 +925,7 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
       return
     }
 
+    isSendingRef.current = true
     setIsSendingMessage(true)
 
     // Demo mode
@@ -923,6 +935,7 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
 
     setTimeout(() => {
       setIsSendingMessage(false)
+      isSendingRef.current = false
       const replies = [
         'Certo, entendi! Obrigado pelas informações.',
         'Perfeito! Vou verificar os detalhes e te respondo por aqui.',
