@@ -14,6 +14,8 @@ import {
   Inbox,
   Award,
   CheckCircle,
+  Timer,
+  AlertTriangle,
 } from 'lucide-react'
 import { Badge } from '@/components/ui/Badge'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
@@ -22,12 +24,20 @@ import { createClient } from '@/lib/supabase/client'
 import { useDemoStorage } from '@/lib/demo/useDemoStorage'
 import { cacheEntity, readCachedEntity } from '@/lib/offline/repository'
 import { getOfflineScope } from '@/lib/offline/scope'
+import { SLA_BREACH_MINUTES, formatMinutes, computeSlaMetrics } from '@/lib/sla'
 
 export interface RealMetrics {
   totalContacts: number
   pendingTasks: number
   completedTasks: number
   openConversations: number
+  /** Média (minutos) entre a primeira mensagem do cliente e a primeira resposta da
+   * equipe, por conversa — só conta conversas que já foram respondidas ao menos uma vez.
+   * Null quando não há dado suficiente ainda (org nova, ou nenhuma conversa respondida). */
+  avgFirstResponseMinutes: number | null
+  /** Conversas com a ÚLTIMA mensagem vinda do cliente há mais de SLA_BREACH_MINUTES,
+   * ou seja, esperando resposta agora mesmo além do prazo. */
+  slaBreachedCount: number
 }
 
 export interface RealAttendantPerformance {
@@ -46,6 +56,8 @@ export default function RelatoriosPage() {
     pendingTasks: 0,
     completedTasks: 0,
     openConversations: 0,
+    avgFirstResponseMinutes: null,
+    slaBreachedCount: 0,
   })
   const [realAttendantPerformance, setRealAttendantPerformance] = useState<RealAttendantPerformance[]>([])
   const [loading, setLoading] = useState(false)
@@ -110,12 +122,13 @@ export default function RelatoriosPage() {
         (supabase as unknown as { from: (t: string) => { select: (c: string, o: { count: string; head: boolean }) => { eq: (col: string, val: string) => Promise<{ count: number | null }> } } }).from('conversations').select('*', { count: 'exact', head: true }).eq('status', 'open'),
       ])
 
-      setRealMetrics({
+      setRealMetrics((prev) => ({
+        ...prev,
         totalContacts: contactsRes.count || 0,
         pendingTasks: pendingTasksRes.count || 0,
         completedTasks: completedTasksRes.count || 0,
         openConversations: convRes.count || 0,
-      })
+      }))
 
       // Real per-attendant performance: org members joined with their assigned
       // conversations and completed tasks, computed client-side (small org sizes).
@@ -125,10 +138,14 @@ export default function RelatoriosPage() {
         }
       }
 
-      const [membersRes, allConvRes, completedTaskRowsRes] = await Promise.all([
+      const [membersRes, allConvRes, completedTaskRowsRes, messagesForSlaRes] = await Promise.all([
         typed.from('organization_members').select('user_id, role, profiles(full_name)'),
         typed.from('conversations').select('current_assignee_id'),
         typed.from('tasks').select('assigned_to_id, status'),
+        // Só o necessário pra calcular SLA (não o conteúdo da mensagem) — ordenado
+        // cronologicamente logo abaixo (computeSlaMetrics depende da ordem pra achar a
+        // primeira resposta de cada conversa).
+        typed.from('messages').select('conversation_id, sender_type, created_at'),
       ])
 
       const membersData = (membersRes.data || []) as Array<{
@@ -138,6 +155,14 @@ export default function RelatoriosPage() {
       }>
       const convData = (allConvRes.data || []) as Array<{ current_assignee_id: string | null }>
       const taskData = (completedTaskRowsRes.data || []) as Array<{ assigned_to_id: string | null; status: string }>
+      const slaMessages = (messagesForSlaRes.data || []) as Array<{
+        conversation_id: string
+        sender_type: 'contact' | 'user' | 'system'
+        created_at: string
+      }>
+      slaMessages.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+
+      const { avgFirstResponseMinutes, slaBreachedCount } = computeSlaMetrics(slaMessages)
 
       const performance = membersData.map((m) => ({
         id: m.user_id,
@@ -147,7 +172,8 @@ export default function RelatoriosPage() {
         completedTasks: taskData.filter((t) => t.assigned_to_id === m.user_id && t.status === 'completed').length,
       }))
       setRealAttendantPerformance(performance)
-      if (offlineScope) await cacheEntity(offlineScope, 'reports', { metrics: { totalContacts: contactsRes.count || 0, pendingTasks: pendingTasksRes.count || 0, completedTasks: completedTasksRes.count || 0, openConversations: convRes.count || 0 }, performance })
+      setRealMetrics((prev) => ({ ...prev, avgFirstResponseMinutes, slaBreachedCount }))
+      if (offlineScope) await cacheEntity(offlineScope, 'reports', { metrics: { totalContacts: contactsRes.count || 0, pendingTasks: pendingTasksRes.count || 0, completedTasks: completedTasksRes.count || 0, openConversations: convRes.count || 0, avgFirstResponseMinutes, slaBreachedCount }, performance })
     } catch {
       const cached = offlineScope ? await readCachedEntity<{ metrics: RealMetrics; performance: RealAttendantPerformance[] }>(offlineScope, 'reports').catch(() => null) : null
       if (cached) {
@@ -286,6 +312,32 @@ export default function RelatoriosPage() {
               </div>
               <p className="text-2xl font-extrabold text-slate-100">{realMetrics.openConversations}</p>
               <p className="text-[11px] text-slate-400">Aguardando atribuição</p>
+            </Card>
+
+            <Card className="p-4 space-y-2">
+              <div className="flex justify-between items-center text-slate-400">
+                <span className="text-xs font-medium">Tempo Médio de 1ª Resposta</span>
+                <div className="p-2 rounded-xl bg-indigo-500/10 text-indigo-400">
+                  <Timer className="w-4 h-4" />
+                </div>
+              </div>
+              <p className="text-2xl font-extrabold text-slate-100">
+                {realMetrics.avgFirstResponseMinutes === null ? '—' : formatMinutes(realMetrics.avgFirstResponseMinutes)}
+              </p>
+              <p className="text-[11px] text-slate-400">Do 1º contato à 1ª resposta da equipe</p>
+            </Card>
+
+            <Card className="p-4 space-y-2">
+              <div className="flex justify-between items-center text-slate-400">
+                <span className="text-xs font-medium">SLA Estourado</span>
+                <div className={`p-2 rounded-xl ${realMetrics.slaBreachedCount > 0 ? 'bg-rose-500/10 text-rose-400' : 'bg-emerald-500/10 text-emerald-400'}`}>
+                  <AlertTriangle className="w-4 h-4" />
+                </div>
+              </div>
+              <p className={`text-2xl font-extrabold ${realMetrics.slaBreachedCount > 0 ? 'text-rose-400' : 'text-slate-100'}`}>
+                {realMetrics.slaBreachedCount}
+              </p>
+              <p className="text-[11px] text-slate-400">Esperando resposta há mais de {SLA_BREACH_MINUTES}min</p>
             </Card>
           </>
         ) : (

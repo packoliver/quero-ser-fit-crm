@@ -4,6 +4,7 @@ import { IncomingWebhookEvent, MessageStatusUpdate } from './types'
 import { sendPushToOrganization } from '@/lib/pwa/push'
 import { decryptToken } from '@/lib/security/encryption'
 import { fetchInstagramUserProfile } from './instagram-meta'
+import { maybeSendAutoReply } from './auto-reply'
 
 const STATUS_RANK: Record<string, number> = { sent: 0, delivered: 1, read: 2 }
 
@@ -11,6 +12,9 @@ interface ConnectionMatch {
   id: string
   organization_id: string
   encrypted_credentials?: string | null
+  connection_method?: string | null
+  external_identifier?: string | null
+  api_base_url?: string | null
 }
 
 interface ContactMatch {
@@ -37,7 +41,7 @@ async function findConnectionForEvent(
 ): Promise<ConnectionMatch | null> {
   const { data: direct } = await db
     .from('integration_connections')
-    .select('id, organization_id, encrypted_credentials')
+    .select('id, organization_id, encrypted_credentials, connection_method, external_identifier, api_base_url')
     .eq('provider', event.provider)
     .eq('external_identifier', event.recipientId)
     .maybeSingle()
@@ -49,7 +53,7 @@ async function findConnectionForEvent(
   if (event.recipientId) {
     const { data: byAppScopedId } = await db
       .from('integration_connections')
-      .select('id, organization_id, encrypted_credentials')
+      .select('id, organization_id, encrypted_credentials, connection_method, external_identifier, api_base_url')
       .eq('provider', 'instagram_meta')
       .filter('settings->>instagram_app_scoped_id', 'eq', event.recipientId)
       .maybeSingle()
@@ -60,7 +64,7 @@ async function findConnectionForEvent(
   // Fallback 3: For Instagram Meta, route to the registered Instagram connection
   const { data: instagramConnections } = await db
     .from('integration_connections')
-    .select('id, organization_id, encrypted_credentials')
+    .select('id, organization_id, encrypted_credentials, connection_method, external_identifier, api_base_url')
     .eq('provider', 'instagram_meta')
     .order('updated_at', { ascending: false })
 
@@ -74,14 +78,16 @@ async function findConnectionForEvent(
 /**
  * Processes one parsed inbound event (from any provider — Meta or ZAP API): finds which of
  * our registered numbers/pages it belongs to, then finds-or-creates the contact, the
- * conversation, and the message row. Returns false (without throwing) when no matching
- * connection is registered yet, so the caller can skip it — this happens for messages
- * arriving before an admin has finished configuring that number in Integrações.
+ * conversation, and the message row. Returns { success: false } (without throwing) when
+ * no matching connection is registered yet, so the caller can skip it — this happens for
+ * messages arriving before an admin has finished configuring that number in Integrações.
+ * `conversationId` comes back alongside success so the caller can act on that specific
+ * conversation afterward (e.g. the business-hours auto-reply) without a second lookup.
  */
 export async function persistInboundEvent(
   admin: AdminClient,
   event: IncomingWebhookEvent
-): Promise<boolean> {
+): Promise<{ success: boolean; conversationId?: string }> {
   const db = admin
 
   const matchedConnection = await findConnectionForEvent(db, event)
@@ -90,7 +96,7 @@ export async function persistInboundEvent(
       provider: event.provider,
       recipientId: event.recipientId,
     })
-    return false
+    return { success: false }
   }
 
   const channelType = event.provider === 'instagram_meta' ? 'instagram' : 'whatsapp'
@@ -148,7 +154,7 @@ export async function persistInboundEvent(
 
     if (contactError || !newContact) {
       console.error('[persistInboundEvent] Erro ao criar contato no Supabase:', contactError)
-      return false
+      return { success: false }
     }
     contactId = (newContact as ContactMatch).id
 
@@ -211,7 +217,7 @@ export async function persistInboundEvent(
 
     if (convError || !newConversation) {
       console.error('[persistInboundEvent] Erro ao criar conversa no Supabase:', convError)
-      return false
+      return { success: false }
     }
     conversationId = (newConversation as ConversationMatch).id
   } else {
@@ -246,11 +252,11 @@ export async function persistInboundEvent(
 
   if (msgError) {
     console.error('[persistInboundEvent] Erro ao inserir mensagem no Supabase:', msgError)
-    return false
+    return { success: false }
   }
 
   console.log('[persistInboundEvent] Mensagem salva com sucesso no Supabase! Conversation ID:', conversationId)
-  return true
+  return { success: true, conversationId }
 }
 
 /**
@@ -308,8 +314,8 @@ export async function processInboundEvents(
     }
 
     // Attempt persistence; only mark as processed if it succeeds
-    const persisted = await persistInboundEvent(admin, event)
-    if (persisted) {
+    const persistResult = await persistInboundEvent(admin, event)
+    if (persistResult.success) {
       // Mark as processed only after persistence succeeded
       await admin
         .from('webhook_events')
@@ -324,8 +330,14 @@ export async function processInboundEvents(
         url: `/inbox?conversa=${event.conversationKey || event.senderId}`,
         tag: `crm-message-${event.externalEventId}`,
       })
+
+      // Resposta automática fora do horário — não bloqueia o processamento do webhook
+      // se falhar (maybeSendAutoReply nunca lança exceção).
+      if (persistResult.conversationId) {
+        await maybeSendAutoReply(admin, event, connection, persistResult.conversationId)
+      }
     }
-    // If persisted=false, the event stays pending — next webhook retry will attempt again
+    // If persistResult.success is false, the event stays pending — next webhook retry will attempt again
   }
 
   return processedCount

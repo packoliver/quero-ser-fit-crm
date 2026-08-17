@@ -35,6 +35,7 @@ import {
   Archive,
   RotateCcw,
   Zap,
+  AlertTriangle,
 } from 'lucide-react'
 import { InstagramIcon as Instagram } from '@/components/icons/InstagramIcon'
 import { demoAttendants } from '@/lib/demo'
@@ -49,6 +50,7 @@ import { subscribeToPush, unsubscribeFromPush } from '@/lib/pwa/subscribe'
 import { useDemoStorage } from '@/lib/demo/useDemoStorage'
 import { DealStage, UserRole, CustomPermissions } from '@/types/database'
 import { hasPermission } from '@/lib/security/permissions'
+import { SLA_BREACH_MINUTES, minutesSince } from '@/lib/sla'
 import { cacheEntity, readCachedEntity, queueEntityMutation } from '@/lib/offline/repository'
 import { getOfflineScope } from '@/lib/offline/scope'
 
@@ -90,6 +92,13 @@ interface UiConversation {
   channel: 'whatsapp' | 'instagram'
   lastMessage: string
   lastMessageTime: string
+  /** Timestamp bruto (ISO) da última mensagem — `lastMessageTime` já vem formatado
+   * ("HH:mm") pra exibição, sem dado suficiente pra calcular "faz quanto tempo".
+   * Ausente em modo demo (o aviso de SLA só aparece em modo real). */
+  lastMessageAtIso?: string
+  /** De quem foi a última mensagem — só interessa quando é 'contact': significa que a
+   * conversa está esperando resposta da equipe agora (usado no aviso de SLA). */
+  lastMessageSenderType?: 'contact' | 'user' | 'system'
   status: 'open' | 'assigned' | 'closed' | 'archived'
   currentAssigneeId: string | null
   currentAssigneeName: string | null
@@ -399,6 +408,9 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
           }))
 
         const lastMsg = msgs[msgs.length - 1]
+        // `lastMsg.time` já vem formatado ("HH:mm") — pro aviso de SLA (calcula "há
+        // quanto tempo" em minutos) precisamos do created_at bruto de novo.
+        const lastRawMsg = msgData.filter((m) => m.conversation_id === conv.id).slice(-1)[0]
         const mediaLabel = (t?: MediaType | null) =>
           t === 'image' ? '📷 Imagem' : t === 'video' ? '🎥 Vídeo' : t === 'audio' ? '🎤 Áudio' : t === 'sticker' ? '🌟 Figurinha' : '📎 Arquivo'
 
@@ -413,6 +425,8 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
           channel: conv.channel_type,
           lastMessage: lastMsg ? lastMsg.content || mediaLabel(lastMsg.mediaType) : '(sem mensagens)',
           lastMessageTime: lastMsg?.time || formatTime(conv.last_message_at),
+          lastMessageAtIso: lastRawMsg?.created_at || conv.last_message_at,
+          lastMessageSenderType: lastRawMsg?.sender_type,
           status: conv.status,
           currentAssigneeId: conv.current_assignee_id,
           currentAssigneeName: conv.profiles?.full_name || null,
@@ -1217,6 +1231,15 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                             {conv.currentAssigneeName}
                           </Badge>
                         )}
+
+                        {conv.status !== 'closed' &&
+                          conv.lastMessageSenderType === 'contact' &&
+                          conv.lastMessageAtIso &&
+                          minutesSince(conv.lastMessageAtIso) > SLA_BREACH_MINUTES && (
+                            <Badge variant="rose" icon={<AlertTriangle className="w-3 h-3" />}>
+                              SLA Estourado
+                            </Badge>
+                          )}
                       </div>
                     </div>
                   </div>
