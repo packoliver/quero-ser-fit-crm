@@ -49,7 +49,13 @@ export const DEFAULT_MANAGER_PERMISSIONS: CustomPermissions = {
 }
 
 export const DEFAULT_ATTENDANT_PERMISSIONS: CustomPermissions = {
-  view_all_conversations: false,
+  // TRUE por padrão de propósito (não FALSE): até 2026-08-18 esse valor nunca era
+  // enforced em lugar nenhum (nem RLS, nem RPC) — todo attendant sempre viu todas as
+  // conversas da organização na prática, então o default precisa continuar refletindo
+  // isso. Só passa a restringir de verdade quando um admin desmarca a caixinha "Ver
+  // todas as conversas" pra alguém específico em Configurações > Equipe (ver migration
+  // 20260818000000_enforce_transfer_and_view_permissions.sql).
+  view_all_conversations: true,
   assume_conversations: true,
   transfer_conversations: true,
   close_conversations: true,

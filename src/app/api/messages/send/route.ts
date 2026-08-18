@@ -215,7 +215,19 @@ async function handlePost(request: NextRequest) {
   })
 
   if (insertError) {
-    await attemptsWriter.from('outbound_message_attempts').update({ status: 'sent', external_id: result.externalId || null, error_message: 'Histórico local indisponível após envio externo.' }).eq('organization_id', conversation.organization_id).eq('idempotency_key', idempotencyKey)
+    // Se o envio externo TAMBÉM falhou (não só o insert local), não marca como "sent" —
+    // uma tentativa futura com essa mesma idempotencyKey precisa poder tentar de novo em
+    // vez de receber de volta um falso "sucesso" (ver outbound_message_attempts acima:
+    // status 'sent' faz o bloco de reuso no topo desta rota devolver sucesso sem reenviar).
+    await attemptsWriter.from('outbound_message_attempts').update({
+      status: result.success ? 'sent' : 'failed',
+      external_id: result.externalId || null,
+      error_message: result.success ? 'Histórico local indisponível após envio externo.' : (result.error || 'Falha no provedor e no histórico local.'),
+    }).eq('organization_id', conversation.organization_id).eq('idempotency_key', idempotencyKey)
+
+    if (!result.success) {
+      return NextResponse.json({ error: result.error || 'Falha ao enviar mensagem (e também ao registrar a tentativa localmente).' }, { status: 502 })
+    }
     return NextResponse.json({ error: 'Mensagem enviada, mas o histórico local precisa ser reconciliado.', externalId: result.externalId || null }, { status: 503 })
   }
 

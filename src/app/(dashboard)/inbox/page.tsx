@@ -1113,6 +1113,11 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
     viewMode === 'real' && hasPermission(currentUserRole || 'attendant', currentUserPermissions, 'delete_messages')
   const canCloseConversations =
     viewMode === 'real' && hasPermission(currentUserRole || 'attendant', currentUserPermissions, 'close_conversations')
+  // Espelha a checagem real feita agora dentro de transfer_conversation_atomic (ver
+  // migration 20260818000000) — só pra não mostrar um botão que vai dar erro no clique;
+  // a permissão de verdade continua sendo garantida no banco, não aqui.
+  const canTransferConversations =
+    viewMode !== 'real' || hasPermission(currentUserRole || 'attendant', currentUserPermissions, 'transfer_conversations')
   const isConversationClosed = selectedConversation?.status === 'closed'
 
   return (
@@ -1393,10 +1398,12 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                   </Button>
                 )}
 
-                <Button onClick={() => setTransferModalOpen(true)} size="sm" variant="secondary">
-                  <ArrowRightLeft className="w-3.5 h-3.5" />
-                  <span>Transferir</span>
-                </Button>
+                {canTransferConversations && (
+                  <Button onClick={() => setTransferModalOpen(true)} size="sm" variant="secondary">
+                    <ArrowRightLeft className="w-3.5 h-3.5" />
+                    <span>Transferir</span>
+                  </Button>
+                )}
 
                 {canCloseConversations && (
                   isConversationClosed ? (
