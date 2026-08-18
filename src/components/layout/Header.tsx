@@ -192,7 +192,7 @@ export function Header({ currentRole = 'admin', onToggleRole, realUser }: Header
       {/* Left side brand info */}
       <div className="flex items-center gap-3">
         <div className="lg:hidden flex items-center gap-2">
-          <div className="w-8 h-8 rounded-lg bg-emerald-600 flex items-center justify-center text-white shadow-md">
+          <div className="w-8 h-8 rounded-lg bg-emerald-500 flex items-center justify-center text-slate-950 shadow-md">
             <Dumbbell className="w-4 h-4" />
           </div>
           <span className="font-bold text-sm text-slate-100">Quero Ser Fit</span>

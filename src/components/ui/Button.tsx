@@ -19,9 +19,11 @@ export function Button({
   const baseStyles =
     'inline-flex items-center justify-center font-semibold rounded-xl transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-slate-900 disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100 active:scale-[0.97] select-none'
 
+  // Cor sólida, não gradiente — botão com degradê de duas cores é um dos sinais mais
+  // reconhecíveis de "maquete gerada por IA". Um produto sério usa uma cor confiante só.
   const variantStyles = {
     primary:
-      'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-md shadow-emerald-950/40 border border-emerald-500/30',
+      'bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-md shadow-emerald-950/40 border border-emerald-400/40',
     secondary:
       'bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 shadow-sm',
     danger:

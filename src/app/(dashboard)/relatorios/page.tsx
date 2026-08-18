@@ -266,126 +266,109 @@ export default function RelatoriosPage() {
         </div>
       </div>
 
-      {/* Primary KPI Cards Grid */}
+      {/* Primary KPI Cards Grid — neutro por padrão (rótulo + ícone discreto + número em
+          branco), cor só entra quando o número em si representa um alerta de verdade
+          (SLA estourado). Antes cada card tinha uma cor de "decoração" diferente sem
+          nenhum significado — a versão de painel de verdade reserva cor pra estado real. */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {viewMode === 'real' ? (
           <>
-            <Card className="p-4 space-y-2">
-              <div className="flex justify-between items-center text-slate-400">
-                <span className="text-xs font-medium">Total de Clientes</span>
-                <div className="p-2 rounded-xl bg-emerald-500/10 text-emerald-400">
-                  <Users className="w-4 h-4" />
-                </div>
+            <Card className="p-4 space-y-1.5">
+              <div className="flex items-center gap-1.5 text-slate-500">
+                <Users className="w-3.5 h-3.5" />
+                <span className="text-[11px] font-medium uppercase tracking-wide">Total de Clientes</span>
               </div>
-              <p className="text-2xl font-extrabold text-slate-100 font-mono tabular-nums">{realMetrics.totalContacts}</p>
-              <p className="text-[11px] text-slate-400">Cadastrados no Supabase</p>
+              <p className="text-2xl font-bold text-slate-100 font-mono tabular-nums">{realMetrics.totalContacts}</p>
+              <p className="text-[11px] text-slate-500">Cadastrados no Supabase</p>
             </Card>
 
-            <Card className="p-4 space-y-2">
-              <div className="flex justify-between items-center text-slate-400">
-                <span className="text-xs font-medium">Tarefas Pendentes</span>
-                <div className="p-2 rounded-xl bg-amber-500/10 text-amber-400">
-                  <Clock className="w-4 h-4" />
-                </div>
+            <Card className="p-4 space-y-1.5">
+              <div className="flex items-center gap-1.5 text-slate-500">
+                <Clock className="w-3.5 h-3.5" />
+                <span className="text-[11px] font-medium uppercase tracking-wide">Tarefas Pendentes</span>
               </div>
-              <p className="text-2xl font-extrabold text-slate-100 font-mono tabular-nums">{realMetrics.pendingTasks}</p>
-              <p className="text-[11px] text-amber-400 font-medium">Aguardando atendimento</p>
+              <p className="text-2xl font-bold text-slate-100 font-mono tabular-nums">{realMetrics.pendingTasks}</p>
+              <p className="text-[11px] text-slate-500">Aguardando atendimento</p>
             </Card>
 
-            <Card className="p-4 space-y-2">
-              <div className="flex justify-between items-center text-slate-400">
-                <span className="text-xs font-medium">Tarefas Concluídas</span>
-                <div className="p-2 rounded-xl bg-emerald-500/10 text-emerald-400">
-                  <CheckCircle className="w-4 h-4" />
-                </div>
+            <Card className="p-4 space-y-1.5">
+              <div className="flex items-center gap-1.5 text-slate-500">
+                <CheckCircle className="w-3.5 h-3.5" />
+                <span className="text-[11px] font-medium uppercase tracking-wide">Tarefas Concluídas</span>
               </div>
-              <p className="text-2xl font-extrabold text-slate-100 font-mono tabular-nums">{realMetrics.completedTasks}</p>
-              <p className="text-[11px] text-emerald-400 font-medium">Resoluções finalizadas</p>
+              <p className="text-2xl font-bold text-slate-100 font-mono tabular-nums">{realMetrics.completedTasks}</p>
+              <p className="text-[11px] text-slate-500">Resoluções finalizadas</p>
             </Card>
 
-            <Card className="p-4 space-y-2">
-              <div className="flex justify-between items-center text-slate-400">
-                <span className="text-xs font-medium">Conversas em Fila</span>
-                <div className="p-2 rounded-xl bg-teal-500/10 text-teal-400">
-                  <MessageSquare className="w-4 h-4" />
-                </div>
+            <Card className="p-4 space-y-1.5">
+              <div className="flex items-center gap-1.5 text-slate-500">
+                <MessageSquare className="w-3.5 h-3.5" />
+                <span className="text-[11px] font-medium uppercase tracking-wide">Conversas em Fila</span>
               </div>
-              <p className="text-2xl font-extrabold text-slate-100 font-mono tabular-nums">{realMetrics.openConversations}</p>
-              <p className="text-[11px] text-slate-400">Aguardando atribuição</p>
+              <p className="text-2xl font-bold text-slate-100 font-mono tabular-nums">{realMetrics.openConversations}</p>
+              <p className="text-[11px] text-slate-500">Aguardando atribuição</p>
             </Card>
 
-            <Card className="p-4 space-y-2">
-              <div className="flex justify-between items-center text-slate-400">
-                <span className="text-xs font-medium">Tempo Médio de 1ª Resposta</span>
-                <div className="p-2 rounded-xl bg-indigo-500/10 text-indigo-400">
-                  <Timer className="w-4 h-4" />
-                </div>
+            <Card className="p-4 space-y-1.5">
+              <div className="flex items-center gap-1.5 text-slate-500">
+                <Timer className="w-3.5 h-3.5" />
+                <span className="text-[11px] font-medium uppercase tracking-wide">Tempo Médio de 1ª Resposta</span>
               </div>
-              <p className="text-2xl font-extrabold text-slate-100 font-mono tabular-nums">
-                {realMetrics.avgFirstResponseMinutes === null ? '—' : formatMinutes(realMetrics.avgFirstResponseMinutes)}
+              <p className="text-2xl font-bold text-slate-100 font-mono tabular-nums">
+                {realMetrics.avgFirstResponseMinutes === null ? '-' : formatMinutes(realMetrics.avgFirstResponseMinutes)}
               </p>
-              <p className="text-[11px] text-slate-400">Do 1º contato à 1ª resposta da equipe</p>
+              <p className="text-[11px] text-slate-500">Do 1º contato à 1ª resposta da equipe</p>
             </Card>
 
-            <Card className="p-4 space-y-2">
-              <div className="flex justify-between items-center text-slate-400">
-                <span className="text-xs font-medium">SLA Estourado</span>
-                <div className={`p-2 rounded-xl ${realMetrics.slaBreachedCount > 0 ? 'bg-rose-500/10 text-rose-400' : 'bg-emerald-500/10 text-emerald-400'}`}>
-                  <AlertTriangle className="w-4 h-4" />
-                </div>
+            <Card className="p-4 space-y-1.5">
+              <div className={`flex items-center gap-1.5 ${realMetrics.slaBreachedCount > 0 ? 'text-rose-400' : 'text-slate-500'}`}>
+                <AlertTriangle className="w-3.5 h-3.5" />
+                <span className="text-[11px] font-medium uppercase tracking-wide">SLA Estourado</span>
               </div>
-              <p className={`text-2xl font-extrabold font-mono tabular-nums ${realMetrics.slaBreachedCount > 0 ? 'text-rose-400' : 'text-slate-100'}`}>
+              <p className={`text-2xl font-bold font-mono tabular-nums ${realMetrics.slaBreachedCount > 0 ? 'text-rose-400' : 'text-slate-100'}`}>
                 {realMetrics.slaBreachedCount}
               </p>
-              <p className="text-[11px] text-slate-400">Esperando resposta há mais de {SLA_BREACH_MINUTES}min</p>
+              <p className="text-[11px] text-slate-500">Esperando resposta há mais de {SLA_BREACH_MINUTES}min</p>
             </Card>
           </>
         ) : (
           <>
-            <Card className="p-4 space-y-2">
-              <div className="flex justify-between items-center text-slate-400">
-                <span className="text-xs font-medium">Total de Clientes</span>
-                <div className="p-2 rounded-xl bg-emerald-500/10 text-emerald-400">
-                  <Users className="w-4 h-4" />
-                </div>
+            <Card className="p-4 space-y-1.5">
+              <div className="flex items-center gap-1.5 text-slate-500">
+                <Users className="w-3.5 h-3.5" />
+                <span className="text-[11px] font-medium uppercase tracking-wide">Total de Clientes</span>
               </div>
-              <p className="text-2xl font-extrabold text-slate-100 font-mono tabular-nums">{totalContacts}</p>
+              <p className="text-2xl font-bold text-slate-100 font-mono tabular-nums">{totalContacts}</p>
               <p className="text-[11px] text-emerald-400 font-medium flex items-center gap-1">
                 <TrendingUp className="w-3 h-3" /> {newLeads} novo(s) lead(s)
               </p>
             </Card>
 
-            <Card className="p-4 space-y-2">
-              <div className="flex justify-between items-center text-slate-400">
-                <span className="text-xs font-medium">Tarefas Pendentes</span>
-                <div className="p-2 rounded-xl bg-amber-500/10 text-amber-400">
-                  <Clock className="w-4 h-4" />
-                </div>
+            <Card className="p-4 space-y-1.5">
+              <div className="flex items-center gap-1.5 text-slate-500">
+                <Clock className="w-3.5 h-3.5" />
+                <span className="text-[11px] font-medium uppercase tracking-wide">Tarefas Pendentes</span>
               </div>
-              <p className="text-2xl font-extrabold text-slate-100 font-mono tabular-nums">{pendingTasks}</p>
-              <p className="text-[11px] text-amber-400 font-medium">{completedTasks} tarefas concluídas</p>
+              <p className="text-2xl font-bold text-slate-100 font-mono tabular-nums">{pendingTasks}</p>
+              <p className="text-[11px] text-slate-500">{completedTasks} tarefas concluídas</p>
             </Card>
 
-            <Card className="p-4 space-y-2">
-              <div className="flex justify-between items-center text-slate-400">
-                <span className="text-xs font-medium">Fila de Espera (Inbox)</span>
-                <div className="p-2 rounded-xl bg-teal-500/10 text-teal-400">
-                  <Inbox className="w-4 h-4" />
-                </div>
+            <Card className="p-4 space-y-1.5">
+              <div className="flex items-center gap-1.5 text-slate-500">
+                <Inbox className="w-3.5 h-3.5" />
+                <span className="text-[11px] font-medium uppercase tracking-wide">Fila de Espera (Inbox)</span>
               </div>
-              <p className="text-2xl font-extrabold text-slate-100 font-mono tabular-nums">{unassignedQueueConversations}</p>
-              <p className="text-[11px] text-slate-400">{activeConversations} atendimentos em andamento</p>
+              <p className="text-2xl font-bold text-slate-100 font-mono tabular-nums">{unassignedQueueConversations}</p>
+              <p className="text-[11px] text-slate-500">{activeConversations} atendimentos em andamento</p>
             </Card>
 
-            <Card className="p-4 space-y-2">
-              <div className="flex justify-between items-center text-slate-400">
-                <span className="text-xs font-medium">Membros de Equipe Ativos</span>
-                <div className="p-2 rounded-xl bg-blue-500/10 text-blue-400">
-                  <UserCheck className="w-4 h-4" />
-                </div>
+            <Card className="p-4 space-y-1.5">
+              <div className="flex items-center gap-1.5 text-slate-500">
+                <UserCheck className="w-3.5 h-3.5" />
+                <span className="text-[11px] font-medium uppercase tracking-wide">Membros de Equipe Ativos</span>
               </div>
-              <p className="text-2xl font-extrabold text-slate-100 font-mono tabular-nums">{activeTeamMembers}</p>
-              <p className="text-[11px] text-blue-400 font-medium">Equipe pronta no sistema</p>
+              <p className="text-2xl font-bold text-slate-100 font-mono tabular-nums">{activeTeamMembers}</p>
+              <p className="text-[11px] text-slate-500">Equipe pronta no sistema</p>
             </Card>
           </>
         )}
