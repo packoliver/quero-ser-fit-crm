@@ -1005,16 +1005,17 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
   }
 
   // Cria um pedido (Funil) já anexado ao contato desta conversa — a vendedora não
-  // precisa sair do Inbox e ir até o Funil pra registrar "isso virou venda".
-  const handleCreateInlineDeal = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!selectedConversation?.contactId || !newDealTitle.trim()) return
+  // precisa sair do Inbox e ir até o Funil pra registrar "isso virou venda". Compartilhado
+  // entre a classificação rápida de um clique (handleQuickClassify, sem formulário) e o
+  // formulário detalhado (handleCreateInlineDeal, pra quando ela quer registrar valor ou
+  // um título específico).
+  const createInlineDeal = async (title: string, stage: DealStage, value: number | null): Promise<boolean> => {
+    if (!selectedConversation?.contactId) return false
 
     setSavingDeal(true)
     setErrorMessage(null)
     try {
       const supabase = createClient()
-      const parsedValue = newDealValue.trim() ? Number(newDealValue.replace(',', '.')) : null
 
       const { data: created, error } = await (supabase as unknown as {
         from: (t: string) => {
@@ -1025,29 +1026,48 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
       })
         .from('deals')
         .insert({
-          title: newDealTitle,
+          title,
           contact_id: selectedConversation.contactId,
-          stage: newDealStage,
-          value: parsedValue,
-          ...(dealStages.find((s) => s.key === newDealStage)?.isWon ? { closed_at: new Date().toISOString() } : {}),
+          stage,
+          value,
+          ...(dealStages.find((s) => s.key === stage)?.isWon ? { closed_at: new Date().toISOString() } : {}),
         })
         .select('id, title, contact_id, stage, value')
         .single()
 
       if (error || !created) {
         setErrorMessage('Não foi possível criar o pedido no Supabase.')
-        return
+        return false
       }
 
       setRealDeals((prev) => [created, ...prev])
+      showToast('Pedido criado no Funil!')
+      return true
+    } catch {
+      setErrorMessage('Erro ao criar o pedido.')
+      return false
+    } finally {
+      setSavingDeal(false)
+    }
+  }
+
+  // Classificação de um clique só — usa o nome do contato como título automático, sem
+  // formulário nenhum. Pra quando a vendedora só quer marcar rápido "isso virou X", sem
+  // se preocupar em digitar título/valor.
+  const handleQuickClassify = async (stage: DealStage) => {
+    if (!selectedConversation) return
+    await createInlineDeal(selectedConversation.contactName, stage, null)
+  }
+
+  const handleCreateInlineDeal = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!newDealTitle.trim()) return
+    const parsedValue = newDealValue.trim() ? Number(newDealValue.replace(',', '.')) : null
+    const ok = await createInlineDeal(newDealTitle, newDealStage, parsedValue)
+    if (ok) {
       setNewDealTitle('')
       setNewDealValue('')
       setNewDealStage(dealStages[0]?.key || 'lead')
-      showToast('Pedido criado no Funil!')
-    } catch {
-      setErrorMessage('Erro ao criar o pedido.')
-    } finally {
-      setSavingDeal(false)
     }
   }
 
@@ -1905,9 +1925,31 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                       )}
                     </div>
 
+                    <div className="space-y-2 border-t border-slate-800 pt-3">
+                      <h3 className="text-slate-400 uppercase font-semibold text-[10px] tracking-wider">
+                        Classificar rápido
+                      </h3>
+                      <p className="text-slate-500 text-[11px] -mt-1">
+                        Um clique cria o pedido nessa etapa (sem precisar preencher nada).
+                      </p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {dealStages.map((s) => (
+                          <button
+                            key={s.key}
+                            type="button"
+                            onClick={() => void handleQuickClassify(s.key)}
+                            disabled={savingDeal}
+                            className="disabled:opacity-50 disabled:cursor-not-allowed transition hover:brightness-110"
+                          >
+                            <Badge variant={s.color}>{s.label}</Badge>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
                     <form onSubmit={handleCreateInlineDeal} className="space-y-2 border-t border-slate-800 pt-3">
                       <h3 className="text-slate-400 uppercase font-semibold text-[10px] tracking-wider">
-                        Novo pedido
+                        Ou com detalhes (título/valor)
                       </h3>
                       <input
                         placeholder="Ex: Kit marmitas fit semanal"
