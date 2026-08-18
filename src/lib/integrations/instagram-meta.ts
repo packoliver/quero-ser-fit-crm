@@ -60,15 +60,17 @@ export class MetaInstagramProvider implements ICRMIntegrationProvider {
               }
             | undefined
 
-          // Echoes são cópias das mensagens que a PRÓPRIA conta enviou (pelo CRM ou pelo
-          // app do Instagram), não mensagens recebidas. A notificação de teste do painel
-          // da Meta também vem assim — com is_echo/is_self e recipient.id apontando pra
-          // própria conta conectada, que casa com a nossa conexão. Sem esse filtro, cada
-          // teste no painel e cada resposta enviada viravam uma "mensagem recebida" de um
-          // contato falso (a própria loja) dentro do Inbox.
-          if (message?.is_echo || message?.is_self) continue
+          // Echoes são cópias das mensagens que a PRÓPRIA conta enviou — tanto pelo CRM
+          // quanto direto pelo app oficial do Instagram. Antes eram descartadas por
+          // completo (evitava duplicar o que o CRM já registra sozinho quando manda pelo
+          // botão de enviar), mas isso também apagava silenciosamente qualquer resposta
+          // mandada pelo app oficial em vez do CRM — a vendedora respondia o cliente e a
+          // conversa no CRM continuava parada, como se ninguém tivesse respondido.
+          // persistOutgoingEchoEvent (persist-event.ts) resolve a duplicata comparando
+          // pelo external_id em vez de simplesmente jogar tudo fora.
+          const isEcho = !!(message?.is_echo || message?.is_self)
 
-          if (message && sender?.id) {
+          if (message && sender?.id && (isEcho ? recipient?.id : true)) {
             // Diferente da Cloud API do WhatsApp (que exige um segundo hop autenticado
             // pra resolver o media id), o Instagram já entrega a URL do anexo direto no
             // payload do webhook — pronta pra baixar sem token. Sem essa URL não tem
@@ -84,17 +86,26 @@ export class MetaInstagramProvider implements ICRMIntegrationProvider {
             const rawTimestamp = typeof item.timestamp === 'number' ? item.timestamp : undefined
             const timestamp = rawTimestamp ? new Date(rawTimestamp).toISOString() : new Date().toISOString()
 
+            // Num echo, quem "manda" no payload da Meta é a NOSSA própria conta e quem
+            // "recebe" é o cliente — o inverso do que persistInboundEvent espera
+            // (senderId = quem escreveu de verdade / recipientId = qual conexão nossa é
+            // essa). Sem inverter aqui, um echo tentaria criar um contato com o ID da
+            // nossa própria página e nunca acharia a conexão certa.
+            const customerId = isEcho ? (recipient!.id as string) : sender.id
+            const ourAccountId = isEcho ? sender.id : (recipient?.id || entryId)
+
             events.push({
               provider: 'instagram_meta',
               externalEventId: message.mid || `ig_msg_${Date.now()}`,
               eventType: 'instagram_direct',
-              senderId: sender.id,
-              recipientId: recipient?.id || entryId,
+              senderId: customerId,
+              recipientId: ourAccountId,
               content: message.text || '',
               timestamp,
               rawPayload: item,
               mediaType,
               mediaUrl: mediaType ? attachment?.payload?.url : undefined,
+              isOutgoingEcho: isEcho,
             })
           }
         }

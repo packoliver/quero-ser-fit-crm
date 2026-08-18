@@ -78,6 +78,137 @@ async function findConnectionForEvent(
 }
 
 /**
+ * Trata um evento "echo" — uma mensagem que a NOSSA conta mandou, ecoada de volta pelo
+ * próprio webhook do provedor (não uma mensagem recebida de um cliente). Dois casos geram
+ * isso:
+ *
+ * (a) a mensagem já foi enviada e registrada pelo /api/messages/send do próprio CRM — o
+ *     echo é só uma notificação redundante do provedor. Detectado comparando
+ *     `messages.external_id`: se já existe, não faz nada (não duplica).
+ * (b) uma mensagem que um humano mandou DIRETO pelo app oficial (WhatsApp do celular
+ *     pareado, ou o app do Instagram), fora do CRM — esse echo é a ÚNICA chance de
+ *     capturar isso. Sem tratar esse caso, a resposta chega no cliente mas a conversa no
+ *     CRM fica parada, como se ninguém tivesse respondido.
+ *
+ * Deliberadamente mais simples que persistInboundEvent (sem a busca ativa de foto de
+ * perfil, por exemplo) — o contato quase sempre já existe nesse ponto (foi o cliente que
+ * começou a conversa), e o caso raro de não existir ainda ganha uma entrada básica que se
+ * completa sozinha assim que uma mensagem de verdade do cliente chegar.
+ */
+async function persistOutgoingEchoEvent(
+  db: AdminClient,
+  event: IncomingWebhookEvent,
+  matchedConnection: ConnectionMatch
+): Promise<{ success: boolean; conversationId?: string }> {
+  const { data: existingMsg } = await db
+    .from('messages')
+    .select('id')
+    .eq('external_id', event.externalEventId)
+    .eq('organization_id', matchedConnection.organization_id)
+    .maybeSingle()
+
+  if (existingMsg) return { success: true }
+
+  const channelType = event.provider === 'instagram_meta' ? 'instagram' : 'whatsapp'
+  const contactExternalId = event.conversationKey || event.senderId
+
+  const { data: existingChannel } = await db
+    .from('contact_channels')
+    .select('contact_id')
+    .eq('organization_id', matchedConnection.organization_id)
+    .eq('external_id', contactExternalId)
+    .maybeSingle()
+
+  let contactId = (existingChannel as { contact_id: string } | null)?.contact_id
+
+  if (!contactId) {
+    const { data: newContact, error: contactError } = await db
+      .from('contacts')
+      .insert({
+        organization_id: matchedConnection.organization_id,
+        name: event.senderName || contactExternalId,
+        phone: channelType === 'whatsapp' ? contactExternalId : null,
+        status: 'active',
+      })
+      .select('id')
+      .single()
+
+    if (contactError || !newContact) {
+      console.error('[persistOutgoingEchoEvent] Erro ao criar contato:', contactError)
+      return { success: false }
+    }
+    contactId = (newContact as ContactMatch).id
+
+    const { error: channelError } = await db.from('contact_channels').insert({
+      organization_id: matchedConnection.organization_id,
+      contact_id: contactId,
+      channel_type: channelType,
+      external_id: contactExternalId,
+      identifier: contactExternalId,
+    })
+    if (channelError) {
+      console.error('[persistOutgoingEchoEvent] Erro ao criar canal de contato:', channelError)
+    }
+  }
+
+  const { data: existingConversation } = await db
+    .from('conversations')
+    .select('id')
+    .eq('contact_id', contactId)
+    .order('last_message_at', { ascending: false })
+    .limit(1)
+    .maybeSingle() as { data: ConversationMatch | null }
+
+  let conversationId = existingConversation?.id
+
+  if (!conversationId) {
+    const { data: newConversation, error: convError } = await db
+      .from('conversations')
+      .insert({
+        organization_id: matchedConnection.organization_id,
+        contact_id: contactId,
+        channel_type: channelType,
+        status: 'open',
+        integration_connection_id: matchedConnection.id,
+        last_message_at: event.timestamp,
+      })
+      .select('id')
+      .single()
+
+    if (convError || !newConversation) {
+      console.error('[persistOutgoingEchoEvent] Erro ao criar conversa:', convError)
+      return { success: false }
+    }
+    conversationId = (newConversation as ConversationMatch).id
+  } else {
+    // Diferente de uma mensagem recebida, NÃO força o status de volta pra 'open' — se a
+    // conversa estava encerrada, uma resposta mandada por fora do CRM não deveria reabri-la
+    // sozinha (só uma mensagem nova do cliente faz isso, ver persistInboundEvent abaixo).
+    await db.from('conversations').update({ last_message_at: event.timestamp }).eq('id', conversationId)
+  }
+
+  const { error: msgError } = await db.from('messages').insert({
+    organization_id: matchedConnection.organization_id,
+    conversation_id: conversationId,
+    sender_type: 'user',
+    sender_id: null,
+    content: event.content,
+    media_url: event.mediaUrl || null,
+    media_type: event.mediaType || null,
+    status: 'sent',
+    external_id: event.externalEventId,
+  })
+
+  if (msgError) {
+    console.error('[persistOutgoingEchoEvent] Erro ao inserir mensagem:', msgError)
+    return { success: false }
+  }
+
+  console.log('[persistOutgoingEchoEvent] Resposta enviada pelo app oficial capturada no CRM! Conversation ID:', conversationId)
+  return { success: true, conversationId }
+}
+
+/**
  * Processes one parsed inbound event (from any provider — Meta or ZAP API): finds which of
  * our registered numbers/pages it belongs to, then finds-or-creates the contact, the
  * conversation, and the message row. Returns { success: false } (without throwing) when
@@ -99,6 +230,10 @@ export async function persistInboundEvent(
       recipientId: event.recipientId,
     })
     return { success: false }
+  }
+
+  if (event.isOutgoingEcho) {
+    return persistOutgoingEchoEvent(db, event, matchedConnection)
   }
 
   const channelType = event.provider === 'instagram_meta' ? 'instagram' : 'whatsapp'
@@ -361,18 +496,23 @@ export async function processInboundEvents(
         .eq('external_event_id', event.externalEventId)
 
       processedCount++
-      await sendPushToOrganization(admin, connection.organization_id, {
-        title: 'Nova mensagem no Quero Ser Fit CRM',
-        body: event.content || 'Você recebeu uma nova mensagem.',
-        url: `/inbox?conversa=${event.conversationKey || event.senderId}`,
-        tag: `crm-message-${event.externalEventId}`,
-      })
 
-      // Resposta automática fora do horário e captura de avaliação (CSAT) — nenhuma das
-      // duas bloqueia o processamento do webhook se falhar (ambas nunca lançam exceção).
-      if (persistResult.conversationId) {
-        await maybeSendAutoReply(admin, event, connection, persistResult.conversationId)
-        await maybeCaptureCsatReply(admin, event, connection, persistResult.conversationId)
+      // Nada disso se aplica a um echo (mensagem que NÓS mandamos, capturada de volta) —
+      // notificação de "nova mensagem", resposta automática fora do horário e captura de
+      // CSAT são todas reações a uma mensagem do CLIENTE, não a uma resposta nossa.
+      if (!event.isOutgoingEcho) {
+        await sendPushToOrganization(admin, connection.organization_id, {
+          title: 'Nova mensagem no Quero Ser Fit CRM',
+          body: event.content || 'Você recebeu uma nova mensagem.',
+          url: `/inbox?conversa=${event.conversationKey || event.senderId}`,
+          tag: `crm-message-${event.externalEventId}`,
+        })
+
+        // Nenhuma das duas bloqueia o processamento do webhook se falhar (nunca lançam exceção).
+        if (persistResult.conversationId) {
+          await maybeSendAutoReply(admin, event, connection, persistResult.conversationId)
+          await maybeCaptureCsatReply(admin, event, connection, persistResult.conversationId)
+        }
       }
     }
     // If persistResult.success is false, the event stays pending — next webhook retry will attempt again

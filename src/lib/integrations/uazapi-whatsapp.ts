@@ -126,7 +126,18 @@ export class UazapiWhatsAppProvider implements ICRMIntegrationProvider {
 
       // Uma mensagem é válida se tiver texto OU for de um tipo de mídia reconhecido —
       // uma imagem sem legenda, por exemplo, não tem `text`, mas ainda é uma mensagem real.
-      if (fromMe || !sender || (!text && !mediaType)) return []
+      //
+      // fromMe (mensagem que a NOSSA conta mandou) não é mais descartada — antes era, pra
+      // não duplicar o que o CRM já registra sozinho ao enviar pelo botão, mas isso também
+      // apagava silenciosamente qualquer resposta mandada direto pelo WhatsApp do celular
+      // (fora do CRM): a vendedora respondia o cliente e a conversa continuava parada,
+      // como se ninguém tivesse respondido. persistOutgoingEchoEvent (persist-event.ts)
+      // resolve a duplicata comparando pelo external_id em vez de jogar tudo fora. `chatId`
+      // continua identificando o cliente certo mesmo numa mensagem fromMe (é a identidade
+      // do CHAT, não de quem mandou essa mensagem específica) — não confirmado ainda contra
+      // um payload real fromMe capturado, mas é o comportamento padrão do protocolo do
+      // WhatsApp Web que a uazapi encapsula.
+      if (!sender || (!text && !mediaType)) return []
 
       // `chatid` é a identidade ESTÁVEL da conversa — pra um chat 1:1 é o próprio
       // contato (igual a `sender`, só que sempre presente mesmo quando sender/sender_pn
@@ -184,6 +195,7 @@ export class UazapiWhatsAppProvider implements ICRMIntegrationProvider {
           conversationName: isGroup ? groupName : senderName,
           isGroup,
           conversationAvatarUrl,
+          isOutgoingEcho: fromMe,
         },
       ]
     } catch (err) {

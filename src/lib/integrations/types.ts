@@ -61,6 +61,15 @@ export interface IncomingWebhookEvent {
    * send it for that event.
    */
   conversationAvatarUrl?: string
+  /**
+   * True quando este evento é um "echo" — uma cópia, vinda do próprio webhook do provedor,
+   * de uma mensagem que a NOSSA conta mandou (pelo CRM ou direto pelo app oficial), não uma
+   * mensagem recebida de um cliente. Sem isso, o provedor não distingue as duas coisas no
+   * payload — quem descarta (ou não) é o parser de cada provider. Quando true, senderId/
+   * conversationKey já vêm ajustados pra representar o CLIENTE (o outro lado da conversa),
+   * não a nossa própria conta — ver os parsers de cada provider.
+   */
+  isOutgoingEcho?: boolean
 }
 
 /** A delivery/read status change for a message we already sent, identified by the externalId we got back from sendMessage. */

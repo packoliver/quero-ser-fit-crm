@@ -1,6 +1,6 @@
 'use client'
 
-import { Suspense, useCallback, useEffect, useRef, useState } from 'react'
+import { Fragment, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import {
@@ -35,7 +35,6 @@ import {
   Archive,
   RotateCcw,
   Zap,
-  AlertTriangle,
   Star,
 } from 'lucide-react'
 import { InstagramIcon as Instagram } from '@/components/icons/InstagramIcon'
@@ -52,7 +51,6 @@ import { subscribeToPush, unsubscribeFromPush } from '@/lib/pwa/subscribe'
 import { useDemoStorage } from '@/lib/demo/useDemoStorage'
 import { DealStage, UserRole, CustomPermissions } from '@/types/database'
 import { hasPermission } from '@/lib/security/permissions'
-import { SLA_BREACH_MINUTES, minutesSince } from '@/lib/sla'
 import { cacheEntity, readCachedEntity, queueEntityMutation } from '@/lib/offline/repository'
 import { getOfflineScope } from '@/lib/offline/scope'
 import { PipelineStage, PipelineStageRow, DEFAULT_PIPELINE_STAGES, mapPipelineStageRow } from '@/lib/pipeline/stages'
@@ -144,6 +142,27 @@ interface InlineDeal {
 
 const formatTime = (iso: string) =>
   new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+
+// Rótulo do cabeçalho de data que separa a lista de conversas em grupos (Hoje, Ontem,
+// dia da semana, ou data completa) — puramente pra facilitar achar uma conversa de
+// relance, sem mudar a ordenação (que já vem por last_message_at, mais recente primeiro).
+const formatDateHeader = (iso: string | undefined): string => {
+  if (!iso) return 'Sem data'
+  const date = new Date(iso)
+  const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
+  const diffDays = Math.round((startOfDay(new Date()) - startOfDay(date)) / 86_400_000)
+  if (diffDays === 0) return 'Hoje'
+  if (diffDays === 1) return 'Ontem'
+  if (diffDays > 1 && diffDays < 7) {
+    const label = date.toLocaleDateString('pt-BR', { weekday: 'long' })
+    return label.charAt(0).toUpperCase() + label.slice(1)
+  }
+  return date.toLocaleDateString('pt-BR', {
+    day: '2-digit',
+    month: 'short',
+    year: date.getFullYear() !== new Date().getFullYear() ? 'numeric' : undefined,
+  })
+}
 
 function InboxPageInner({ requestedConvId }: { requestedConvId: string | null }) {
   // Vem de links externos (ex: um card da aba Follow-up "Abrir conversa") — assim que a
@@ -1332,13 +1351,23 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                 />
               </div>
             ) : (
-              filteredConversations.map((conv) => {
+              filteredConversations.map((conv, index) => {
                 const isSelected = selectedConversation && conv.id === selectedConversation.id
                 const isWhatsApp = conv.channel === 'whatsapp'
+                // Cabeçalho de data só aparece quando muda em relação à conversa anterior
+                // da lista (que já vem ordenada mais recente primeiro) — não reordena nada,
+                // só agrupa visualmente o que já está na ordem certa.
+                const dateLabel = formatDateHeader(conv.lastMessageAtIso)
+                const showDateHeader = index === 0 || dateLabel !== formatDateHeader(filteredConversations[index - 1].lastMessageAtIso)
 
                 return (
+                  <Fragment key={conv.id}>
+                  {showDateHeader && (
+                    <div className="px-3.5 pt-3 pb-1.5 bg-[#0f172a] sticky top-0 z-10">
+                      <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">{dateLabel}</span>
+                    </div>
+                  )}
                   <div
-                    key={conv.id}
                     onClick={() => {
                       setSelectedConvId(conv.id)
                       setMobilePane('chat')
@@ -1383,18 +1412,10 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                             {conv.currentAssigneeName}
                           </Badge>
                         )}
-
-                        {conv.status !== 'closed' &&
-                          conv.lastMessageSenderType === 'contact' &&
-                          conv.lastMessageAtIso &&
-                          minutesSince(conv.lastMessageAtIso) > SLA_BREACH_MINUTES && (
-                            <Badge variant="rose" icon={<AlertTriangle className="w-3 h-3" />}>
-                              SLA Estourado
-                            </Badge>
-                          )}
                       </div>
                     </div>
                   </div>
+                  </Fragment>
                 )
               })
             )}
