@@ -176,7 +176,10 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
 
   // Filters State
   const [selectedConvId, setSelectedConvId] = useState<string>('conv-1')
-  const [mobilePane, setMobilePane] = useState<'list' | 'chat'>('list')
+  // 'details' = a coluna de Perfil/Notas/Pedido — em telas grandes ela sempre aparece do
+  // lado do chat (3 colunas ao mesmo tempo); no celular vira uma tela própria, senão
+  // ficava impossível abrir a aba "Pedido" (mover pra funil) de dentro do Inbox no celular.
+  const [mobilePane, setMobilePane] = useState<'list' | 'chat' | 'details'>('list')
   const [filterQueue, setFilterQueue] = useState<'all' | 'mine' | 'unassigned'>('all')
   const [filterChannel, setFilterChannel] = useState<'all' | 'whatsapp' | 'instagram'>('all')
   const [searchQuery, setSearchQuery] = useState('')
@@ -287,6 +290,7 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
   const selectedConversation = conversations.find((c) => c.id === selectedConvId)
   const showMobileList = mobilePane === 'list' || !selectedConversation
   const showMobileChat = mobilePane === 'chat' && !!selectedConversation
+  const showMobileDetails = mobilePane === 'details' && !!selectedConversation
 
 
   const showToast = (msg: string) => {
@@ -1392,6 +1396,19 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
               </div>
 
               <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
+                {/* Só no celular — em telas grandes essa coluna já aparece do lado, ver
+                    showMobileDetails acima. Sem isso, "Pedido" (mover contato pro funil)
+                    fica inacessível pra quem só usa o Inbox no celular. */}
+                <button
+                  type="button"
+                  onClick={() => setMobilePane('details')}
+                  className="lg:hidden p-2 rounded-xl bg-slate-900 border border-slate-700 text-slate-400 hover:text-emerald-400 hover:border-emerald-700 transition shrink-0"
+                  aria-label="Ver perfil, notas e pedido deste contato"
+                  title="Perfil, notas e pedido"
+                >
+                  <Kanban className="w-4 h-4" />
+                </button>
+
                 {selectedConversation.currentAssigneeId !== effectiveCurrentUserId && (
                   <Button onClick={() => handleAssume(selectedConversation.id)} size="sm" variant="primary">
                     <UserPlus className="w-3.5 h-3.5" />
@@ -1706,8 +1723,19 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
 
         {/* Col 3: Contact Profile & Internal Notes */}
         {selectedConversation && (
-          <div className="hidden lg:flex w-72 lg:w-80 border-l border-slate-800 bg-[#0f172a] flex-col shrink-0">
-            <div className="flex border-b border-slate-800 text-xs">
+          <div className={`w-full lg:w-72 lg:w-80 border-l border-slate-800 bg-[#0f172a] flex-col shrink-0 ${
+            showMobileDetails ? 'flex' : 'hidden lg:flex'
+          }`}>
+            <div className="flex items-center border-b border-slate-800 text-xs">
+              <button
+                type="button"
+                onClick={() => setMobilePane('chat')}
+                className="lg:hidden p-3 text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition shrink-0"
+                aria-label="Voltar para a conversa"
+                title="Voltar para a conversa"
+              >
+                <ArrowLeft className="w-4 h-4" />
+              </button>
               <button
                 onClick={() => setActiveTabRight('info')}
                 className={`flex-1 py-3 font-semibold flex items-center justify-center gap-1.5 border-b-2 transition ${
