@@ -277,7 +277,7 @@ export default function RelatoriosPage() {
                   <Users className="w-4 h-4" />
                 </div>
               </div>
-              <p className="text-2xl font-extrabold text-slate-100">{realMetrics.totalContacts}</p>
+              <p className="text-2xl font-extrabold text-slate-100 font-mono tabular-nums">{realMetrics.totalContacts}</p>
               <p className="text-[11px] text-slate-400">Cadastrados no Supabase</p>
             </Card>
 
@@ -288,7 +288,7 @@ export default function RelatoriosPage() {
                   <Clock className="w-4 h-4" />
                 </div>
               </div>
-              <p className="text-2xl font-extrabold text-slate-100">{realMetrics.pendingTasks}</p>
+              <p className="text-2xl font-extrabold text-slate-100 font-mono tabular-nums">{realMetrics.pendingTasks}</p>
               <p className="text-[11px] text-amber-400 font-medium">Aguardando atendimento</p>
             </Card>
 
@@ -299,7 +299,7 @@ export default function RelatoriosPage() {
                   <CheckCircle className="w-4 h-4" />
                 </div>
               </div>
-              <p className="text-2xl font-extrabold text-slate-100">{realMetrics.completedTasks}</p>
+              <p className="text-2xl font-extrabold text-slate-100 font-mono tabular-nums">{realMetrics.completedTasks}</p>
               <p className="text-[11px] text-emerald-400 font-medium">Resoluções finalizadas</p>
             </Card>
 
@@ -310,7 +310,7 @@ export default function RelatoriosPage() {
                   <MessageSquare className="w-4 h-4" />
                 </div>
               </div>
-              <p className="text-2xl font-extrabold text-slate-100">{realMetrics.openConversations}</p>
+              <p className="text-2xl font-extrabold text-slate-100 font-mono tabular-nums">{realMetrics.openConversations}</p>
               <p className="text-[11px] text-slate-400">Aguardando atribuição</p>
             </Card>
 
@@ -321,7 +321,7 @@ export default function RelatoriosPage() {
                   <Timer className="w-4 h-4" />
                 </div>
               </div>
-              <p className="text-2xl font-extrabold text-slate-100">
+              <p className="text-2xl font-extrabold text-slate-100 font-mono tabular-nums">
                 {realMetrics.avgFirstResponseMinutes === null ? '—' : formatMinutes(realMetrics.avgFirstResponseMinutes)}
               </p>
               <p className="text-[11px] text-slate-400">Do 1º contato à 1ª resposta da equipe</p>
@@ -334,7 +334,7 @@ export default function RelatoriosPage() {
                   <AlertTriangle className="w-4 h-4" />
                 </div>
               </div>
-              <p className={`text-2xl font-extrabold ${realMetrics.slaBreachedCount > 0 ? 'text-rose-400' : 'text-slate-100'}`}>
+              <p className={`text-2xl font-extrabold font-mono tabular-nums ${realMetrics.slaBreachedCount > 0 ? 'text-rose-400' : 'text-slate-100'}`}>
                 {realMetrics.slaBreachedCount}
               </p>
               <p className="text-[11px] text-slate-400">Esperando resposta há mais de {SLA_BREACH_MINUTES}min</p>
@@ -349,7 +349,7 @@ export default function RelatoriosPage() {
                   <Users className="w-4 h-4" />
                 </div>
               </div>
-              <p className="text-2xl font-extrabold text-slate-100">{totalContacts}</p>
+              <p className="text-2xl font-extrabold text-slate-100 font-mono tabular-nums">{totalContacts}</p>
               <p className="text-[11px] text-emerald-400 font-medium flex items-center gap-1">
                 <TrendingUp className="w-3 h-3" /> {newLeads} novo(s) lead(s)
               </p>
@@ -362,7 +362,7 @@ export default function RelatoriosPage() {
                   <Clock className="w-4 h-4" />
                 </div>
               </div>
-              <p className="text-2xl font-extrabold text-slate-100">{pendingTasks}</p>
+              <p className="text-2xl font-extrabold text-slate-100 font-mono tabular-nums">{pendingTasks}</p>
               <p className="text-[11px] text-amber-400 font-medium">{completedTasks} tarefas concluídas</p>
             </Card>
 
@@ -373,7 +373,7 @@ export default function RelatoriosPage() {
                   <Inbox className="w-4 h-4" />
                 </div>
               </div>
-              <p className="text-2xl font-extrabold text-slate-100">{unassignedQueueConversations}</p>
+              <p className="text-2xl font-extrabold text-slate-100 font-mono tabular-nums">{unassignedQueueConversations}</p>
               <p className="text-[11px] text-slate-400">{activeConversations} atendimentos em andamento</p>
             </Card>
 
@@ -384,7 +384,7 @@ export default function RelatoriosPage() {
                   <UserCheck className="w-4 h-4" />
                 </div>
               </div>
-              <p className="text-2xl font-extrabold text-slate-100">{activeTeamMembers}</p>
+              <p className="text-2xl font-extrabold text-slate-100 font-mono tabular-nums">{activeTeamMembers}</p>
               <p className="text-[11px] text-blue-400 font-medium">Equipe pronta no sistema</p>
             </Card>
           </>

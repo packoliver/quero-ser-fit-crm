@@ -46,6 +46,7 @@ import { Avatar } from '@/components/ui/Avatar'
 import { Input } from '@/components/ui/Input'
 import { Modal } from '@/components/ui/Modal'
 import { EmptyState } from '@/components/ui/EmptyState'
+import { Skeleton } from '@/components/ui/Skeleton'
 import { createClient } from '@/lib/supabase/client'
 import { subscribeToPush, unsubscribeFromPush } from '@/lib/pwa/subscribe'
 import { useDemoStorage } from '@/lib/demo/useDemoStorage'
@@ -1299,7 +1300,26 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
           </div>
 
           <div className="flex-1 overflow-y-auto divide-y divide-slate-800/60">
-            {filteredConversations.length === 0 ? (
+            {viewMode === 'real' && loadingReal && realConversations.length === 0 ? (
+              // Esqueleto no formato real da lista, em vez do spinner genérico ou do
+              // "Nenhuma conversa" piscando por um instante antes do primeiro carregamento
+              // terminar — evita o falso alarme de "não tem nada aqui" logo ao abrir o Inbox.
+              <div className="p-3 space-y-4" aria-hidden="true">
+                {Array.from({ length: 6 }).map((_, i) => (
+                  <div key={i} className="flex items-start gap-3">
+                    <Skeleton className="w-10 h-10 rounded-full shrink-0" />
+                    <div className="flex-1 min-w-0 space-y-2 pt-0.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <Skeleton className="h-3 w-28" />
+                        <Skeleton className="h-2.5 w-8" />
+                      </div>
+                      <Skeleton className="h-2.5 w-4/5" />
+                      <Skeleton className="h-4 w-16 rounded-full" />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : filteredConversations.length === 0 ? (
               <div className="p-6">
                 <EmptyState
                   icon={<Search className="w-5 h-5" />}
@@ -1901,7 +1921,7 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                                     <Badge variant={stageInfo?.color}>{stageInfo?.label || deal.stage}</Badge>
                                   </div>
                                   {deal.value != null && (
-                                    <span className="flex items-center gap-1 text-emerald-400 font-semibold text-[11px]">
+                                    <span className="flex items-center gap-1 text-emerald-400 font-semibold text-[11px] font-mono tabular-nums">
                                       <DollarSign className="w-3 h-3" />
                                       {deal.value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                                     </span>
