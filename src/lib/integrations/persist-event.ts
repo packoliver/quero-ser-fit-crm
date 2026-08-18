@@ -4,6 +4,7 @@ import { IncomingWebhookEvent, MessageStatusUpdate } from './types'
 import { sendPushToOrganization } from '@/lib/pwa/push'
 import { decryptToken } from '@/lib/security/encryption'
 import { fetchInstagramUserProfile } from './instagram-meta'
+import { fetchUazapiChatDetails } from './uazapi-whatsapp'
 import { maybeSendAutoReply } from './auto-reply'
 import { maybeCaptureCsatReply } from './csat'
 
@@ -139,6 +140,24 @@ export async function persistInboundEvent(
 
   let contactId = (existingChannel as { contact_id: string } | null)?.contact_id
 
+  // Contato novo de WhatsApp via uazapi, 1:1 (não grupo — grupo já tem sua própria busca
+  // de foto por participante mais abaixo no webhook), e o payload não trouxe
+  // chat.image/imagePreview de brinde (nem sempre vem — ver comentário em
+  // uazapi-whatsapp.ts): busca ativamente via /chat/details antes de criar o contato,
+  // mesmo endpoint que já é usado pra foto de participante de grupo. Só roda na criação
+  // (não a cada mensagem seguinte) pra não gastar chamada à toa num contato que já tem
+  // foto salva.
+  if (!contactId && channelType === 'whatsapp' && !event.isGroup && !avatarUrl && matchedConnection.connection_method === 'uazapi' && matchedConnection.encrypted_credentials && matchedConnection.api_base_url) {
+    try {
+      const instanceToken = decryptToken(matchedConnection.encrypted_credentials)
+      const details = await fetchUazapiChatDetails(matchedConnection.api_base_url, instanceToken, contactExternalId)
+      if (details?.avatarUrl) avatarUrl = details.avatarUrl
+      if (details?.name && (!contactName || contactName === contactExternalId)) contactName = details.name
+    } catch (err) {
+      console.warn('[persistInboundEvent] Não foi possível buscar foto de perfil via uazapi:', err)
+    }
+  }
+
   if (!contactId) {
     const { data: newContact, error: contactError } = await db
       .from('contacts')
@@ -175,6 +194,23 @@ export async function persistInboundEvent(
       console.error('[persistInboundEvent] Erro ao criar canal de contato:', channelError)
     }
   } else {
+    // Contato já existente (criado antes desta busca ativa existir, ou de um payload que
+    // nunca trouxe chat.image) e ainda sem foto salva: tenta buscar agora, na próxima
+    // mensagem que chegar dele. Só faz a chamada extra quando o contato realmente ainda
+    // não tem avatar_url no banco — depois que acha uma foto, para de tentar de novo.
+    if (!avatarUrl && channelType === 'whatsapp' && !event.isGroup && matchedConnection.connection_method === 'uazapi' && matchedConnection.encrypted_credentials && matchedConnection.api_base_url) {
+      const { data: currentContact } = await db.from('contacts').select('avatar_url').eq('id', contactId).maybeSingle()
+      if (!(currentContact as { avatar_url: string | null } | null)?.avatar_url) {
+        try {
+          const instanceToken = decryptToken(matchedConnection.encrypted_credentials)
+          const details = await fetchUazapiChatDetails(matchedConnection.api_base_url, instanceToken, contactExternalId)
+          if (details?.avatarUrl) avatarUrl = details.avatarUrl
+        } catch (err) {
+          console.warn('[persistInboundEvent] Não foi possível buscar foto de perfil via uazapi (contato existente):', err)
+        }
+      }
+    }
+
     // Atualiza nome e foto caso tenhamos obtido novas informações do perfil
     const updates: Record<string, unknown> = {}
     if (avatarUrl) updates.avatar_url = avatarUrl
