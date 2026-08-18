@@ -91,10 +91,8 @@ export async function GET() {
     try {
       admin = createAdminClient()
     } catch (err) {
-      return NextResponse.json(
-        { error: err instanceof Error ? err.message : 'Cliente administrativo indisponível.' },
-        { status: 500 }
-      )
+      console.error('[integrations/connections] Cliente administrativo indisponível:', err)
+      return NextResponse.json({ error: 'Cliente administrativo indisponível.' }, { status: 500 })
     }
 
     const { data, error } = await (admin as unknown as AdminTyped)
@@ -104,17 +102,17 @@ export async function GET() {
       .order('created_at', { ascending: false })
 
     if (error) {
-      return NextResponse.json({ error: `Falha ao carregar conexões: ${error.message}` }, { status: 500 })
+      console.error('[integrations/connections] Falha ao carregar:', error.message)
+      return NextResponse.json({ error: 'Falha ao carregar conexões.' }, { status: 500 })
     }
 
     return NextResponse.json({ connections: data || [] })
   } catch (err) {
-    // Last-resort catch: surface the real message instead of a bare 500 with no body,
-    // which is what a raw Next.js route-handler crash looks like to the client.
-    return NextResponse.json(
-      { error: err instanceof Error ? `Erro inesperado: ${err.message}` : 'Erro inesperado ao carregar conexões.' },
-      { status: 500 }
-    )
+    // Last-resort catch: nunca devolve um 500 sem corpo (que pro cliente parece um crash
+    // cru do route handler) — mas a mensagem exibida é sempre em português; o detalhe
+    // técnico (às vezes em inglês) vai só pro console do servidor.
+    console.error('[integrations/connections] Erro inesperado:', err)
+    return NextResponse.json({ error: 'Erro inesperado ao carregar conexões.' }, { status: 500 })
   }
 }
 
@@ -274,9 +272,7 @@ export async function POST(request: NextRequest) {
       { status: 201 }
     )
   } catch (err) {
-    return NextResponse.json(
-      { error: err instanceof Error ? `Erro inesperado: ${err.message}` : 'Erro inesperado ao criar conexão.' },
-      { status: 500 }
-    )
+    console.error('[integrations/connections] Erro inesperado ao criar:', err)
+    return NextResponse.json({ error: 'Erro inesperado ao criar conexão.' }, { status: 500 })
   }
 }

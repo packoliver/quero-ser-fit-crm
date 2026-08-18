@@ -153,7 +153,8 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
       .single()
 
     if (updateError || !updated) {
-      return NextResponse.json({ error: `Falha ao atualizar o status da conexão: ${updateError?.message || 'erro desconhecido'}` }, { status: 500 })
+      console.error('[connections/[id]/verify] Falha ao atualizar status:', updateError?.message)
+      return NextResponse.json({ error: 'Falha ao atualizar o status da conexão.' }, { status: 500 })
     }
 
     return NextResponse.json({
@@ -161,9 +162,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
       warning: ok ? webhookWarning : `Ainda não confirmado: ${detail}.`,
     })
   } catch (err) {
-    return NextResponse.json(
-      { error: err instanceof Error ? `Erro inesperado: ${err.message}` : 'Erro inesperado ao reverificar conexão.' },
-      { status: 500 }
-    )
+    console.error('[connections/[id]/verify] Erro inesperado:', err)
+    return NextResponse.json({ error: 'Erro inesperado ao reverificar conexão.' }, { status: 500 })
   }
 }

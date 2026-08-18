@@ -181,9 +181,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
 
     return NextResponse.json({ sent: true })
   } catch (err) {
-    return NextResponse.json(
-      { error: err instanceof Error ? `Erro inesperado: ${err.message}` : 'Erro inesperado ao pedir avaliação.' },
-      { status: 500 }
-    )
+    console.error('[request-csat] Erro inesperado:', err)
+    return NextResponse.json({ error: 'Erro inesperado ao pedir avaliação.' }, { status: 500 })
   }
 }

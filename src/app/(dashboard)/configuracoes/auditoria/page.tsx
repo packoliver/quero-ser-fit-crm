@@ -79,10 +79,11 @@ export default function AuditoriaPage() {
       .range(offset, offset + PAGE_SIZE - 1)
 
     if (fetchError) {
+      console.error('[Auditoria] Falha ao carregar log:', fetchError.message)
       setError(
         fetchError.message.toLowerCase().includes('permission')
           ? 'Apenas administradores podem ver o log de auditoria.'
-          : `Falha ao carregar o log de auditoria: ${fetchError.message}`
+          : 'Falha ao carregar o log de auditoria.'
       )
       return { rows: [], ok: false }
     }

@@ -75,7 +75,8 @@ export async function DELETE(request: NextRequest, context: { params: Promise<{ 
       .select('id')
 
     if (deleteError) {
-      return NextResponse.json({ error: `Falha ao remover a conexão: ${deleteError.message}` }, { status: 500 })
+      console.error('[integrations/connections/[id]] Falha ao remover:', deleteError.message)
+      return NextResponse.json({ error: 'Falha ao remover a conexão.' }, { status: 500 })
     }
 
     if (!deleted || deleted.length === 0) {
@@ -92,9 +93,7 @@ export async function DELETE(request: NextRequest, context: { params: Promise<{ 
 
     return NextResponse.json({ success: true })
   } catch (err) {
-    return NextResponse.json(
-      { error: err instanceof Error ? `Erro inesperado: ${err.message}` : 'Erro inesperado ao remover conexão.' },
-      { status: 500 }
-    )
+    console.error('[integrations/connections/[id]] Erro inesperado:', err)
+    return NextResponse.json({ error: 'Erro inesperado ao remover conexão.' }, { status: 500 })
   }
 }

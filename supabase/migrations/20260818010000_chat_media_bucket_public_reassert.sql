@@ -1,0 +1,11 @@
+-- A migration 20260812000000_security_followup.sql marcou o bucket `chat-media` como
+-- privado (public = false) por padrão de segurança. Isso quebrou o envio de foto/vídeo
+-- pro WhatsApp/Instagram na prática: a Meta (e a uazapi) precisam conseguir BAIXAR a URL
+-- do anexo pra entregar a mensagem, e um bucket privado nega isso mesmo com a URL certa
+-- em mãos. Corrigido ao vivo direto no Supabase em 2026-08-17 (ver memória da sessão:
+-- "RESOLVED 2026-08-17 — Photo/video attachment send failures"), mas nunca virou
+-- migration — se este projeto for reinstalado do zero um dia (disaster recovery, novo
+-- ambiente), replays a partir de 20260812000000 reintroduziriam o mesmo bug. Esta
+-- migration só reafirma o estado já corrigido em produção, pra manter o histórico de
+-- migrations consistente com a realidade.
+UPDATE storage.buckets SET public = true WHERE id = 'chat-media';

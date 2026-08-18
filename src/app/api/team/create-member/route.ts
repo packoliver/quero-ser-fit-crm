@@ -16,10 +16,8 @@ export async function POST(request: NextRequest) {
   try {
     return await handlePost(request)
   } catch (err) {
-    return NextResponse.json(
-      { error: err instanceof Error ? `Erro inesperado: ${err.message}` : 'Erro inesperado ao cadastrar membro.' },
-      { status: 500 }
-    )
+    console.error('[create-member] Erro inesperado:', err)
+    return NextResponse.json({ error: 'Erro inesperado ao cadastrar membro.' }, { status: 500 })
   }
 }
 
@@ -91,10 +89,8 @@ async function handlePost(request: NextRequest) {
   try {
     admin = createAdminClient()
   } catch (err) {
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Falha ao inicializar cliente administrativo.' },
-      { status: 500 }
-    )
+    console.error('[create-member] Falha ao inicializar cliente administrativo:', err)
+    return NextResponse.json({ error: 'Serviço temporariamente indisponível.' }, { status: 500 })
   }
 
   const { data: createdUser, error: createUserError } = await admin.auth.admin.createUser({
@@ -106,12 +102,9 @@ async function handlePost(request: NextRequest) {
 
   if (createUserError || !createdUser?.user) {
     const isDuplicate = createUserError?.message?.toLowerCase().includes('already') ?? false
+    if (!isDuplicate) console.error('[create-member] Falha ao criar usuário:', createUserError?.message)
     return NextResponse.json(
-      {
-        error: isDuplicate
-          ? 'Já existe um usuário cadastrado com este e-mail.'
-          : createUserError?.message || 'Falha ao criar o usuário.',
-      },
+      { error: isDuplicate ? 'Já existe um usuário cadastrado com este e-mail.' : 'Falha ao criar o usuário.' },
       { status: isDuplicate ? 409 : 500 }
     )
   }
@@ -123,8 +116,9 @@ async function handlePost(request: NextRequest) {
     .upsert({ id: newUserId, full_name: fullName, email }, { onConflict: 'id' })
 
   if (profileError) {
+    console.error('[create-member] Falha ao criar perfil:', profileError.message)
     await admin.auth.admin.deleteUser(newUserId)
-    return NextResponse.json({ error: `Falha ao criar o perfil do membro: ${profileError.message}` }, { status: 500 })
+    return NextResponse.json({ error: 'Falha ao criar o perfil do membro.' }, { status: 500 })
   }
 
   const { error: memberError } = await admin.from('organization_members').insert({
@@ -135,8 +129,9 @@ async function handlePost(request: NextRequest) {
   })
 
   if (memberError) {
+    console.error('[create-member] Falha ao vincular à organização:', memberError.message)
     await admin.auth.admin.deleteUser(newUserId)
-    return NextResponse.json({ error: `Falha ao vincular o membro à organização: ${memberError.message}` }, { status: 500 })
+    return NextResponse.json({ error: 'Falha ao vincular o membro à organização.' }, { status: 500 })
   }
 
   await logAuditEvent({

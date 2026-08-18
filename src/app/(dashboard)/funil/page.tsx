@@ -140,18 +140,28 @@ export default function FunilPage() {
         }
       })
         .from('deals')
-        .select('id, title, contact_id, value, stage, notes, created_at, closed_at, contacts(name, phone)')
+        // !deals_contact_id_fkey desambigua de propósito: desde a migration
+        // 20260812000000_security_followup.sql, `deals` tem DUAS foreign keys pra
+        // `contacts` (a original por contact_id, e uma composta org+contact_id só pra
+        // reforçar isolamento por tenant) — sem apontar qual usar, o PostgREST recusa o
+        // embed com "Could not embed because more than one relationship was found" (erro
+        // cru em inglês que chegava a aparecer pro usuário antes desta correção).
+        .select('id, title, contact_id, value, stage, notes, created_at, closed_at, contacts!deals_contact_id_fkey(name, phone)')
         .order('created_at', { ascending: false })
 
       if (dbError) {
-        setError(dbError.message || 'Não foi possível carregar os pedidos do Supabase.')
+        // Mensagem técnica (às vezes em inglês, ex: erros do PostgREST) só vai pro
+        // console — quem usa o CRM só vê o aviso em português.
+        console.error('[Funil] Falha ao carregar pedidos:', dbError.message)
+        setError('Não foi possível carregar os pedidos do Supabase.')
         setRealDeals([])
       } else if (data) {
         setRealDeals(data)
         if (offlineScope) await cacheEntity(offlineScope, 'deals', data)
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Erro inesperado ao carregar o funil.')
+      console.error('[Funil] Erro inesperado ao carregar pedidos:', err)
+      setError('Erro inesperado ao carregar o funil.')
       setRealDeals([])
     } finally {
       setLoading(false)
@@ -319,7 +329,13 @@ export default function FunilPage() {
             notes: newDeal.notes || null,
             stage: activeStages[0]?.key || 'lead',
           })
-          .select('id, title, contact_id, value, stage, notes, created_at, closed_at, contacts(name, phone)')
+          // !deals_contact_id_fkey desambigua de propósito: desde a migration
+        // 20260812000000_security_followup.sql, `deals` tem DUAS foreign keys pra
+        // `contacts` (a original por contact_id, e uma composta org+contact_id só pra
+        // reforçar isolamento por tenant) — sem apontar qual usar, o PostgREST recusa o
+        // embed com "Could not embed because more than one relationship was found" (erro
+        // cru em inglês que chegava a aparecer pro usuário antes desta correção).
+        .select('id, title, contact_id, value, stage, notes, created_at, closed_at, contacts!deals_contact_id_fkey(name, phone)')
           .single()
 
         if (insertError) {

@@ -93,7 +93,8 @@ export async function DELETE(request: NextRequest, context: { params: Promise<{ 
       .eq('organization_id', membership.organization_id)
 
     if (deleteError) {
-      return NextResponse.json({ error: `Falha ao excluir mensagem: ${deleteError.message}` }, { status: 500 })
+      console.error('[messages/[id]] Falha ao excluir:', deleteError.message)
+      return NextResponse.json({ error: 'Falha ao excluir mensagem.' }, { status: 500 })
     }
 
     // Guarda o conteúdo apagado no log de auditoria — a mensagem some da conversa, mas
@@ -114,9 +115,7 @@ export async function DELETE(request: NextRequest, context: { params: Promise<{ 
 
     return NextResponse.json({ success: true })
   } catch (err) {
-    return NextResponse.json(
-      { error: err instanceof Error ? `Erro inesperado: ${err.message}` : 'Erro inesperado ao excluir mensagem.' },
-      { status: 500 }
-    )
+    console.error('[messages/[id]] Erro inesperado:', err)
+    return NextResponse.json({ error: 'Erro inesperado ao excluir mensagem.' }, { status: 500 })
   }
 }

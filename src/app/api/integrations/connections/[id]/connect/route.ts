@@ -128,10 +128,8 @@ export async function POST(_request: NextRequest, context: { params: Promise<{ i
       paircode: body?.instance?.paircode || null,
     })
   } catch (err) {
-    return NextResponse.json(
-      { error: err instanceof Error ? `Erro inesperado: ${err.message}` : 'Erro inesperado ao iniciar conexão.' },
-      { status: 500 }
-    )
+    console.error('[connections/[id]/connect] Erro inesperado ao iniciar:', err)
+    return NextResponse.json({ error: 'Erro inesperado ao iniciar conexão.' }, { status: 500 })
   }
 }
 
@@ -180,9 +178,7 @@ export async function GET(request: NextRequest, context: { params: Promise<{ id:
       paircode: body?.instance?.paircode || null,
     })
   } catch (err) {
-    return NextResponse.json(
-      { error: err instanceof Error ? `Erro inesperado: ${err.message}` : 'Erro inesperado ao consultar status.' },
-      { status: 500 }
-    )
+    console.error('[connections/[id]/connect] Erro inesperado ao consultar status:', err)
+    return NextResponse.json({ error: 'Erro inesperado ao consultar status.' }, { status: 500 })
   }
 }

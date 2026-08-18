@@ -884,10 +884,11 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
         // carrega um pouco de overhead além do tamanho puro do arquivo) — troca por uma
         // mensagem amigável igual à checagem local em vez de mostrar o texto cru.
         const isSizeError = /size|limit|large|chunk/i.test(uploadError.message)
+        console.error('[Inbox] Falha ao enviar anexo:', uploadError.message)
         setErrorMessage(
           isSizeError
             ? 'Arquivo grande demais para o limite de anexo (24MB) — comprima o vídeo/foto e tente de novo.'
-            : `Falha ao enviar arquivo: ${uploadError.message}`
+            : 'Falha ao enviar arquivo. Tente novamente em alguns instantes.'
         )
         return
       }

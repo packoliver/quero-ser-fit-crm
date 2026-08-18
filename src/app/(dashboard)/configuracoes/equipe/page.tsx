@@ -285,10 +285,11 @@ export default function EquipeConfigPage() {
       })
 
       if (rpcError) {
+        console.error('[Equipe] Falha ao alterar perfil:', rpcError.message)
         if (rpcError.message.includes('ÚLTIMO ADMINISTRADOR')) {
           setError('Operação negada: Não é permitido desativar ou rebaixar o último administrador ativo da organização.')
         } else {
-          setError(rpcError.message || 'Falha ao alterar perfil do usuário.')
+          setError('Falha ao alterar perfil do usuário.')
         }
         return
       }
