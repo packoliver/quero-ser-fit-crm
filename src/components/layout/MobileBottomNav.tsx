@@ -32,7 +32,7 @@ export function MobileBottomNav({ userRole = 'admin' }: MobileBottomNavProps) {
               key={item.href}
               href={item.href}
               aria-current={isActive ? 'page' : undefined}
-              className={`flex flex-col items-center py-1 px-3 rounded-lg text-[11px] font-medium transition-all ${
+              className={`flex flex-col items-center py-1 px-3 rounded-lg text-[11px] font-medium transition-all active:scale-90 ${
                 isActive
                   ? 'text-emerald-400 font-semibold'
                   : 'text-slate-400 hover:text-slate-200'

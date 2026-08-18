@@ -1,5 +1,14 @@
 @import "tailwindcss";
 
+/* Liga as variáveis de fonte carregadas via next/font (ver layout.tsx) às utilities
+   font-sans/font-mono do Tailwind — qualquer lugar do app que já usa essas classes
+   (inclusive o body abaixo) passa a usar Geist automaticamente, sem editar página por
+   página. Mantém a stack do sistema como fallback caso a fonte falhe ao carregar. */
+@theme inline {
+  --font-sans: var(--font-geist-sans), system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
 :root {
   --background: #0b1320;
   --foreground: #f8fafc;
@@ -12,8 +21,20 @@
 
 body {
   background-color: var(--background);
+  /* Profundidade ambiente sutil (mesmo tom esmeralda/teal já usado no resto do app, não
+     introduz cor nova) + um grão bem discreto pra tirar a chapadura de fundo sólido liso.
+     Puramente decorativo — background-image no body, não afeta layout nem interação. */
+  background-image:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.35'/%3E%3C/svg%3E"),
+    radial-gradient(60% 40% at 15% -10%, rgba(16, 185, 129, 0.08), transparent 60%),
+    radial-gradient(50% 35% at 100% 110%, rgba(45, 212, 191, 0.05), transparent 60%);
+  background-repeat: repeat, no-repeat, no-repeat;
+  background-size: 140px 140px, auto, auto;
+  background-attachment: fixed, fixed, fixed;
   color: var(--foreground);
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+  /* A fonte já vem da classe utilitária font-sans aplicada no <body> (ver layout.tsx) —
+     ela resolve pra Geist via @theme inline acima. Nada a declarar aqui. */
+  font-variant-numeric: tabular-nums;
   overflow-x: hidden;
 }
 
@@ -34,6 +55,12 @@ body {
 
 ::-webkit-scrollbar-thumb:hover {
   background: #10b981;
+}
+
+/* Sombra levemente tingida na mesma cor de destaque do app (esmeralda), em vez do preto
+   puro genérico do shadow-xl padrão do Tailwind — usada nos cards (ver Card.tsx). */
+.shadow-surface {
+  box-shadow: 0 12px 28px -14px rgba(2, 6, 23, 0.55), 0 4px 12px -8px rgba(16, 185, 129, 0.10);
 }
 
 /* Smooth glassmorphism */
