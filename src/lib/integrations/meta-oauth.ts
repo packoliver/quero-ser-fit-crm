@@ -159,7 +159,12 @@ export async function exchangeForLongLivedInstagramToken(shortLivedToken: string
  */
 export async function subscribeInstagramWebhooks(accessToken: string): Promise<{ ok: boolean; detail?: string }> {
   try {
-    const params = new URLSearchParams({ subscribed_fields: 'messages' })
+    // message_echoes: cópias de mensagens que a PRÓPRIA conta mandou — inclui tanto o que
+    // sai pelo CRM quanto respostas mandadas direto pelo app oficial do Instagram. Sem
+    // esse campo, a Meta nunca manda essas cópias pro nosso webhook e uma resposta dada
+    // fora do CRM não tem como ser capturada de jeito nenhum (ver instagram-meta.ts e
+    // persist-event.ts, que tratam esses eventos separadamente de mensagem recebida).
+    const params = new URLSearchParams({ subscribed_fields: 'messages,message_echoes' })
     const response = await fetch(`https://graph.instagram.com/v25.0/me/subscribed_apps?${params.toString()}`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${accessToken}` },

@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { decryptToken } from '@/lib/security/encryption'
 import { verifyCloudApiConnection, verifyUazapiConnection } from '@/lib/integrations/verify-connection'
+import { subscribeInstagramWebhooks } from '@/lib/integrations/meta-oauth'
 
 interface ConnectionRow {
   id: string
@@ -139,6 +140,17 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
       )
       ok = result.ok
       detail = result.detail
+
+      // Reforça a inscrição de webhook da conta (mesmo espírito do registerUazapiWebhook
+      // pro uazapi) — conexões feitas antes do campo message_echoes existir no código só
+      // ganham isso reverificando; sem isso, uma resposta mandada direto pelo app oficial
+      // do Instagram continuaria invisível pro CRM mesmo com o parser já corrigido.
+      if (ok && connection.provider === 'instagram_meta') {
+        const subscription = await subscribeInstagramWebhooks(token)
+        if (!subscription.ok) {
+          webhookWarning = `Conexão confirmada, mas não foi possível reforçar a inscrição de webhook (${subscription.detail || 'motivo desconhecido'}) — respostas mandadas direto pelo app oficial do Instagram podem não aparecer no CRM.`
+        }
+      }
     }
 
     const { data: updated, error: updateError } = await adminDb
