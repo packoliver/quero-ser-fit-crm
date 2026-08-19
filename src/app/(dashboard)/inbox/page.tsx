@@ -1652,7 +1652,12 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                 botões com texto ("Assumir", "Transferir", "Encerrar" + um ícone de Kanban)
                 brigando por espaço com o nome numa tela de 375px. Só "Assumir" continua
                 visível: é a ação de abrir a conversa, e some assim que ela é feita. */}
-            <div className="px-2 py-2 lg:px-3.5 lg:py-3 border-b border-slate-800 bg-[#0f172a]/90 flex items-center gap-1.5 shrink-0">
+            {/* pt com --safe-top: com a conversa aberta no celular o cabeçalho global sai de
+                cena (modo imersivo) e ESTE passa a ser o primeiro elemento da tela. Como o
+                app declara statusBarStyle 'black-translucent' + viewport-fit=cover, sem esse
+                recuo ele sobe pra debaixo da barra de status do iPhone — e o botão de voltar
+                fica embaixo do relógio do sistema, onde o toque não chega nele. */}
+            <div className="px-2 pb-2 pt-[calc(0.5rem+var(--safe-top))] lg:px-3.5 lg:pb-3 lg:pt-3 border-b border-slate-800 bg-[#0f172a]/90 flex items-center gap-1.5 shrink-0">
               <button
                 type="button"
                 onClick={() => setMobilePane('list')}
@@ -1791,7 +1796,12 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                         isFailed
                           ? 'bg-rose-950/50 text-rose-100 border border-rose-800/70 rounded-tr-none'
                           : isMe
-                          ? 'bg-gradient-to-r from-emerald-600 to-teal-700 text-white rounded-tr-none shadow-md'
+                          // Verde escuro chapado, não degradê. Dois motivos: degradê de duas
+                          // cores é a marca registrada de maquete gerada por IA (foi o que
+                          // você pediu pra tirar do resto do app), e o texto tem 12px — sobre
+                          // emerald-600 o branco fica em ~3,5:1 de contraste, abaixo do
+                          // mínimo legível. Sobre emerald-800 passa de 7:1.
+                          ? 'bg-emerald-800 text-white rounded-tr-none shadow-sm'
                           : 'bg-[#131f37] text-slate-200 border border-slate-700/80 rounded-tl-none'
                       }`}
                     >
@@ -2020,7 +2030,9 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
           <div className={`w-full lg:w-80 border-l border-slate-800 bg-[#0f172a] flex-col shrink-0 ${
             showMobileDetails ? 'flex' : 'hidden lg:flex'
           }`}>
-            <div className="flex items-center border-b border-slate-800 text-xs">
+            {/* Mesmo recuo do cabeçalho da conversa: este painel também ocupa a tela toda no
+                celular, então também encosta na barra de status. */}
+            <div className="flex items-center border-b border-slate-800 text-xs pt-[var(--safe-top)] lg:pt-0">
               <button
                 type="button"
                 onClick={() => setMobilePane('chat')}
