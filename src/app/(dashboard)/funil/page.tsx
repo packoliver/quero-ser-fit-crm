@@ -15,6 +15,9 @@ import {
   Phone,
   DollarSign,
   GripVertical,
+  ChevronLeft,
+  ChevronRight,
+  ArrowRightLeft,
 } from 'lucide-react'
 import { DemoDeal } from '@/lib/demo'
 import { Button } from '@/components/ui/Button'
@@ -27,7 +30,9 @@ import { DealStage } from '@/types/database'
 import { useDemoStorage } from '@/lib/demo/useDemoStorage'
 import { cacheEntity, readCachedEntity, queueEntityMutation } from '@/lib/offline/repository'
 import { getOfflineScope } from '@/lib/offline/scope'
-import { PipelineStage, PipelineStageRow, DEFAULT_PIPELINE_STAGES, mapPipelineStageRow } from '@/lib/pipeline/stages'
+import { PipelineStage, PipelineStageRow, DEFAULT_PIPELINE_STAGES, mapPipelineStageRow, STAGE_DOT_CLASS } from '@/lib/pipeline/stages'
+import { BottomSheet, BottomSheetItem } from '@/components/ui/BottomSheet'
+import { Toast } from '@/components/ui/Toast'
 
 export interface RealDeal {
   id: string
@@ -75,6 +80,33 @@ function dealNotes(d: AnyDeal): string {
   return (isRealDeal(d) ? d.notes : d.notes) || ''
 }
 
+/**
+ * O miolo do card — o que o pedido É. Compartilhado entre o Kanban do desktop e a lista do
+ * celular; o que muda entre os dois é só COMO se mexe nele (arrastar e um seletor lá,
+ * botões e um painel aqui), e isso fica com cada layout.
+ */
+function DealCardBody({ deal }: { deal: AnyDeal }) {
+  return (
+    <div className="min-w-0 flex-1">
+      <h3 className="text-xs font-semibold text-slate-100 leading-snug">{dealTitle(deal)}</h3>
+      <p className="text-[11px] text-slate-400 mt-0.5 truncate">{dealContactName(deal)}</p>
+      {dealContactPhone(deal) && (
+        <span className="flex items-center gap-1 text-[10px] text-slate-500 mt-1">
+          <Phone className="w-3 h-3" />
+          {dealContactPhone(deal)}
+        </span>
+      )}
+      {dealValue(deal) != null && (
+        <span className="flex items-center gap-1 text-[11px] text-emerald-400 font-semibold mt-1.5 font-mono tabular-nums">
+          <DollarSign className="w-3 h-3" />
+          {formatCurrency(dealValue(deal))}
+        </span>
+      )}
+      {dealNotes(deal) && <p className="text-[10px] text-slate-500 mt-1.5 line-clamp-2">{dealNotes(deal)}</p>}
+    </div>
+  )
+}
+
 export default function FunilPage() {
   const {
     deals: storedDemoDeals,
@@ -109,6 +141,15 @@ export default function FunilPage() {
 
   const [newDeal, setNewDeal] = useState({ title: '', contactId: '', value: '', notes: '' })
   const [editDealData, setEditDealData] = useState({ id: '', title: '', value: '', notes: '' })
+
+  // Etapa em foco no celular. O Kanban de colunas é ótimo no monitor e péssimo no polegar:
+  // colunas de 300px numa tela de 375px viram rolagem horizontal, e arrastar um card entre
+  // elas exige segurar e deslizar por cima de uma área que está rolando ao mesmo tempo.
+  // Aqui se vê uma etapa por vez, e mover é uma escolha numa lista.
+  // null = ainda não escolheu nada; cai na primeira etapa (ver currentMobileStage).
+  const [mobileStageKey, setMobileStageKey] = useState<string | null>(null)
+  // Pedido cujo painel de "mover para..." está aberto no celular.
+  const [movingDeal, setMovingDeal] = useState<AnyDeal | null>(null)
 
   const showToast = (msg: string) => {
     setToastMessage(msg)
@@ -461,14 +502,17 @@ export default function FunilPage() {
 
   const [dragOverStage, setDragOverStage] = useState<DealStage | null>(null)
 
+  // Derivado em vez de sincronizado por efeito: se as etapas ainda não carregaram, ou o
+  // admin apagou justo a que estava em foco, isso já cai na primeira sem nenhum estado
+  // intermediário inválido no meio do caminho.
+  const currentMobileStage = activeStages.find((s) => s.key === mobileStageKey) || activeStages[0]
+  const currentMobileStageIndex = activeStages.findIndex((s) => s.key === currentMobileStage?.key)
+  const mobileStageDeals = activeDealList.filter((d) => dealStage(d) === currentMobileStage?.key)
+  const mobileStageTotal = mobileStageDeals.reduce((sum, d) => sum + (dealValue(d) || 0), 0)
+
   return (
     <div className="p-4 lg:p-8 space-y-6 max-w-[1600px] mx-auto relative">
-      {toastMessage && (
-        <div className="fixed top-6 right-6 z-50 bg-emerald-600 text-white px-4 py-3 rounded-2xl shadow-2xl flex items-center gap-2.5 text-xs font-semibold animate-bounce border border-emerald-400/30">
-          <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-200" />
-          <span>{toastMessage}</span>
-        </div>
-      )}
+      <Toast message={toastMessage} />
 
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
@@ -547,7 +591,103 @@ export default function FunilPage() {
           }
         />
       ) : (
-        <div className="flex gap-4 overflow-x-auto pb-4 -mx-4 px-4 lg:mx-0 lg:px-0">
+        <>
+        {/* ---------- Celular: uma etapa por vez ---------- */}
+        <div className="lg:hidden space-y-3">
+          {/* Faixa de etapas rolável: mostra em que ponto do funil se está e permite pular
+              direto pra qualquer outra, sem precisar passar por todas. */}
+          <div className="flex gap-1.5 overflow-x-auto -mx-4 px-4 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            {activeStages.map((stage) => {
+              const count = activeDealList.filter((d) => dealStage(d) === stage.key).length
+              const active = stage.key === currentMobileStage?.key
+              return (
+                <button
+                  key={stage.key}
+                  onClick={() => setMobileStageKey(stage.key)}
+                  aria-pressed={active}
+                  className={`shrink-0 px-3 py-1.5 rounded-full text-xs font-medium border transition whitespace-nowrap flex items-center gap-1.5 ${
+                    active
+                      ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40 font-semibold'
+                      : 'bg-slate-900 text-slate-400 border-slate-800'
+                  }`}
+                >
+                  <span className={`w-1.5 h-1.5 rounded-full ${STAGE_DOT_CLASS[stage.color]}`} aria-hidden="true" />
+                  {stage.label}
+                  <span className="tabular-nums opacity-70">{count}</span>
+                </button>
+              )
+            })}
+          </div>
+
+          {/* Etapa em foco + setas pra percorrer o funil na ordem, que é como se pensa nele
+              ("o que veio depois de Negociando?"). */}
+          <div className="flex items-center gap-2 bg-[#0f172a] border border-slate-800 rounded-2xl px-2 py-2">
+            <button
+              type="button"
+              onClick={() => setMobileStageKey(activeStages[currentMobileStageIndex - 1]?.key ?? null)}
+              disabled={currentMobileStageIndex <= 0}
+              aria-label="Etapa anterior"
+              className="p-2 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-slate-800 disabled:opacity-30 disabled:hover:bg-transparent transition shrink-0"
+            >
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+            <div className="flex-1 min-w-0 text-center">
+              <p className="text-sm font-semibold text-slate-100 truncate">{currentMobileStage?.label}</p>
+              <p className="text-[11px] text-slate-500 tabular-nums">
+                {mobileStageDeals.length} pedido{mobileStageDeals.length === 1 ? '' : 's'}
+                {mobileStageTotal > 0 && ` · ${formatCurrency(mobileStageTotal)}`}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setMobileStageKey(activeStages[currentMobileStageIndex + 1]?.key ?? null)}
+              disabled={currentMobileStageIndex >= activeStages.length - 1}
+              aria-label="Próxima etapa"
+              className="p-2 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-slate-800 disabled:opacity-30 disabled:hover:bg-transparent transition shrink-0"
+            >
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
+
+          {mobileStageDeals.length === 0 ? (
+            <p className="text-xs text-slate-500 text-center py-8">
+              Nenhum pedido em &quot;{currentMobileStage?.label}&quot;.
+            </p>
+          ) : (
+            <div className="space-y-2.5">
+              {mobileStageDeals.map((deal) => (
+                <div key={deal.id} className="p-3 bg-[#0f172a] border border-slate-800 rounded-2xl">
+                  <DealCardBody deal={deal} />
+                  <div className="flex items-center gap-1.5 mt-3 pt-2.5 border-t border-slate-800/80">
+                    <Button variant="secondary" size="sm" className="flex-1" onClick={() => setMovingDeal(deal)}>
+                      <ArrowRightLeft className="w-3.5 h-3.5" />
+                      <span>Mover</span>
+                    </Button>
+                    <button
+                      type="button"
+                      onClick={() => openEditModal(deal)}
+                      aria-label={`Editar pedido ${dealTitle(deal)}`}
+                      className="p-2.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-emerald-400 transition shrink-0"
+                    >
+                      <Pencil className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { setDeletingDeal(deal); setDeleteModalOpen(true) }}
+                      aria-label={`Excluir pedido ${dealTitle(deal)}`}
+                      className="p-2.5 rounded-lg bg-slate-900 hover:bg-rose-950/60 border border-slate-800 hover:border-rose-800 text-slate-500 hover:text-rose-400 transition shrink-0"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* ---------- Desktop: Kanban completo, inalterado ---------- */}
+        <div className="hidden lg:flex gap-4 overflow-x-auto pb-4">
           {activeStages.map((stage) => {
             const stageDeals = activeDealList.filter((d) => dealStage(d) === stage.key)
             const stageValueTotal = stageDeals.reduce((sum, d) => sum + (dealValue(d) || 0), 0)
@@ -567,7 +707,7 @@ export default function FunilPage() {
                   if (deal) void moveDeal(deal, stage.key)
                   setDraggedId(null)
                 }}
-                className={`shrink-0 w-[300px] bg-[#0f172a] border rounded-2xl flex flex-col max-h-[calc(100vh-260px)] transition ${
+                className={`shrink-0 w-[300px] bg-[#0f172a] border rounded-2xl flex flex-col max-h-[calc(100dvh-260px)] transition ${
                   dragOverStage === stage.key ? 'border-emerald-500/70 bg-emerald-950/10' : 'border-slate-800'
                 }`}
               >
@@ -597,25 +737,7 @@ export default function FunilPage() {
                       >
                         <div className="flex items-start gap-1.5">
                           <GripVertical className="w-3.5 h-3.5 text-slate-600 mt-0.5 shrink-0" />
-                          <div className="min-w-0 flex-1">
-                            <h3 className="text-xs font-semibold text-slate-100 leading-snug">{dealTitle(deal)}</h3>
-                            <p className="text-[11px] text-slate-400 mt-0.5 truncate">{dealContactName(deal)}</p>
-                            {dealContactPhone(deal) && (
-                              <span className="flex items-center gap-1 text-[10px] text-slate-500 mt-1">
-                                <Phone className="w-3 h-3" />
-                                {dealContactPhone(deal)}
-                              </span>
-                            )}
-                            {dealValue(deal) != null && (
-                              <span className="flex items-center gap-1 text-[11px] text-emerald-400 font-semibold mt-1.5">
-                                <DollarSign className="w-3 h-3" />
-                                {formatCurrency(dealValue(deal))}
-                              </span>
-                            )}
-                            {dealNotes(deal) && (
-                              <p className="text-[10px] text-slate-500 mt-1.5 line-clamp-2">{dealNotes(deal)}</p>
-                            )}
-                          </div>
+                          <DealCardBody deal={deal} />
                         </div>
 
                         <div className="flex items-center gap-1.5 mt-2.5 pt-2.5 border-t border-slate-800/80">
@@ -656,7 +778,36 @@ export default function FunilPage() {
             )
           })}
         </div>
+        </>
       )}
+
+      {/* Mover pedido no celular — mesma ação do seletor "Mover:" do Kanban, na interação
+          que cabe no polegar. Ver movingDeal. */}
+      <BottomSheet
+        isOpen={!!movingDeal}
+        onClose={() => setMovingDeal(null)}
+        title="Mover para a etapa"
+        description={movingDeal ? dealTitle(movingDeal) : undefined}
+      >
+        {activeStages.map((stage) => (
+          <BottomSheetItem
+            key={stage.key}
+            icon={<span className={`w-2.5 h-2.5 rounded-full ${STAGE_DOT_CLASS[stage.color]}`} aria-hidden="true" />}
+            label={stage.label}
+            selected={movingDeal ? dealStage(movingDeal) === stage.key : false}
+            onClick={() => {
+              const deal = movingDeal
+              setMovingDeal(null)
+              if (deal) {
+                void moveDeal(deal, stage.key)
+                // Acompanha o card: se ele saiu desta etapa, a tela vai junto pra onde ele
+                // foi, em vez de deixar a pessoa olhando pro lugar de onde ele sumiu.
+                setMobileStageKey(stage.key)
+              }
+            }}
+          />
+        ))}
+      </BottomSheet>
 
       {/* Create Deal Modal */}
       <Modal isOpen={createModalOpen} onClose={() => setCreateModalOpen(false)} title="Novo Pedido" icon={<Kanban className="w-5 h-5" />}>
@@ -674,7 +825,7 @@ export default function FunilPage() {
             <select
               value={newDeal.contactId}
               onChange={(e) => setNewDeal({ ...newDeal, contactId: e.target.value })}
-              className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-slate-100 focus:outline-none focus:border-emerald-500 text-xs"
+              className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-slate-100 focus:outline-none focus:border-emerald-500 text-base lg:text-xs"
             >
               <option value="">Selecione um cliente...</option>
               {contactOptions.map((c) => (
@@ -706,7 +857,7 @@ export default function FunilPage() {
               placeholder="Detalhes sobre o pedido..."
               value={newDeal.notes}
               onChange={(e) => setNewDeal({ ...newDeal, notes: e.target.value })}
-              className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-slate-100 focus:outline-none focus:border-emerald-500 text-xs"
+              className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-slate-100 focus:outline-none focus:border-emerald-500 text-base lg:text-xs"
             />
           </div>
 
@@ -743,7 +894,7 @@ export default function FunilPage() {
               rows={3}
               value={editDealData.notes}
               onChange={(e) => setEditDealData({ ...editDealData, notes: e.target.value })}
-              className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-slate-100 focus:outline-none focus:border-emerald-500 text-xs"
+              className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-slate-100 focus:outline-none focus:border-emerald-500 text-base lg:text-xs"
             />
           </div>
           <div className="flex justify-end gap-2 pt-2">
