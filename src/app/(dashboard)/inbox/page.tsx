@@ -232,7 +232,11 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
   // busca as dela. O ref existe porque fetchRealData reconstrói a lista e precisa reaproveitar
   // o que já foi carregado sem virar dependência do useCallback (o que recriaria a função a
   // cada mensagem nova e reiniciaria os efeitos que dependem dela).
-  const [messagesByConv, setMessagesByConv] = useState<Record<string, UiMessage[]>>({})
+  // Ref puro, e não estado espelhado por efeito: fetchRealData LÊ isto ao reconstruir a
+  // lista, e as duas buscas são disparadas pelo mesmo evento do Realtime. Com o espelho via
+  // efeito havia uma janela real — a lista terminando entre o setState e o efeito lia a
+  // versão velha e apagava as mensagens da conversa aberta. Quem manda a tela redesenhar é
+  // o setRealConversations em fetchConversationMessages, então nada se perde ao tirar o estado.
   const messagesByConvRef = useRef<Record<string, UiMessage[]>>({})
   // Espelho da lista pra fetchConversationMessages ler o nome do contato sem virar
   // dependência do useCallback.
@@ -240,9 +244,6 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
   // Sobe a cada evento do Realtime. É o que faz a conversa ABERTA recarregar as mensagens
   // dela quando chega algo novo — antes isso vinha de graça, porque a lista trazia tudo.
   const [realtimeTick, setRealtimeTick] = useState(0)
-  useEffect(() => {
-    messagesByConvRef.current = messagesByConv
-  }, [messagesByConv])
   useEffect(() => {
     realConversationsRef.current = realConversations
   }, [realConversations])
@@ -566,7 +567,13 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
           isGroup: !!conv.contact_is_group,
           channel: conv.channel_type,
           // Vem pronto da view, sem precisar das mensagens em memória.
-          lastMessage: conv.last_message_content || mediaLabel(conv.last_message_media_type) || '(sem mensagens)',
+          // Testa a EXISTÊNCIA da mensagem antes do conteúdo. mediaLabel sempre devolve um
+          // texto (cai em "📎 Arquivo" quando não reconhece o tipo), então encadear com ||
+          // deixava "(sem mensagens)" inalcançável — e uma conversa ainda sem mensagem
+          // nenhuma apareceria na lista como se tivesse um anexo.
+          lastMessage: conv.last_message_created_at
+            ? conv.last_message_content || mediaLabel(conv.last_message_media_type)
+            : '(sem mensagens)',
           lastMessageTime: formatTime(conv.last_message_created_at || conv.last_message_at),
           lastMessageAtIso: conv.last_message_created_at || conv.last_message_at,
           lastMessageSenderType: conv.last_message_sender_type || undefined,
@@ -576,7 +583,7 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
           currentAssigneeName: conv.assignee_name,
           tags: [],
           notes,
-          // As mensagens da conversa ABERTA moram em messagesByConv, preenchido por
+          // As mensagens da conversa ABERTA moram em messagesByConvRef, preenchido por
           // fetchConversationMessages. As demais ficam vazias de propósito — é isso que
           // tira o histórico inteiro da rede a cada atualização.
           messages: messagesByConvRef.current[conv.id] || [],
@@ -680,7 +687,8 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
             : null,
       }))
 
-      setMessagesByConv((prev) => ({ ...prev, [conversationId]: msgs }))
+      // Escrita síncrona, antes do setState: fecha a janela descrita na declaração do ref.
+      messagesByConvRef.current = { ...messagesByConvRef.current, [conversationId]: msgs }
       setRealConversations((prev) => prev.map((c) => (c.id === conversationId ? { ...c, messages: msgs } : c)))
     } catch {
       // Silencioso: a lista continua na tela. Quem chama não tem o que fazer com o erro, e
