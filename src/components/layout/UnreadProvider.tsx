@@ -2,20 +2,20 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import {
-  buildUnreadCounts,
-  sumUnread,
-  lastMessageTimestamp,
-  type UnreadMessageInput,
-} from '@/lib/inbox/unread'
+import { sumUnread } from '@/lib/inbox/unread'
 
 interface UnreadContextValue {
   /** conversa → quantidade de não lidas. Conversa sem nenhuma fica fora do mapa. */
   counts: Record<string, number>
   /** Soma de tudo — é o número na bolinha de "Conversas" na barra inferior. */
   total: number
-  /** Zera o aviso desta conversa (chamado ao abri-la). Seguro chamar repetidamente. */
-  markRead: (conversationId: string) => void
+  /**
+   * Zera o aviso desta conversa (chamado ao abri-la). Seguro chamar repetidamente.
+   * @param seenUpTo data da mensagem mais recente já vista — quem chama sabe qual é. Antes
+   * isso era deduzido de uma cópia local de TODAS as mensagens, que é justamente o que
+   * deixou de ser carregado.
+   */
+  markRead: (conversationId: string, seenUpTo: string | null | undefined) => void
 }
 
 const UnreadContext = createContext<UnreadContextValue>({
@@ -38,9 +38,6 @@ const UnreadContext = createContext<UnreadContextValue>({
 export function UnreadProvider({ children }: { children: React.ReactNode }) {
   const [counts, setCounts] = useState<Record<string, number>>({})
   const [userId, setUserId] = useState<string | null>(null)
-  // Guardadas pra markRead conseguir descobrir "até que mensagem eu vi" sem ir ao banco
-  // de novo. Em ref porque só é lida dentro de callbacks — não precisa causar renderização.
-  const messagesRef = useRef<UnreadMessageInput[]>([])
   // Última data já gravada por conversa, pra não reescrever a mesma coisa — ver markRead.
   const lastWrittenRef = useRef<Record<string, string>>({})
 
@@ -56,25 +53,23 @@ export function UnreadProvider({ children }: { children: React.ReactNode }) {
       }
       setUserId(user.id)
 
-      const typed = supabase as unknown as {
-        from: (t: string) => {
-          select: (c: string) => Promise<{ data: unknown[] | null; error: unknown }>
-        }
+      // Uma linha por conversa que tem não lida, contada no banco (ver get_unread_counts
+      // na migração 20260819120000). Antes isto baixava TODAS as mensagens da organização
+      // só pra comparar datas no navegador — ~1,5 MB a cada atualização, contra ~2 KB agora.
+      const { data, error } = await (supabase as unknown as {
+        rpc: (fn: string) => Promise<{ data: Array<{ conversation_id: string; unread_count: number }> | null; error: unknown }>
+      }).rpc('get_unread_counts')
+
+      if (error) {
+        setCounts({})
+        return
       }
 
-      // Só as três colunas necessárias pra contar. O Inbox já busca as mensagens inteiras
-      // (com conteúdo e mídia) quando está aberto; esta consulta é bem mais leve que aquela
-      // e é a única que roda nas outras telas.
-      const [messagesRes, readsRes] = await Promise.all([
-        typed.from('messages').select('conversation_id, sender_type, created_at'),
-        typed.from('conversation_reads').select('conversation_id, last_read_at'),
-      ])
-
-      const messages = (messagesRes.data || []) as UnreadMessageInput[]
-      const reads = (readsRes.data || []) as Array<{ conversation_id: string; last_read_at: string }>
-
-      messagesRef.current = messages
-      setCounts(buildUnreadCounts(messages, reads))
+      const mapa: Record<string, number> = {}
+      for (const linha of data || []) {
+        if (linha.unread_count > 0) mapa[linha.conversation_id] = Number(linha.unread_count)
+      }
+      setCounts(mapa)
     } catch {
       // Sem sessão, offline, ou Supabase indisponível — ver comentário no topo.
       setCounts({})
@@ -129,7 +124,7 @@ export function UnreadProvider({ children }: { children: React.ReactNode }) {
   }, [refresh])
 
   const markRead = useCallback(
-    (conversationId: string) => {
+    (conversationId: string, seenUpTo: string | null | undefined) => {
       // Some da tela na hora. Abrir a conversa e ver o aviso demorar a sumir passa a
       // impressão de que o toque não pegou; se a gravação falhar, o refresh seguinte (ou o
       // realtime) traz a verdade de volta.
@@ -140,9 +135,7 @@ export function UnreadProvider({ children }: { children: React.ReactNode }) {
         return next
       })
 
-      if (!userId) return
-      const seenUpTo = lastMessageTimestamp(messagesRef.current, conversationId)
-      if (!seenUpTo) return
+      if (!userId || !seenUpTo) return
 
       // Nada mudou desde a última gravação desta conversa: não escreve de novo. Sem isso,
       // toda releitura de dados do Inbox (que refaz os objetos de conversa e redispara o

@@ -228,6 +228,24 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
 
   // Real-mode data
   const [realConversations, setRealConversations] = useState<UiConversation[]>([])
+  // Mensagens já carregadas, por conversa. Só a conversa aberta entra aqui — abrir outra
+  // busca as dela. O ref existe porque fetchRealData reconstrói a lista e precisa reaproveitar
+  // o que já foi carregado sem virar dependência do useCallback (o que recriaria a função a
+  // cada mensagem nova e reiniciaria os efeitos que dependem dela).
+  const [messagesByConv, setMessagesByConv] = useState<Record<string, UiMessage[]>>({})
+  const messagesByConvRef = useRef<Record<string, UiMessage[]>>({})
+  // Espelho da lista pra fetchConversationMessages ler o nome do contato sem virar
+  // dependência do useCallback.
+  const realConversationsRef = useRef<UiConversation[]>([])
+  // Sobe a cada evento do Realtime. É o que faz a conversa ABERTA recarregar as mensagens
+  // dela quando chega algo novo — antes isso vinha de graça, porque a lista trazia tudo.
+  const [realtimeTick, setRealtimeTick] = useState(0)
+  useEffect(() => {
+    messagesByConvRef.current = messagesByConv
+  }, [messagesByConv])
+  useEffect(() => {
+    realConversationsRef.current = realConversations
+  }, [realConversations])
   const [loadingReal, setLoadingReal] = useState(false)
   const [realTeamMembers, setRealTeamMembers] = useState<RealTeamMember[]>([])
   const [currentUserRealId, setCurrentUserRealId] = useState<string | null>(null)
@@ -420,7 +438,7 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
   useEffect(() => {
     if (viewMode !== 'real' || !selectedConversation || selectedMessageCount === 0) return
     if (typeof document !== 'undefined' && document.hidden) return
-    markRead(selectedConversation.id)
+    markRead(selectedConversation.id, selectedConversation.lastMessageAtIso)
   }, [viewMode, selectedConversation, selectedMessageCount, markRead])
 
 
@@ -455,18 +473,20 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
       } = await typed.auth.getUser()
       setCurrentUserRealId(user?.id || null)
 
-      const [convRes, msgRes, noteRes, membersRes, profilesRes, dealsRes, stagesRes, myMembershipRes] = await Promise.all([
+      const [convRes, noteRes, membersRes, dealsRes, stagesRes, myMembershipRes] = await Promise.all([
+        // conversation_list_view já traz a ÚLTIMA mensagem de cada conversa embutida (ver
+        // migração 20260819120000). Antes esta parte vinha junto com um segundo pedido que
+        // baixava TODAS as mensagens da organização — ~1,5 MB por atualização, contra ~35 KB
+        // agora — e que, passando de 1.000 linhas, começaria a perder as mensagens mais
+        // novas em silêncio, porque vinha ordenado da mais antiga pra mais nova.
+        // As mensagens de uma conversa só são buscadas quando ela é aberta: ver
+        // fetchConversationMessages.
         typed
-          .from('conversations')
-          .select('id, organization_id, status, channel_type, current_assignee_id, last_message_at, contact_id, csat_score, contacts(name, phone, is_group, avatar_url), profiles(full_name)')
+          .from('conversation_list_view')
+          .select('id, organization_id, status, channel_type, current_assignee_id, last_message_at, contact_id, csat_score, contact_name, contact_phone, contact_is_group, contact_avatar_url, assignee_name, last_message_content, last_message_media_type, last_message_sender_type, last_message_created_at')
           .order!('last_message_at', { ascending: false }),
-        typed.from('messages').select('id, conversation_id, sender_type, sender_id, content, media_url, media_type, status, metadata, created_at').order!('created_at', { ascending: true }),
         typed.from('internal_notes').select('id, conversation_id, content, created_at, author_id, profiles(full_name)').order!('created_at', { ascending: false }),
         typed.from('organization_members').select('user_id, profiles(full_name)').order!('created_at', { ascending: true }),
-        // Fotos de participantes de grupo (cacheadas pelo webhook em whatsapp_profiles) —
-        // ver comentário na migração 20260807070000_whatsapp_profiles.sql pro porquê disso
-        // não vive em `contacts`.
-        typed.from('whatsapp_profiles').select('external_id, name, avatar_url').order!('updated_at', { ascending: false }),
         // Pedidos (Funil) — pra mostrar/gerenciar o pedido de um contato direto na aba
         // "Pedido" do próprio Inbox, sem precisar abrir o Funil.
         typed.from('deals').select('id, title, contact_id, stage, value').order!('created_at', { ascending: false }),
@@ -488,23 +508,16 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
         last_message_at: string
         contact_id: string
         csat_score: number | null
-        contacts: { name: string | null; phone: string | null; is_group: boolean | null; avatar_url: string | null } | null
-        profiles: { full_name: string | null } | null
+        contact_name: string | null
+        contact_phone: string | null
+        contact_is_group: boolean | null
+        contact_avatar_url: string | null
+        assignee_name: string | null
+        last_message_content: string | null
+        last_message_media_type: MediaType | null
+        last_message_sender_type: 'contact' | 'user' | 'system' | null
+        last_message_created_at: string | null
       }>
-      const msgData = (msgRes.data || []) as Array<{
-        id: string
-        conversation_id: string
-        sender_type: 'contact' | 'user' | 'system'
-        sender_id: string | null
-        content: string
-        media_url: string | null
-        media_type: MediaType | null
-        status: 'sent' | 'delivered' | 'read' | 'failed' | null
-        metadata: { group_sender_name?: string | null; group_sender_id?: string | null } | null
-        created_at: string
-      }>
-      const profilesData = (profilesRes.data || []) as Array<{ external_id: string; name: string | null; avatar_url: string | null }>
-      const profileByExternalId = new Map(profilesData.map((p) => [p.external_id, p]))
       const noteData = (noteRes.data || []) as Array<{
         id: string
         conversation_id: string
@@ -530,34 +543,10 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
       setCurrentUserRole(myMembership?.role || null)
       setCurrentUserPermissions(myMembership?.permissions || null)
 
-      const built: UiConversation[] = convData.map((conv) => {
-        const msgs = msgData
-          .filter((m) => m.conversation_id === conv.id)
-          .map<UiMessage>((m) => ({
-            id: m.id,
-            senderType: m.sender_type,
-            senderName:
-              m.sender_type === 'contact'
-                // Numa conversa de grupo, quem "fala" varia mensagem a mensagem — o
-                // nome do membro específico (guardado em metadata na hora de receber)
-                // tem prioridade sobre o nome do contato (que aqui é o nome do grupo).
-                ? m.metadata?.group_sender_name || conv.contacts?.name || 'Cliente'
-                : m.sender_type === 'system'
-                ? 'Sistema'
-                : m.sender_id === user?.id
-                ? 'Você'
-                : membersData.find((mm) => mm.user_id === m.sender_id)?.profiles?.full_name || 'Atendente',
-            content: m.content,
-            time: formatTime(m.created_at),
-            status: m.status || undefined,
-            mediaUrl: m.media_url,
-            mediaType: m.media_type,
-            senderAvatarUrl:
-              m.sender_type === 'contact' && m.metadata?.group_sender_id
-                ? profileByExternalId.get(m.metadata.group_sender_id)?.avatar_url || null
-                : null,
-          }))
+      const mediaLabel = (t?: MediaType | null) =>
+        t === 'image' ? '📷 Imagem' : t === 'video' ? '🎥 Vídeo' : t === 'audio' ? '🎤 Áudio' : t === 'sticker' ? '🌟 Figurinha' : '📎 Arquivo'
 
+      const built: UiConversation[] = convData.map((conv) => {
         const notes = noteData
           .filter((n) => n.conversation_id === conv.id)
           .map((n) => ({
@@ -567,33 +556,30 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
             date: new Date(n.created_at).toLocaleDateString('pt-BR'),
           }))
 
-        const lastMsg = msgs[msgs.length - 1]
-        // `lastMsg.time` já vem formatado ("HH:mm") — pro aviso de SLA (calcula "há
-        // quanto tempo" em minutos) precisamos do created_at bruto de novo.
-        const lastRawMsg = msgData.filter((m) => m.conversation_id === conv.id).slice(-1)[0]
-        const mediaLabel = (t?: MediaType | null) =>
-          t === 'image' ? '📷 Imagem' : t === 'video' ? '🎥 Vídeo' : t === 'audio' ? '🎤 Áudio' : t === 'sticker' ? '🌟 Figurinha' : '📎 Arquivo'
-
         return {
           id: conv.id,
           organizationId: conv.organization_id,
           contactId: conv.contact_id,
-          contactName: conv.contacts?.name || 'Contato',
-          contactPhone: conv.contacts?.phone || '-',
-          contactAvatarUrl: conv.contacts?.avatar_url || null,
-          isGroup: !!conv.contacts?.is_group,
+          contactName: conv.contact_name || 'Contato',
+          contactPhone: conv.contact_phone || '-',
+          contactAvatarUrl: conv.contact_avatar_url,
+          isGroup: !!conv.contact_is_group,
           channel: conv.channel_type,
-          lastMessage: lastMsg ? lastMsg.content || mediaLabel(lastMsg.mediaType) : '(sem mensagens)',
-          lastMessageTime: lastMsg?.time || formatTime(conv.last_message_at),
-          lastMessageAtIso: lastRawMsg?.created_at || conv.last_message_at,
-          lastMessageSenderType: lastRawMsg?.sender_type,
+          // Vem pronto da view, sem precisar das mensagens em memória.
+          lastMessage: conv.last_message_content || mediaLabel(conv.last_message_media_type) || '(sem mensagens)',
+          lastMessageTime: formatTime(conv.last_message_created_at || conv.last_message_at),
+          lastMessageAtIso: conv.last_message_created_at || conv.last_message_at,
+          lastMessageSenderType: conv.last_message_sender_type || undefined,
           csatScore: conv.csat_score,
           status: conv.status,
           currentAssigneeId: conv.current_assignee_id,
-          currentAssigneeName: conv.profiles?.full_name || null,
+          currentAssigneeName: conv.assignee_name,
           tags: [],
           notes,
-          messages: msgs,
+          // As mensagens da conversa ABERTA moram em messagesByConv, preenchido por
+          // fetchConversationMessages. As demais ficam vazias de propósito — é isso que
+          // tira o histórico inteiro da rede a cada atualização.
+          messages: messagesByConvRef.current[conv.id] || [],
         }
       })
 
@@ -620,6 +606,88 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
     }
   }, [requestedConvId])
 
+  /**
+   * Busca as mensagens de UMA conversa. É o par da troca feita em fetchRealData: a lista
+   * deixou de trazer o histórico de todas, então o histórico chega aqui, sob demanda, quando
+   * a conversa é aberta.
+   *
+   * Limite de 500: cobre com folga a conversa mais longa que existe hoje (a média é 15
+   * mensagens) e mantém a busca bem abaixo do teto de 1.000 linhas do PostgREST. Ordenado da
+   * mais nova pra mais antiga e invertido no fim — assim, num histórico gigante, o corte cai
+   * nas mensagens ANTIGAS, e não nas recentes, que é o que a pessoa está lendo.
+   */
+  const fetchConversationMessages = useCallback(async (conversationId: string) => {
+    try {
+      const supabase = createClient()
+      const {
+        data: { user },
+      } = await supabase.auth.getUser()
+
+      const [msgRes, membersRes, profilesRes] = await Promise.all([
+        (supabase as unknown as {
+          from: (t: string) => { select: (c: string) => { eq: (col: string, v: string) => { order: (col: string, o: { ascending: boolean }) => { limit: (n: number) => Promise<{ data: unknown[] | null }> } } } }
+        })
+          .from('messages')
+          .select('id, conversation_id, sender_type, sender_id, content, media_url, media_type, status, metadata, created_at')
+          .eq('conversation_id', conversationId)
+          .order('created_at', { ascending: false })
+          .limit(500),
+        (supabase as unknown as { from: (t: string) => { select: (c: string) => Promise<{ data: unknown[] | null }> } })
+          .from('organization_members').select('user_id, profiles(full_name)'),
+        (supabase as unknown as { from: (t: string) => { select: (c: string) => Promise<{ data: unknown[] | null }> } })
+          .from('whatsapp_profiles').select('external_id, name, avatar_url'),
+      ])
+
+      const rows = ((msgRes.data || []) as Array<{
+        id: string
+        sender_type: 'contact' | 'user' | 'system'
+        sender_id: string | null
+        content: string
+        media_url: string | null
+        media_type: MediaType | null
+        status: 'sent' | 'delivered' | 'read' | 'failed' | null
+        metadata: { group_sender_name?: string | null; group_sender_id?: string | null } | null
+        created_at: string
+      }>).slice().reverse()
+
+      const members = (membersRes.data || []) as Array<{ user_id: string; profiles: { full_name: string | null } | null }>
+      const perfis = (profilesRes.data || []) as Array<{ external_id: string; name: string | null; avatar_url: string | null }>
+      const perfilPorId = new Map(perfis.map((x) => [x.external_id, x]))
+      const nomeDoContato = realConversationsRef.current.find((c) => c.id === conversationId)?.contactName || 'Cliente'
+
+      const msgs = rows.map<UiMessage>((m) => ({
+        id: m.id,
+        senderType: m.sender_type,
+        senderName:
+          m.sender_type === 'contact'
+            // Numa conversa de grupo, quem "fala" varia mensagem a mensagem — o nome do
+            // membro específico (guardado em metadata na hora de receber) tem prioridade
+            // sobre o nome do contato (que aqui é o nome do grupo).
+            ? m.metadata?.group_sender_name || nomeDoContato
+            : m.sender_type === 'system'
+            ? 'Sistema'
+            : m.sender_id === user?.id
+            ? 'Você'
+            : members.find((mm) => mm.user_id === m.sender_id)?.profiles?.full_name || 'Atendente',
+        content: m.content,
+        time: formatTime(m.created_at),
+        status: m.status || undefined,
+        mediaUrl: m.media_url,
+        mediaType: m.media_type,
+        senderAvatarUrl:
+          m.sender_type === 'contact' && m.metadata?.group_sender_id
+            ? perfilPorId.get(m.metadata.group_sender_id)?.avatar_url || null
+            : null,
+      }))
+
+      setMessagesByConv((prev) => ({ ...prev, [conversationId]: msgs }))
+      setRealConversations((prev) => prev.map((c) => (c.id === conversationId ? { ...c, messages: msgs } : c)))
+    } catch {
+      // Silencioso: a lista continua na tela. Quem chama não tem o que fazer com o erro, e
+      // a próxima abertura da conversa tenta de novo.
+    }
+  }, [])
+
   useEffect(() => {
     if (viewMode !== 'real') return
     const timer = setTimeout(() => {
@@ -627,6 +695,14 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
     }, 0)
     return () => clearTimeout(timer)
   }, [viewMode, fetchRealData])
+
+  // Carrega o histórico da conversa aberta — e recarrega quando chega mensagem nova nela
+  // (realtimeTick muda a cada evento do Realtime, ver o canal mais abaixo).
+  useEffect(() => {
+    if (viewMode !== 'real' || !selectedConvId) return
+    const timer = setTimeout(() => void fetchConversationMessages(selectedConvId), 0)
+    return () => clearTimeout(timer)
+  }, [viewMode, selectedConvId, realtimeTick, fetchConversationMessages])
 
   // One-time setup: remember the tab's original title (to restore after a "(3) " unread
   // badge) and clear the unread badge whenever the tab regains focus (best-effort proxy
@@ -724,6 +800,8 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
       if (debounceTimer) clearTimeout(debounceTimer)
       debounceTimer = setTimeout(() => {
         void fetchRealData(true)
+        // Recarrega o histórico da conversa aberta junto com a lista.
+        setRealtimeTick((n) => n + 1)
       }, 400)
     }
 
@@ -1604,7 +1682,7 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                     onClick={() => {
                       setSelectedConvId(conv.id)
                       setMobilePane('chat')
-                      markRead(conv.id)
+                      markRead(conv.id, conv.lastMessageAtIso)
                     }}
                     className={`px-3.5 py-3 cursor-pointer transition flex items-center gap-3 ${
                       isSelected ? 'bg-slate-800/90 lg:border-l-4 lg:border-l-emerald-400' : 'hover:bg-slate-800/40 active:bg-slate-800/60'
