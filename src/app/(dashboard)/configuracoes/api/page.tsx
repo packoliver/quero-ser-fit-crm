@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/Input'
 import { Modal } from '@/components/ui/Modal'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Badge } from '@/components/ui/Badge'
+import { Toast } from '@/components/ui/Toast'
 
 interface ApiKeyRow {
   id: string
@@ -121,12 +122,7 @@ export default function ApiConfigPage() {
 
   return (
     <div className="p-4 lg:p-8 space-y-6 max-w-4xl mx-auto relative">
-      {toast && (
-        <div className="fixed top-6 right-6 z-50 bg-emerald-600 text-white px-4 py-3 rounded-2xl shadow-2xl flex items-center gap-2.5 text-xs font-semibold animate-bounce border border-emerald-400/30">
-          <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-200" />
-          <span>{toast}</span>
-        </div>
-      )}
+      <Toast message={toast} />
 
       {error && (
         <div className="p-4 rounded-xl bg-rose-950/40 border border-rose-800/50 text-rose-300 text-xs flex items-center gap-3">

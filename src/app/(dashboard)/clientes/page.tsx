@@ -27,6 +27,7 @@ import { Avatar } from '@/components/ui/Avatar'
 import { Input } from '@/components/ui/Input'
 import { Modal } from '@/components/ui/Modal'
 import { EmptyState } from '@/components/ui/EmptyState'
+import { Toast } from '@/components/ui/Toast'
 import { createClient } from '@/lib/supabase/client'
 import { cacheEntity, readCachedEntity, queueEntityMutation } from '@/lib/offline/repository'
 import { getOfflineScope } from '@/lib/offline/scope'
@@ -502,12 +503,7 @@ export default function ClientesPage() {
   return (
     <div className="p-4 lg:p-8 space-y-6 max-w-7xl mx-auto relative">
       {/* Toast Notification */}
-      {toastMessage && (
-        <div className="fixed top-6 right-6 z-50 bg-emerald-600 text-white px-4 py-3 rounded-2xl shadow-2xl flex items-center gap-2.5 text-xs font-semibold animate-bounce border border-emerald-400/30">
-          <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-200" />
-          <span>{toastMessage}</span>
-        </div>
-      )}
+      <Toast message={toastMessage} />
 
       {/* Header & Mode Switcher */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -819,7 +815,7 @@ export default function ClientesPage() {
               placeholder="Preferências ou dados adicionais..."
               value={newContact.notes}
               onChange={(e) => setNewContact({ ...newContact, notes: e.target.value })}
-              className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-slate-100 focus:outline-none focus:border-emerald-500 text-xs"
+              className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-slate-100 focus:outline-none focus:border-emerald-500 text-base lg:text-xs"
             />
           </div>
 
@@ -879,7 +875,7 @@ export default function ClientesPage() {
               placeholder="Histórico ou dados adicionais..."
               value={editContact.notes}
               onChange={(e) => setEditContact({ ...editContact, notes: e.target.value })}
-              className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-slate-100 focus:outline-none focus:border-emerald-500 text-xs"
+              className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-slate-100 focus:outline-none focus:border-emerald-500 text-base lg:text-xs"
             />
           </div>
 
