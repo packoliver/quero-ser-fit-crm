@@ -1784,10 +1784,23 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                           type="button"
                           onClick={() => setDeleteMessageId(msg.id)}
                           title="Excluir mensagem"
-                          aria-label="Excluir mensagem"
-                          className="opacity-0 group-hover:opacity-100 focus:opacity-100 transition text-slate-500 hover:text-rose-400"
+                          aria-label={`Excluir mensagem de ${msg.senderName}`}
+                          // Sempre visível no celular, revelado no hover só a partir do lg.
+                          // Antes era `opacity-0 group-hover:opacity-100` puro — e como
+                          // aparelho de toque não tem "passar o mouse por cima", o botão
+                          // ficava invisível pra sempre no celular. A permissão existia, a
+                          // rota existia, e a função simplesmente não tinha como ser
+                          // alcançada onde o CRM mais é usado.
+                          //
+                          // p-2 -my-2 aumenta a área de toque de 12px pra ~28px sem crescer
+                          // a linha (a margem negativa devolve no vertical o que o padding
+                          // tomou). Fica abaixo dos 44px recomendados de propósito: é uma
+                          // ação destrutiva ao lado do nome em TODA mensagem, e um alvo
+                          // generoso demais aqui convidaria ao toque errado. O modal de
+                          // confirmação continua sendo a rede de segurança.
+                          className="p-2 -my-2 lg:p-0 lg:my-0 opacity-100 lg:opacity-0 lg:group-hover:opacity-100 focus-visible:opacity-100 transition text-slate-500 hover:text-rose-400 active:text-rose-400"
                         >
-                          <Trash2 className="w-3 h-3" />
+                          <Trash2 className="w-3.5 h-3.5 lg:w-3 lg:h-3" />
                         </button>
                       )}
                     </div>
@@ -2455,9 +2468,18 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
         title="Excluir Mensagem"
         icon={<Trash2 className="w-5 h-5" />}
       >
-        <div className="space-y-4 text-xs">
-          <p className="text-slate-300">
-            Tem certeza que deseja excluir esta mensagem? Ela some da conversa pra todo mundo no CRM — essa ação não pode ser desfeita.
+        <div className="space-y-3 text-xs">
+          <p className="text-slate-300 leading-relaxed">
+            A mensagem some da conversa pra toda a equipe aqui no CRM, e não dá pra desfazer.
+          </p>
+          {/* O mal-entendido mais provável desta tela, dito antes de acontecer: excluir aqui
+              não desfaz o envio. A Meta não oferece como apagar uma mensagem já entregue no
+              Instagram, então prometer isso seria mentira — melhor ser explícito e dizer
+              onde a pessoa consegue resolver de verdade. */}
+          <p className="text-amber-300 bg-amber-950/30 border border-amber-800/40 p-3 rounded-xl leading-relaxed">
+            O cliente continua vendo a mensagem no {selectedConversation?.channel === 'whatsapp' ? 'WhatsApp' : 'Instagram'} dele.
+            Isso apaga só o seu histórico. Pra sumir pro cliente, apague pelo aplicativo do
+            {selectedConversation?.channel === 'whatsapp' ? ' WhatsApp' : ' Instagram'} no celular.
           </p>
           <div className="flex justify-end gap-2 pt-2">
             <Button variant="secondary" onClick={() => setDeleteMessageId(null)} disabled={deletingMessage}>
