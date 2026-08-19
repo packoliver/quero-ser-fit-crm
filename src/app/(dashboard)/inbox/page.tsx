@@ -53,6 +53,7 @@ import { Toast } from '@/components/ui/Toast'
 import { useImmersiveMobile } from '@/components/layout/MobileChromeProvider'
 import { useUnread } from '@/components/layout/UnreadProvider'
 import { formatUnreadBadge } from '@/lib/inbox/unread'
+import { matchesConversationFilters } from '@/lib/inbox/filters'
 import { createClient } from '@/lib/supabase/client'
 import { subscribeToPush, unsubscribeFromPush } from '@/lib/pwa/subscribe'
 import { useDemoStorage } from '@/lib/demo/useDemoStorage'
@@ -242,7 +243,13 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
   // lado do chat (3 colunas ao mesmo tempo); no celular vira uma tela própria, senão
   // ficava impossível abrir a aba "Pedido" (mover pra funil) de dentro do Inbox no celular.
   const [mobilePane, setMobilePane] = useState<'list' | 'chat' | 'details'>('list')
-  const [filterQueue, setFilterQueue] = useState<'all' | 'mine' | 'unassigned'>('all')
+  // Só entram aqui recortes que existem DE FATO no banco. A coluna `status` aceita
+  // quatro valores, mas apenas 'closed' carrega significado confiável: 'archived' nunca é
+  // gravado por lugar nenhum do código, e 'assigned' é revertido pra 'open' pelo
+  // persist-event.ts a cada mensagem que o cliente manda — virar aba seria prometer um
+  // estado que o dado não sustenta.
+  // 'active' é o padrão: tudo que não foi encerrado.
+  const [filterQueue, setFilterQueue] = useState<'active' | 'unread' | 'unassigned' | 'mine' | 'closed'>('active')
   const [filterChannel, setFilterChannel] = useState<'all' | 'whatsapp' | 'instagram'>('all')
   const [searchQuery, setSearchQuery] = useState('')
 
@@ -1290,31 +1297,27 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
     }
   }
 
-  // Apply Queue, Channel, and Search Filters
-  const filteredConversations = conversations.filter((c) => {
-    const effectiveCurrentUserId = viewMode === 'real' ? currentUserRealId : currentUserId
-    const isMine = c.currentAssigneeId === effectiveCurrentUserId
-    // Só "currentAssigneeId ausente" conta como não-atribuída. Não usar `status === 'open'`
-    // aqui: persist-event.ts força status de volta pra 'open' a cada mensagem nova do
-    // cliente, mesmo numa conversa já atribuída — usar isso pra decidir "fila" fazia uma
-    // conversa que já é de uma vendedora reaparecer como "Fila de Espera" pro time
-    // inteiro assim que o cliente mandasse qualquer mensagem de acompanhamento.
-    const isUnassigned = !c.currentAssigneeId
-
-    const matchesQueue =
-      filterQueue === 'all' ? true : filterQueue === 'mine' ? isMine : isUnassigned
-
-    const matchesChannel = filterChannel === 'all' || c.channel === filterChannel
-
-    const matchesSearch =
-      c.contactName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      c.contactPhone.includes(searchQuery) ||
-      c.lastMessage.toLowerCase().includes(searchQuery.toLowerCase())
-
-    return matchesQueue && matchesChannel && matchesSearch
-  })
+  // Regra dos recortes em @/lib/inbox/filters (com testes) — aqui só entra o que a tela
+  // sabe: quem está logado e quantas não lidas cada conversa tem.
+  const filteredConversations = conversations.filter((c) =>
+    matchesConversationFilters(c, {
+      queue: filterQueue,
+      channel: filterChannel,
+      search: searchQuery,
+      currentUserId: viewMode === 'real' ? currentUserRealId : currentUserId,
+      unreadCount: unreadCounts[c.id] || 0,
+    })
+  )
 
   const effectiveCurrentUserId = viewMode === 'real' ? currentUserRealId : currentUserId
+
+  // Base das contagens das abas. Separado de filteredConversations de propósito: os números
+  // nas abas precisam mostrar quantas conversas existem em cada recorte, e não quantas
+  // sobraram depois do filtro que já está aplicado — senão "Não lidas 3" viraria "0" no
+  // instante em que a pessoa clica em "Minhas".
+  const activeConversations = conversations.filter((c) => c.status !== 'closed')
+  const closedConversations = conversations.filter((c) => c.status === 'closed')
+
   const isHandledByOther =
     selectedConversation &&
     selectedConversation.currentAssigneeId &&
@@ -1452,11 +1455,21 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                 dimensões independentes de verdade, então continuam separadas por um traço
                 em vez de viverem misturadas na mesma lista de opções. */}
             <div className="flex items-center gap-1.5 overflow-x-auto -mx-1 px-1 pb-0.5 text-xs [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-              {([
-                { key: 'all', label: `Todas (${conversations.length})` },
-                { key: 'unassigned', label: `Sem responsável (${conversations.filter((c) => !c.currentAssigneeId).length})` },
-                { key: 'mine', label: 'Minhas' },
-              ] as const).map((chip) => (
+              {(
+                [
+                  { key: 'active', label: 'Ativas', count: activeConversations.length },
+                  { key: 'unread', label: 'Não lidas', count: activeConversations.filter((c) => (unreadCounts[c.id] || 0) > 0).length },
+                  { key: 'unassigned', label: 'Sem responsável', count: activeConversations.filter((c) => !c.currentAssigneeId).length },
+                  { key: 'mine', label: 'Minhas', count: activeConversations.filter((c) => c.currentAssigneeId === effectiveCurrentUserId).length },
+                  // Só aparece quando existe alguma encerrada — ou quando já está
+                  // selecionada, senão não haveria como voltar de lá. Numa operação que
+                  // ainda não encerrou nada, a aba seria só ruído; ela surge exatamente no
+                  // momento em que a pessoa se pergunta "pra onde foi a conversa?".
+                  ...(closedConversations.length > 0 || filterQueue === 'closed'
+                    ? [{ key: 'closed' as const, label: 'Encerradas', count: closedConversations.length }]
+                    : []),
+                ] as const
+              ).map((chip) => (
                 <button
                   key={chip.key}
                   onClick={() => setFilterQueue(chip.key)}
@@ -1468,7 +1481,7 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                       : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200'
                   }`}
                 >
-                  {chip.label}
+                  {chip.label} <span className="tabular-nums opacity-70">{chip.count}</span>
                 </button>
               ))}
 
@@ -1522,13 +1535,40 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
               </div>
             ) : filteredConversations.length === 0 ? (
               <div className="p-6">
+                {/* O aviso precisa dizer QUAL vazio é este. Dizer "nenhuma conversa ainda"
+                    com 24 conversas no banco, só porque a aba "Não lidas" está sem nada,
+                    faz a pessoa achar que perdeu os atendimentos. */}
                 <EmptyState
                   icon={<Search className="w-5 h-5" />}
-                  title="Nenhuma conversa"
+                  title={
+                    searchQuery.trim()
+                      ? 'Nada encontrado'
+                      : conversations.length === 0
+                      ? 'Nenhuma conversa ainda'
+                      : filterQueue === 'unread'
+                      ? 'Tudo lido'
+                      : filterQueue === 'mine'
+                      ? 'Nenhuma conversa sua'
+                      : filterQueue === 'unassigned'
+                      ? 'Ninguém esperando'
+                      : filterQueue === 'closed'
+                      ? 'Nenhuma conversa encerrada'
+                      : 'Nenhuma conversa aberta'
+                  }
                   description={
-                    viewMode === 'real'
-                      ? 'Nenhuma conversa real ainda. Elas aparecem aqui assim que uma mensagem chegar por uma conexão configurada.'
-                      : 'Ajuste a busca ou troque o filtro de fila/canal.'
+                    searchQuery.trim()
+                      ? `Nenhuma conversa combina com "${searchQuery.trim()}". A busca também procura nas encerradas.`
+                      : conversations.length === 0
+                      ? 'Elas aparecem aqui assim que uma mensagem chegar por uma conexão configurada.'
+                      : filterQueue === 'unread'
+                      ? 'Você respondeu todo mundo. Toque em "Ativas" pra ver as conversas em andamento.'
+                      : filterQueue === 'mine'
+                      ? 'Nenhuma conversa está atribuída a você. Veja "Sem responsável" pra assumir alguma.'
+                      : filterQueue === 'unassigned'
+                      ? 'Toda conversa em aberto já tem responsável.'
+                      : filterQueue === 'closed'
+                      ? 'Conversas encerradas ficam guardadas aqui, fora da lista de atendimento.'
+                      : 'Nenhuma conversa em aberto no momento.'
                   }
                 />
               </div>
