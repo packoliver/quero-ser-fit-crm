@@ -1,8 +1,10 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
+import Link from 'next/link'
 import {
   CheckSquare,
+  MessageSquare,
   Plus,
   Clock,
   User,
@@ -23,11 +25,13 @@ import { Badge } from '@/components/ui/Badge'
 import { Input } from '@/components/ui/Input'
 import { Modal } from '@/components/ui/Modal'
 import { EmptyState } from '@/components/ui/EmptyState'
+import { Toast } from '@/components/ui/Toast'
 import { createClient } from '@/lib/supabase/client'
 import { cacheEntity, readCachedEntity, queueEntityMutation } from '@/lib/offline/repository'
 import { getOfflineScope } from '@/lib/offline/scope'
 import { TaskStatus } from '@/types/database'
 import { useDemoStorage } from '@/lib/demo/useDemoStorage'
+import { taskTimeBucket, type TaskTimeBucket } from '@/lib/tasks/buckets'
 
 export interface RealTask {
   id: string
@@ -38,6 +42,10 @@ export interface RealTask {
   priority: 'alta' | 'media' | 'baixa' | null
   assigned_to_id: string | null
   contact_id: string | null
+  /** Conversa de origem, quando a tarefa nasceu dentro de um atendimento — permite voltar
+   * direto pro contexto em vez de procurar o cliente na lista. Coluna que já existia na
+   * tabela `tasks` e simplesmente não estava sendo lida. */
+  conversation_id: string | null
   /** Flattened from the joined `profiles`/`contacts` rows at fetch time — never sent back on write. */
   assignee_name: string | null
   contact_name: string | null
@@ -60,6 +68,13 @@ function getAssigneeDisplay(task: RealTask | DemoTask): string {
 
 function getClientDisplay(task: RealTask | DemoTask): string | null {
   return 'clientName' in task ? task.clientName : task.contact_name
+}
+
+/** Ponte pro cálculo puro em @/lib/tasks/buckets — só o modo real tem data de verdade; no
+ * modo de demonstração `dueDate` é texto de exibição ("Hoje, 15:00"), sem informação
+ * suficiente pra comparar com hoje, então cai no padrão "Próximas". */
+function bucketOf(task: RealTask | DemoTask): TaskTimeBucket {
+  return taskTimeBucket({ status: task.status, due_date: 'due_date' in task ? task.due_date : null })
 }
 
 const safeToISOString = (dateVal: string | null | undefined): string | null => {
@@ -88,6 +103,7 @@ export default function TarefasPage() {
   const [realContacts, setRealContacts] = useState<RealContactOption[]>([])
 
   // Filters State
+  const [filterTime, setFilterTime] = useState<'all' | TaskTimeBucket>('all')
   const [filterStatus, setFilterStatus] = useState<'all' | 'pending' | 'in_progress' | 'completed'>('all')
   const [filterPriority, setFilterPriority] = useState<'all' | 'alta' | 'media' | 'baixa'>('all')
   const [filterAssignee, setFilterAssignee] = useState<string>('all')
@@ -169,7 +185,7 @@ export default function TarefasPage() {
       const [tasksRes, membersRes, contactsRes] = await Promise.all([
         typed
           .from('tasks')
-          .select('id, title, description, due_date, status, priority, assigned_to_id, contact_id, created_at, contacts(name), profiles(full_name)')
+          .select('id, title, description, due_date, status, priority, assigned_to_id, contact_id, conversation_id, created_at, contacts(name), profiles(full_name)')
           .order('created_at', { ascending: false }),
         typed.from('organization_members').select('user_id, profiles(full_name)'),
         typed.from('contacts').select('id, name').order('name', { ascending: true }),
@@ -189,6 +205,7 @@ export default function TarefasPage() {
         priority: 'alta' | 'media' | 'baixa' | null
         assigned_to_id: string | null
         contact_id: string | null
+        conversation_id: string | null
         created_at: string
         contacts: { name: string | null } | null
         profiles: { full_name: string | null } | null
@@ -203,6 +220,7 @@ export default function TarefasPage() {
           priority: t.priority,
           assigned_to_id: t.assigned_to_id,
           contact_id: t.contact_id,
+          conversation_id: t.conversation_id,
           assignee_name: t.profiles?.full_name || null,
           contact_name: t.contacts?.name || null,
           created_at: t.created_at,
@@ -288,7 +306,7 @@ export default function TarefasPage() {
               select: (c: string) => {
                 single: () => Promise<{
                   data:
-                    | { id: string; title: string; description: string | null; due_date: string | null; status: TaskStatus; priority: 'alta' | 'media' | 'baixa' | null; assigned_to_id: string | null; contact_id: string | null; created_at: string; contacts: { name: string | null } | null; profiles: { full_name: string | null } | null }
+                    | { id: string; title: string; description: string | null; due_date: string | null; status: TaskStatus; priority: 'alta' | 'media' | 'baixa' | null; assigned_to_id: string | null; contact_id: string | null; conversation_id: string | null; created_at: string; contacts: { name: string | null } | null; profiles: { full_name: string | null } | null }
                     | null
                   error: { message: string } | null
                 }>
@@ -306,7 +324,7 @@ export default function TarefasPage() {
             contact_id: newTask.contactId || null,
             assigned_to_id: newTask.assigneeId || null,
           })
-          .select('id, title, description, due_date, status, priority, assigned_to_id, contact_id, created_at, contacts(name), profiles(full_name)')
+          .select('id, title, description, due_date, status, priority, assigned_to_id, contact_id, conversation_id, created_at, contacts(name), profiles(full_name)')
           .single()
 
         if (insertError) {
@@ -325,6 +343,9 @@ export default function TarefasPage() {
               priority: created.priority,
               assigned_to_id: created.assigned_to_id,
               contact_id: created.contact_id,
+              // Sempre null aqui: tarefa criada por esta tela nasce solta, sem conversa de
+              // origem. Quem preenche isso é o lembrete criado de dentro do Inbox.
+              conversation_id: created.conversation_id,
               assignee_name: created.profiles?.full_name || null,
               contact_name: created.contacts?.name || null,
               created_at: created.created_at,
@@ -498,22 +519,26 @@ export default function TarefasPage() {
 
   // Apply Status, Priority, and Assignee Filters
   const filteredTasks = activeTaskList.filter((t: RealTask | DemoTask) => {
+    const matchesTime = filterTime === 'all' ? true : bucketOf(t) === filterTime
     const matchesStatus = filterStatus === 'all' ? true : t.status === filterStatus
     const matchesPriority = filterPriority === 'all' ? true : t.priority === filterPriority
     const matchesAssignee = filterAssignee === 'all' ? true : getAssigneeDisplay(t) === filterAssignee
 
-    return matchesStatus && matchesPriority && matchesAssignee
+    return matchesTime && matchesStatus && matchesPriority && matchesAssignee
   })
+
+  const timeBucketCounts = activeTaskList.reduce<Record<TaskTimeBucket, number>>(
+    (acc, t) => {
+      acc[bucketOf(t)] += 1
+      return acc
+    },
+    { overdue: 0, today: 0, upcoming: 0, completed: 0 }
+  )
 
   return (
     <div className="p-4 lg:p-8 space-y-6 max-w-7xl mx-auto relative">
       {/* Toast Notification */}
-      {toastMessage && (
-        <div className="fixed top-6 right-6 z-50 bg-emerald-600 text-white px-4 py-3 rounded-2xl shadow-2xl flex items-center gap-2.5 text-xs font-semibold animate-bounce border border-emerald-400/30">
-          <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-200" />
-          <span>{toastMessage}</span>
-        </div>
-      )}
+      <Toast message={toastMessage} />
 
       {/* Header & Mode Switcher */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -584,66 +609,84 @@ export default function TarefasPage() {
       {/* Filter Bar: Status Tabs + Advanced Dropdowns */}
       <div className="bg-[#0f172a] border border-slate-800 rounded-2xl p-4 space-y-4">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 text-xs border-b border-slate-800/80 pb-3">
-          {/* Status Tabs */}
-          <div className="flex items-center gap-1.5 flex-wrap">
-            <button
-              onClick={() => setFilterStatus('all')}
-              className={`px-3 py-1.5 rounded-xl font-medium transition ${
-                filterStatus === 'all' ? 'bg-slate-800 text-emerald-400 font-semibold' : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              Todas ({activeTaskList.length})
-            </button>
-            <button
-              onClick={() => setFilterStatus('pending')}
-              className={`px-3 py-1.5 rounded-xl font-medium transition ${
-                filterStatus === 'pending' ? 'bg-amber-950/80 text-amber-400 font-semibold' : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              Pendentes ({activeTaskList.filter((t) => t.status === 'pending').length})
-            </button>
-            <button
-              onClick={() => setFilterStatus('in_progress')}
-              className={`px-3 py-1.5 rounded-xl font-medium transition ${
-                filterStatus === 'in_progress' ? 'bg-blue-950/80 text-blue-400 font-semibold' : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              Em Andamento
-            </button>
-            <button
-              onClick={() => setFilterStatus('completed')}
-              className={`px-3 py-1.5 rounded-xl font-medium transition ${
-                filterStatus === 'completed' ? 'bg-emerald-950/80 text-emerald-400 font-semibold' : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              Concluídas ({activeTaskList.filter((t) => t.status === 'completed').length})
-            </button>
+          {/* Abas por momento, não por status: "o que preciso fazer agora" em vez de "em que
+              pé está o registro". Rolável na horizontal pra caber no celular sem quebrar
+              linha. Ver @/lib/tasks/buckets. */}
+          <div className="flex items-center gap-1.5 overflow-x-auto -mx-1 px-1 pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            {([
+              { key: 'all', label: 'Todas', count: activeTaskList.length, urgent: false },
+              { key: 'overdue', label: 'Atrasadas', count: timeBucketCounts.overdue, urgent: true },
+              { key: 'today', label: 'Hoje', count: timeBucketCounts.today, urgent: false },
+              { key: 'upcoming', label: 'Próximas', count: timeBucketCounts.upcoming, urgent: false },
+              { key: 'completed', label: 'Concluídas', count: timeBucketCounts.completed, urgent: false },
+            ] as const).map((chip) => {
+              const active = filterTime === chip.key
+              // Atrasadas é a única que ganha cor sozinha, e só quando existe alguma —
+              // vermelho permanente numa aba vazia vira ruído e para de ser notado.
+              const alert = chip.urgent && chip.count > 0
+              return (
+                <button
+                  key={chip.key}
+                  onClick={() => setFilterTime(chip.key)}
+                  aria-pressed={active}
+                  suppressHydrationWarning
+                  className={`shrink-0 px-3 py-1.5 rounded-full font-medium border transition whitespace-nowrap ${
+                    active
+                      ? alert
+                        ? 'bg-rose-500/15 text-rose-300 border-rose-500/40 font-semibold'
+                        : 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40 font-semibold'
+                      : alert
+                      ? 'bg-slate-900 text-rose-400 border-rose-900/60'
+                      : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200'
+                  }`}
+                >
+                  {chip.label} <span className="tabular-nums opacity-70">{chip.count}</span>
+                </button>
+              )
+            })}
           </div>
 
           {/* Clear Filters Button */}
-          {(filterPriority !== 'all' || filterAssignee !== 'all' || filterStatus !== 'all') && (
+          {(filterPriority !== 'all' || filterAssignee !== 'all' || filterStatus !== 'all' || filterTime !== 'all') && (
             <button
               onClick={() => {
+                setFilterTime('all')
                 setFilterStatus('all')
                 setFilterPriority('all')
                 setFilterAssignee('all')
               }}
-              className="text-[11px] text-rose-400 hover:underline flex items-center gap-1 self-start md:self-auto"
+              className="text-[11px] text-rose-400 hover:underline flex items-center gap-1 self-start md:self-auto shrink-0"
             >
               <X className="w-3.5 h-3.5" /> Limpar Filtros
             </button>
           )}
         </div>
 
-        {/* Advanced Filters: Priority & Assignee */}
+        {/* Advanced Filters: Status, Priority & Assignee */}
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 text-xs">
+          {/* O filtro por status saiu das abas principais mas continua aqui inteiro —
+              "Em Andamento" não tem equivalente entre os momentos acima. */}
           <div className="flex items-center gap-2 flex-1">
             <Filter className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+            <span className="text-slate-400 font-medium text-[11px]">Status:</span>
+            <select
+              value={filterStatus}
+              onChange={(e) => setFilterStatus(e.target.value as 'all' | 'pending' | 'in_progress' | 'completed')}
+              className="bg-slate-900 border border-slate-800 text-slate-200 rounded-xl px-3 py-1.5 text-base lg:text-xs focus:outline-none focus:border-emerald-500 flex-1 sm:flex-initial"
+            >
+              <option value="all">Todos os Status</option>
+              <option value="pending">Pendente</option>
+              <option value="in_progress">Em Andamento</option>
+              <option value="completed">Concluída</option>
+            </select>
+          </div>
+
+          <div className="flex items-center gap-2 flex-1">
             <span className="text-slate-400 font-medium text-[11px]">Prioridade:</span>
             <select
               value={filterPriority}
               onChange={(e) => setFilterPriority(e.target.value as 'all' | 'alta' | 'media' | 'baixa')}
-              className="bg-slate-900 border border-slate-800 text-slate-200 rounded-xl px-3 py-1.5 text-xs focus:outline-none focus:border-emerald-500 flex-1 sm:flex-initial"
+              className="bg-slate-900 border border-slate-800 text-slate-200 rounded-xl px-3 py-1.5 text-base lg:text-xs focus:outline-none focus:border-emerald-500 flex-1 sm:flex-initial"
             >
               <option value="all">Todas as Prioridades</option>
               <option value="alta">Alta Prioridade</option>
@@ -657,7 +700,7 @@ export default function TarefasPage() {
             <select
               value={filterAssignee}
               onChange={(e) => setFilterAssignee(e.target.value)}
-              className="bg-slate-900 border border-slate-800 text-slate-200 rounded-xl px-3 py-1.5 text-xs focus:outline-none focus:border-emerald-500 flex-1 sm:flex-initial"
+              className="bg-slate-900 border border-slate-800 text-slate-200 rounded-xl px-3 py-1.5 text-base lg:text-xs focus:outline-none focus:border-emerald-500 flex-1 sm:flex-initial"
             >
               <option value="all">Todos os Responsáveis</option>
               {allAssignees.map((name) => (
@@ -690,6 +733,11 @@ export default function TarefasPage() {
 
             const assigneeDisplay = getAssigneeDisplay(task)
             const clientDisplay = getClientDisplay(task)
+            const isOverdue = bucketOf(task) === 'overdue'
+            // Só existe quando a tarefa nasceu de dentro de um atendimento (ver
+            // conversation_id) — aí dá pra voltar pro contexto em um toque, em vez de sair
+            // procurando o cliente na lista de conversas.
+            const conversationId = 'conversation_id' in task ? task.conversation_id : null
 
             return (
               <div
@@ -717,9 +765,16 @@ export default function TarefasPage() {
                     <h3 className={`text-sm font-semibold ${isCompleted ? 'line-through text-slate-400' : 'text-slate-100'}`}>
                       {task.title}
                     </h3>
-                    <span className="text-[10px] text-slate-400 flex items-center gap-1 shrink-0 font-mono">
-                      <Clock className="w-3 h-3 text-slate-500" />
+                    <span
+                      className={`text-[10px] flex items-center gap-1 shrink-0 font-mono tabular-nums ${
+                        isOverdue ? 'text-rose-400 font-semibold' : 'text-slate-400'
+                      }`}
+                    >
+                      <Clock className={`w-3 h-3 ${isOverdue ? 'text-rose-400' : 'text-slate-500'}`} />
                       {dueDateDisplay}
+                      {/* O atraso não pode depender só da cor da data — precisa estar
+                          escrito pra quem não distingue vermelho de cinza. */}
+                      {isOverdue && <span className="not-italic">· atrasada</span>}
                     </span>
                   </div>
 
@@ -741,8 +796,18 @@ export default function TarefasPage() {
                       </Badge>
                     </div>
 
-                    {/* Action Buttons: Edit & Delete */}
+                    {/* Action Buttons: Abrir conversa, Edit & Delete */}
                     <div className="flex items-center gap-1 shrink-0">
+                      {conversationId && (
+                        <Link
+                          href={`/inbox?conversa=${conversationId}`}
+                          title="Abrir a conversa deste cliente"
+                          className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 hover:text-emerald-400 transition"
+                        >
+                          <MessageSquare className="w-3.5 h-3.5" />
+                          <span className="sr-only">Abrir conversa</span>
+                        </Link>
+                      )}
                       <button
                         type="button"
                         onClick={() => openEditModal(task)}
@@ -790,7 +855,7 @@ export default function TarefasPage() {
               <select
                 value={newTask.contactId}
                 onChange={(e) => setNewTask({ ...newTask, contactId: e.target.value })}
-                className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-slate-100 focus:outline-none focus:border-emerald-500 text-xs"
+                className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-slate-100 focus:outline-none focus:border-emerald-500 text-base lg:text-xs"
               >
                 <option value="">Nenhum (opcional)</option>
                 {realContacts.map((c) => (
@@ -821,7 +886,7 @@ export default function TarefasPage() {
             <select
               value={newTask.priority}
               onChange={(e) => setNewTask({ ...newTask, priority: e.target.value as 'alta' | 'media' | 'baixa' })}
-              className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-slate-100 focus:outline-none focus:border-emerald-500 text-xs"
+              className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-slate-100 focus:outline-none focus:border-emerald-500 text-base lg:text-xs"
             >
               <option value="media">Média (Padrão)</option>
               <option value="alta">Alta Prioridade</option>
@@ -835,7 +900,7 @@ export default function TarefasPage() {
               <select
                 value={newTask.assigneeId}
                 onChange={(e) => setNewTask({ ...newTask, assigneeId: e.target.value })}
-                className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-slate-100 focus:outline-none focus:border-emerald-500 text-xs"
+                className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-slate-100 focus:outline-none focus:border-emerald-500 text-base lg:text-xs"
               >
                 <option value="">Sem responsável definido</option>
                 {realTeamMembers.map((m) => (
@@ -848,7 +913,7 @@ export default function TarefasPage() {
               <select
                 value={newTask.assigneeName}
                 onChange={(e) => setNewTask({ ...newTask, assigneeName: e.target.value })}
-                className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-slate-100 focus:outline-none focus:border-emerald-500 text-xs"
+                className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-slate-100 focus:outline-none focus:border-emerald-500 text-base lg:text-xs"
               >
                 {storedDemoMembers.map((m) => (
                   <option key={m.id} value={m.fullName}>
@@ -866,7 +931,7 @@ export default function TarefasPage() {
               placeholder="Detalhes sobre a tarefa..."
               value={newTask.description}
               onChange={(e) => setNewTask({ ...newTask, description: e.target.value })}
-              className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-slate-100 focus:outline-none focus:border-emerald-500 text-xs"
+              className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-slate-100 focus:outline-none focus:border-emerald-500 text-base lg:text-xs"
             />
           </div>
 
@@ -903,7 +968,7 @@ export default function TarefasPage() {
               <select
                 value={editTaskData.contactId}
                 onChange={(e) => setEditTaskData({ ...editTaskData, contactId: e.target.value })}
-                className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-slate-100 focus:outline-none focus:border-emerald-500 text-xs"
+                className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-slate-100 focus:outline-none focus:border-emerald-500 text-base lg:text-xs"
               >
                 <option value="">Nenhum</option>
                 {realContacts.map((c) => (
@@ -934,7 +999,7 @@ export default function TarefasPage() {
             <select
               value={editTaskData.priority}
               onChange={(e) => setEditTaskData({ ...editTaskData, priority: e.target.value as 'alta' | 'media' | 'baixa' })}
-              className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-slate-100 focus:outline-none focus:border-emerald-500 text-xs"
+              className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-slate-100 focus:outline-none focus:border-emerald-500 text-base lg:text-xs"
             >
               <option value="alta">Alta Prioridade</option>
               <option value="media">Média Prioridade</option>
@@ -948,7 +1013,7 @@ export default function TarefasPage() {
               <select
                 value={editTaskData.assigneeId}
                 onChange={(e) => setEditTaskData({ ...editTaskData, assigneeId: e.target.value })}
-                className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-slate-100 focus:outline-none focus:border-emerald-500 text-xs"
+                className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-slate-100 focus:outline-none focus:border-emerald-500 text-base lg:text-xs"
               >
                 <option value="">Sem responsável definido</option>
                 {realTeamMembers.map((m) => (
@@ -961,7 +1026,7 @@ export default function TarefasPage() {
               <select
                 value={editTaskData.assigneeName}
                 onChange={(e) => setEditTaskData({ ...editTaskData, assigneeName: e.target.value })}
-                className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-slate-100 focus:outline-none focus:border-emerald-500 text-xs"
+                className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-slate-100 focus:outline-none focus:border-emerald-500 text-base lg:text-xs"
               >
                 {storedDemoMembers.map((m) => (
                   <option key={m.id} value={m.fullName}>
@@ -979,7 +1044,7 @@ export default function TarefasPage() {
               placeholder="Detalhes..."
               value={editTaskData.description}
               onChange={(e) => setEditTaskData({ ...editTaskData, description: e.target.value })}
-              className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-slate-100 focus:outline-none focus:border-emerald-500 text-xs"
+              className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-slate-100 focus:outline-none focus:border-emerald-500 text-base lg:text-xs"
             />
           </div>
 
