@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { DesktopSidebar } from '@/components/layout/DesktopSidebar'
 import { Header } from '@/components/layout/Header'
 import { MobileBottomNav } from '@/components/layout/MobileBottomNav'
+import { CurrentUserProvider } from '@/components/layout/CurrentUserProvider'
 import { createClient } from '@/lib/supabase/client'
 import { UserRole } from '@/types/database'
 import { NetworkStatus } from '@/components/pwa/NetworkStatus'
@@ -99,25 +100,37 @@ export default function DashboardLayout({
   const currentRole = isRealSession ? realRole || 'attendant' : demoRole
 
   return (
-    <div className="min-h-screen bg-[#0b1320] text-slate-100 flex flex-row w-full overflow-x-hidden">
-      <NetworkStatus />
-      {/* Desktop Navigation (Filtered by currentRole) */}
-      <DesktopSidebar userRole={currentRole} />
+    <CurrentUserProvider value={{ role: currentRole, user: realUser, isRealSession }}>
+      {/*
+        Casca de aplicativo: altura exata da tela (h-dvh) com a rolagem acontecendo DENTRO
+        do <main>, em vez de min-h-screen deixando o documento inteiro rolar.
 
-      {/* Main Content Area */}
-      <div className="flex-1 flex flex-col min-w-0 min-h-screen pb-16 lg:pb-0">
-        {/* O toggle de perfil simulado só existe fora de uma sessão real — ninguém deve
-            poder "se fingir" de outro cargo numa conta de verdade. */}
-        <Header
-          currentRole={currentRole}
-          onToggleRole={isRealSession ? undefined : toggleDemoRole}
-          realUser={realUser}
-        />
-        <main className="flex-1 min-w-0 overflow-y-auto">{children}</main>
+        `dvh` e não `vh`: no navegador do celular 100vh é medido com a barra de endereço
+        escondida, então a parte de baixo da tela ficava fora do alcance até a pessoa rolar
+        — e com o teclado aberto o 100vh nem encolhia, escondendo o campo de digitar. `dvh`
+        acompanha a altura realmente visível.
+      */}
+      <div className="h-dvh bg-[#0b1320] text-slate-100 flex flex-row w-full overflow-hidden">
+        <NetworkStatus />
+        {/* Desktop Navigation (Filtered by currentRole) */}
+        <DesktopSidebar userRole={currentRole} />
+
+        {/* Main Content Area — o padding de baixo reserva o espaço da barra fixa do celular
+            (conteúdo + recorte do aparelho, ver --bottom-nav-h em globals.css). */}
+        <div className="flex-1 flex flex-col min-w-0 h-full pb-[var(--bottom-nav-h)] lg:pb-0">
+          {/* O toggle de perfil simulado só existe fora de uma sessão real — ninguém deve
+              poder "se fingir" de outro cargo numa conta de verdade. */}
+          <Header
+            currentRole={currentRole}
+            onToggleRole={isRealSession ? undefined : toggleDemoRole}
+            realUser={realUser}
+          />
+          <main className="flex-1 min-w-0 min-h-0 overflow-y-auto">{children}</main>
+        </div>
+
+        {/* Mobile Navigation (Filtered by currentRole) */}
+        <MobileBottomNav userRole={currentRole} />
       </div>
-
-      {/* Mobile Navigation (Filtered by currentRole) */}
-      <MobileBottomNav userRole={currentRole} />
-    </div>
+    </CurrentUserProvider>
   )
 }

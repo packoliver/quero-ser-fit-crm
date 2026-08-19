@@ -12,6 +12,7 @@ import {
   Clock,
   Code2,
   ListOrdered,
+  MoreHorizontal,
   type LucideIcon,
 } from 'lucide-react'
 import { UserRole } from '@/types/database'
@@ -59,4 +60,36 @@ export function getNavItemsForRole(role: UserRole): NavItem[] {
   }
   // Attendants see non-admin items (Conversas, Clientes, Tarefas, Relatórios)
   return allNavItems.filter((item) => !item.adminOnly)
+}
+
+/**
+ * As três áreas que ganham lugar fixo na barra inferior do celular. O resto vai pra
+ * /mais.
+ *
+ * Isso é uma camada de APRESENTAÇÃO em cima de getNavItemsForRole, de propósito: quem
+ * decide o que cada cargo pode ver continua sendo só aquela função (e o RLS no banco por
+ * trás dela). Aqui só se escolhe quais dos itens já permitidos cabem no polegar — a barra
+ * mostrava os 13 de uma vez, o que num aparelho de 375px dava uns 28px por item.
+ *
+ * O critério pra entrar aqui é frequência de uso no atendimento do dia a dia, não
+ * importância: Clientes e Relatórios importam muito, mas são consultados de vez em quando,
+ * enquanto a conversa é aberta o tempo todo.
+ */
+export const MOBILE_PRIMARY_HREFS = ['/inbox', '/funil', '/tarefas']
+
+export const MORE_NAV_ITEM: NavItem = { href: '/mais', label: 'Mais', icon: MoreHorizontal }
+
+/** Os itens da barra inferior, já filtrados pelo cargo — sem o botão "Mais", que é fixo. */
+export function getMobilePrimaryNavItems(role: UserRole): NavItem[] {
+  const allowed = getNavItemsForRole(role)
+  // Percorre MOBILE_PRIMARY_HREFS (e não `allowed`) pra a ordem da barra ser a daqui,
+  // estável, em vez de depender da ordem de declaração de allNavItems.
+  return MOBILE_PRIMARY_HREFS.map((href) => allowed.find((item) => item.href === href)).filter(
+    (item): item is NavItem => Boolean(item)
+  )
+}
+
+/** Tudo que o cargo pode ver e NÃO está na barra inferior — é o conteúdo da tela /mais. */
+export function getMoreNavItems(role: UserRole): NavItem[] {
+  return getNavItemsForRole(role).filter((item) => !MOBILE_PRIMARY_HREFS.includes(item.href))
 }

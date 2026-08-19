@@ -34,6 +34,15 @@ export const viewport: Viewport = {
   themeColor: '#10b981',
   width: 'device-width',
   initialScale: 1,
+  // `viewport-fit=cover` é o que faz env(safe-area-inset-*) devolver valores reais no
+  // iPhone. Sem isso o CSS de safe-area existe mas resolve sempre pra 0px, e a barra
+  // inferior fica embaixo da barra de gestos do iOS — exatamente o que acontecia aqui.
+  viewportFit: 'cover',
+  // Com o teclado virtual aberto, encolhe o viewport de layout (o padrão, 'resizes-visual',
+  // só encolhe o visual e deixa a página do mesmo tamanho por baixo). É o que mantém o
+  // campo de digitar acima do teclado em vez de escondido atrás dele — vale pro app todo,
+  // mas quem realmente depende disso é a tela de conversa.
+  interactiveWidget: 'resizes-content',
 }
 
 export default function RootLayout({

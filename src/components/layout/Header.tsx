@@ -25,8 +25,7 @@ import { Input } from '@/components/ui/Input'
 import { useDemoStorage } from '@/lib/demo/useDemoStorage'
 import { changePasswordSchema } from '@/lib/validations'
 import { createClient } from '@/lib/supabase/client'
-import { clearOfflineScope } from '@/lib/offline/db'
-import { getOfflineScope } from '@/lib/offline/scope'
+import { signOutEverywhere } from '@/lib/auth-client'
 
 export interface HeaderProps {
   currentRole?: UserRole
@@ -172,23 +171,18 @@ export function Header({ currentRole = 'admin', onToggleRole, realUser }: Header
   }
 
   const handleLogout = async () => {
-    try {
-      const { createClient } = await import('@/lib/supabase/client')
-      const supabase = createClient()
-      const { unsubscribeFromPush } = await import('@/lib/pwa/subscribe')
-      await unsubscribeFromPush()
-      const scope = await getOfflineScope()
-      if (scope) await clearOfflineScope(scope)
-      await supabase.auth.signOut()
-    } catch {
-      // Ignore errors if Supabase is not configured
-    }
+    await signOutEverywhere()
     router.push('/login')
     router.refresh()
   }
 
   return (
-    <header className="h-16 border-b border-slate-800 bg-[#0f172a]/90 backdrop-blur-md sticky top-0 z-40 px-4 lg:px-6 flex items-center justify-between select-none">
+    // A altura cresce pelo tamanho do entalhe (--safe-top) e o mesmo valor vira padding
+    // superior, empurrando o conteúdo pra baixo dele. Necessário porque o app declara
+    // statusBarStyle 'black-translucent' + viewport-fit=cover: instalado como PWA no
+    // iPhone, a página começa no topo absoluto da tela, por baixo da barra de status.
+    // Em aparelho sem entalhe (e no desktop) --safe-top é 0 e nada muda.
+    <header className="h-[calc(4rem+var(--safe-top))] pt-[var(--safe-top)] border-b border-slate-800 bg-[#0f172a]/90 backdrop-blur-md sticky top-0 z-40 px-4 lg:px-6 flex items-center justify-between select-none shrink-0">
       {/* Left side brand info */}
       <div className="flex items-center gap-3">
         <div className="lg:hidden flex items-center gap-2">

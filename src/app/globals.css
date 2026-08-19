@@ -17,6 +17,25 @@
   --surface: #131f37;
   --surface-border: #1e293b;
   --surface-hover: #1e2e4a;
+
+  /* Recortes do aparelho (entalhe em cima, barra de gestos embaixo). O Tailwind v4 não
+     traz utilities de safe-area prontas, e a classe `pb-safe` que existia aqui antes
+     simplesmente não existia em lugar nenhum — media ao vivo no navegador, resolvia pra
+     0px. Como variável dá pra somar com um padding normal num calc() só, sem depender da
+     ordem em que as classes do Tailwind entram na folha de estilo.
+     Só devolvem valor != 0 porque layout.tsx declara viewport-fit=cover. */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  /* Laterais só valem != 0 com o aparelho deitado (o entalhe vai pra uma das bordas).
+     Passaram a importar justamente por causa do viewport-fit=cover: antes o iOS afastava
+     o conteúdo do entalhe sozinho; agora ele ocupa a tela toda e o recuo é por nossa conta. */
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+
+  /* Altura total que a barra inferior do celular ocupa (conteúdo + recorte do aparelho).
+     Fica aqui, e não espalhado nas classes, porque dois lugares precisam concordar: a
+     própria barra e o padding do conteúdo que tem que terminar acima dela. */
+  --bottom-nav-h: calc(3.75rem + var(--safe-bottom));
 }
 
 body {
