@@ -38,6 +38,7 @@ import {
   Star,
   MoreVertical,
   Clock,
+  ChevronDown,
 } from 'lucide-react'
 import { InstagramIcon as Instagram } from '@/components/icons/InstagramIcon'
 import { demoAttendants } from '@/lib/demo'
@@ -1707,49 +1708,82 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                 <ArrowLeft className="w-5 h-5" />
               </button>
 
-              {/* Tocar no avatar/nome abre a ficha do cliente — é o gesto que a pessoa já
-                  traz do WhatsApp. Antes o único caminho era um ícone de Kanban sem rótulo
-                  no canto, que ninguém associa a "dados do contato". */}
-              <button
-                type="button"
-                onClick={() => {
-                  setActiveTabRight('info')
-                  setMobilePane('details')
-                }}
-                className="flex items-center gap-2.5 min-w-0 flex-1 text-left py-1 pr-1 rounded-lg hover:bg-slate-800/50 transition focus:outline-none focus-visible:bg-slate-800/60"
-                aria-label={`Ver ficha de ${selectedConversation.contactName}`}
-              >
-                <Avatar name={selectedConversation.contactName} src={selectedConversation.contactAvatarUrl} size="md" />
-                <span className="min-w-0">
-                  <span className="flex items-center gap-1.5">
-                    <span className="text-sm font-semibold text-slate-100 truncate">
-                      {selectedConversation.contactName}
-                    </span>
-                    {selectedConversation.isGroup && <Users className="w-3.5 h-3.5 text-indigo-400 shrink-0" />}
-                  </span>
-                  {/* Linha de contexto comercial: a etapa do funil quando existe pedido
-                      (o que a vendedora precisa saber pra conduzir a conversa), e o canal
-                      como recurso quando ainda não existe. */}
-                  <span className="flex items-center gap-1.5 text-[11px] text-slate-400 truncate">
-                    {selectedContactStage ? (
-                      <>
-                        <span
-                          className={`w-1.5 h-1.5 rounded-full shrink-0 ${STAGE_DOT_CLASS[selectedContactStage.color]}`}
-                          aria-hidden="true"
-                        />
-                        <span className="truncate">{selectedContactStage.label}</span>
-                      </>
-                    ) : (
-                      <span className="truncate">
-                        {selectedConversation.channel === 'whatsapp' ? 'WhatsApp' : 'Instagram'}
-                        {selectedConversation.contactPhone && selectedConversation.contactPhone !== '-'
-                          ? ` · ${selectedConversation.contactPhone}`
-                          : ''}
+              {/* Avatar e nome abrem a ficha do cliente — o gesto que a pessoa já traz do
+                  WhatsApp. Ficam separados da linha de baixo (botões irmãos, não aninhados)
+                  porque cada uma leva a um lugar diferente. */}
+              <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveTabRight('info')
+                    setMobilePane('details')
+                  }}
+                  className="shrink-0 rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+                  aria-label={`Ver ficha de ${selectedConversation.contactName}`}
+                >
+                  <Avatar name={selectedConversation.contactName} src={selectedConversation.contactAvatarUrl} size="md" />
+                </button>
+
+                <div className="min-w-0 flex-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveTabRight('info')
+                      setMobilePane('details')
+                    }}
+                    className="block max-w-full text-left rounded focus:outline-none focus-visible:bg-slate-800/60"
+                  >
+                    <span className="flex items-center gap-1.5">
+                      <span className="text-sm font-semibold text-slate-100 truncate">
+                        {selectedConversation.contactName}
                       </span>
-                    )}
-                  </span>
-                </span>
-              </button>
+                      {selectedConversation.isGroup && <Users className="w-3.5 h-3.5 text-indigo-400 shrink-0" />}
+                    </span>
+                  </button>
+
+                  {/* AÇÃO RÁPIDA: a etapa do funil, a um toque.
+                      Antes esta linha mostrava canal e telefone — informação que a ficha do
+                      cliente já traz, gastando o lugar mais visível da tela com algo que
+                      ninguém precisa no meio do atendimento. Agora ela É o controle: mostra
+                      em que pé está o cliente e abre a troca de etapa direto.
+                      De 3 toques (⋮ → Mover no funil → escolher) pra 2.
+                      É a única ação promovida de propósito: com 24 conversas em andamento e
+                      ZERO pedidos registrados, classificar é o passo que estava caro demais
+                      pra acontecer. Promover tudo seria o mesmo que não promover nada. */}
+                  {viewMode === 'real' && !!selectedConversation.contactId ? (
+                    <button
+                      type="button"
+                      onClick={() => setStageSheetOpen(true)}
+                      className="flex items-center gap-1.5 max-w-full py-0.5 -my-0.5 rounded text-[11px] text-slate-400 hover:text-slate-200 transition focus:outline-none focus-visible:bg-slate-800/60"
+                      aria-label={
+                        selectedContactStage
+                          ? `Etapa do funil: ${selectedContactStage.label}. Tocar para mover.`
+                          : 'Classificar este cliente no funil'
+                      }
+                    >
+                      {selectedContactStage ? (
+                        <>
+                          <span
+                            className={`w-1.5 h-1.5 rounded-full shrink-0 ${STAGE_DOT_CLASS[selectedContactStage.color]}`}
+                            aria-hidden="true"
+                          />
+                          <span className="truncate">{selectedContactStage.label}</span>
+                        </>
+                      ) : (
+                        <>
+                          <Kanban className="w-3 h-3 shrink-0" />
+                          <span className="truncate">Classificar no funil</span>
+                        </>
+                      )}
+                      <ChevronDown className="w-3 h-3 shrink-0 opacity-60" />
+                    </button>
+                  ) : (
+                    <span className="block text-[11px] text-slate-400 truncate">
+                      {selectedConversation.channel === 'whatsapp' ? 'WhatsApp' : 'Instagram'}
+                    </span>
+                  )}
+                </div>
+              </div>
 
               {selectedConversation.currentAssigneeId !== effectiveCurrentUserId && (
                 <Button onClick={() => handleAssume(selectedConversation.id)} size="sm" variant="primary" className="shrink-0">
