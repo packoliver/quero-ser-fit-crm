@@ -4,6 +4,24 @@ export type StageColor = NonNullable<BadgeProps['variant']>
 
 export const STAGE_COLOR_OPTIONS: StageColor[] = ['slate', 'amber', 'emerald', 'teal', 'indigo', 'rose', 'pink']
 
+/**
+ * Fundo do pontinho que indica a etapa quando não cabe uma etiqueta inteira — no cabeçalho
+ * da conversa, por exemplo, onde o espaço é do nome do cliente.
+ *
+ * Escrito por extenso porque o Tailwind lê as classes no código-fonte em tempo de build:
+ * montar `bg-${color}-400` em tempo de execução geraria uma classe que não existe na folha
+ * de estilo, e o pontinho sairia invisível.
+ */
+export const STAGE_DOT_CLASS: Record<StageColor, string> = {
+  slate: 'bg-slate-400',
+  amber: 'bg-amber-400',
+  emerald: 'bg-emerald-400',
+  teal: 'bg-teal-400',
+  indigo: 'bg-indigo-400',
+  rose: 'bg-rose-400',
+  pink: 'bg-pink-400',
+}
+
 export interface PipelineStage {
   id: string
   key: string

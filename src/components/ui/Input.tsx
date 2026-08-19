@@ -33,7 +33,12 @@ export function Input({
         )}
         <input
           id={inputId}
-          className={`w-full py-2.5 bg-slate-900/90 border rounded-xl text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500 transition ${
+          // 16px no celular, 12px do lg pra cima. Não é escolha estética: o Safari do
+          // iPhone dá zoom na página sozinho ao focar um campo com fonte MENOR que 16px, e
+          // aí a pessoa fica com o layout ampliado e torto até dar pinça pra voltar. A
+          // saída alternativa seria travar o zoom no viewport (user-scalable=no), o que
+          // tiraria de quem enxerga mal a única forma de ampliar a tela.
+          className={`w-full py-2.5 bg-slate-900/90 border rounded-xl text-base lg:text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500 transition ${
             icon ? 'pl-10 pr-4' : 'px-4'
           } ${
             error

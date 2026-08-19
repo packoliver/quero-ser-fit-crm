@@ -36,6 +36,8 @@ import {
   RotateCcw,
   Zap,
   Star,
+  MoreVertical,
+  Clock,
 } from 'lucide-react'
 import { InstagramIcon as Instagram } from '@/components/icons/InstagramIcon'
 import { demoAttendants } from '@/lib/demo'
@@ -46,6 +48,9 @@ import { Input } from '@/components/ui/Input'
 import { Modal } from '@/components/ui/Modal'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { Skeleton } from '@/components/ui/Skeleton'
+import { BottomSheet, BottomSheetItem } from '@/components/ui/BottomSheet'
+import { Toast } from '@/components/ui/Toast'
+import { useImmersiveMobile } from '@/components/layout/MobileChromeProvider'
 import { createClient } from '@/lib/supabase/client'
 import { subscribeToPush, unsubscribeFromPush } from '@/lib/pwa/subscribe'
 import { useDemoStorage } from '@/lib/demo/useDemoStorage'
@@ -53,7 +58,7 @@ import { DealStage, UserRole, CustomPermissions } from '@/types/database'
 import { hasPermission } from '@/lib/security/permissions'
 import { cacheEntity, readCachedEntity, queueEntityMutation } from '@/lib/offline/repository'
 import { getOfflineScope } from '@/lib/offline/scope'
-import { PipelineStage, PipelineStageRow, DEFAULT_PIPELINE_STAGES, mapPipelineStageRow } from '@/lib/pipeline/stages'
+import { PipelineStage, PipelineStageRow, DEFAULT_PIPELINE_STAGES, mapPipelineStageRow, STAGE_DOT_CLASS } from '@/lib/pipeline/stages'
 import { compressImageIfLarge, compressVideo, CompressProgress } from '@/lib/media/compress'
 
 type MediaType = 'image' | 'video' | 'audio' | 'document' | 'sticker'
@@ -164,6 +169,37 @@ const formatDateHeader = (iso: string | undefined): string => {
   })
 }
 
+/**
+ * Prazos prontos pro lembrete de retorno.
+ *
+ * São opções fixas em vez de um seletor de data porque a pergunta real é "quando eu volto
+ * a falar com essa pessoa?", e a resposta quase sempre é uma dessas quatro. Abrir um
+ * calendário no celular pra marcar "amanhã" custa muito mais toques do que a decisão vale
+ * — e prazo que dá trabalho de marcar simplesmente não é marcado.
+ *
+ * As datas são calculadas na hora do clique (função, não valor), senão ficariam congeladas
+ * no momento em que a página carregou.
+ */
+interface ReminderOption {
+  label: string
+  hint: string
+  dueDate: () => Date
+}
+
+const atHour = (daysFromNow: number, hour: number): Date => {
+  const d = new Date()
+  d.setDate(d.getDate() + daysFromNow)
+  d.setHours(hour, 0, 0, 0)
+  return d
+}
+
+const REMINDER_OPTIONS: ReminderOption[] = [
+  { label: 'Daqui a 2 horas', hint: 'Ainda hoje', dueDate: () => new Date(Date.now() + 2 * 60 * 60 * 1000) },
+  { label: 'Amanhã de manhã', hint: '09:00', dueDate: () => atHour(1, 9) },
+  { label: 'Em 3 dias', hint: '09:00', dueDate: () => atHour(3, 9) },
+  { label: 'Semana que vem', hint: '09:00', dueDate: () => atHour(7, 9) },
+]
+
 function InboxPageInner({ requestedConvId }: { requestedConvId: string | null }) {
   // Vem de links externos (ex: um card da aba Follow-up "Abrir conversa") — assim que a
   // lista real carrega, seleciona essa conversa automaticamente em vez de deixar o
@@ -238,6 +274,14 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
   const [newNoteText, setNewNoteText] = useState('')
   const [activeTabRight, setActiveTabRight] = useState<'info' | 'notes' | 'pedido'>('info')
   const [transferModalOpen, setTransferModalOpen] = useState(false)
+  // Painéis de ação da conversa. O menu "⋮" concentra o que antes eram até 4 botões
+  // disputando o cabeçalho; o de etapa é o atalho pra classificar no funil sem sair do
+  // chat — hoje o caminho pra isso é longo o bastante pra que ninguém faça (0 pedidos
+  // registrados com 24 conversas em andamento).
+  const [actionsSheetOpen, setActionsSheetOpen] = useState(false)
+  const [stageSheetOpen, setStageSheetOpen] = useState(false)
+  const [reminderSheetOpen, setReminderSheetOpen] = useState(false)
+  const [savingReminder, setSavingReminder] = useState(false)
   const [targetAttendantId, setTargetAttendantId] = useState('att-2')
   const [deleteMessageId, setDeleteMessageId] = useState<string | null>(null)
   const [deletingMessage, setDeletingMessage] = useState(false)
@@ -311,6 +355,44 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
   const showMobileList = mobilePane === 'list' || !selectedConversation
   const showMobileChat = mobilePane === 'chat' && !!selectedConversation
   const showMobileDetails = mobilePane === 'details' && !!selectedConversation
+
+  // Conversa aberta no celular toma a tela inteira: sem o cabeçalho global nem a barra
+  // inferior, que aqui só disputariam altura com as mensagens e o campo de digitar.
+  useImmersiveMobile(showMobileChat || showMobileDetails)
+
+  // A thread não rolava pro fim: abrir uma conversa mostrava as mensagens MAIS ANTIGAS, e
+  // mensagem nova chegando ficava fora da tela sem nenhum aviso. Nenhum app de mensagem se
+  // comporta assim, e o hábito da vendedora é o do WhatsApp — ela ia responder olhando pro
+  // começo do histórico.
+  const messagesContainerRef = useRef<HTMLDivElement>(null)
+  // Só rola sozinho se a pessoa já estava no fim. Se ela subiu pra reler algo, puxar a
+  // tela de volta a cada mensagem que chega seria pior do que não rolar nada.
+  const isNearBottomRef = useRef(true)
+
+  const handleMessagesScroll = () => {
+    const el = messagesContainerRef.current
+    if (!el) return
+    isNearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120
+  }
+
+  // Troca de conversa (ou o painel do chat aparecendo no celular): pula pro fim na hora,
+  // sem animação — é o estado inicial esperado, não uma transição que valha mostrar.
+  // `showMobileChat` entra aqui porque enquanto o painel está `hidden` sua altura é zero,
+  // então rolar antes dele aparecer não faria nada.
+  useEffect(() => {
+    const el = messagesContainerRef.current
+    if (!el) return
+    el.scrollTop = el.scrollHeight
+    isNearBottomRef.current = true
+  }, [selectedConvId, showMobileChat])
+
+  const selectedMessageCount = selectedConversation?.messages.length ?? 0
+  useEffect(() => {
+    if (!isNearBottomRef.current) return
+    const el = messagesContainerRef.current
+    if (!el) return
+    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+  }, [selectedMessageCount])
 
 
   const showToast = (msg: string) => {
@@ -1118,6 +1200,75 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
     }
   }
 
+  // O pedido em aberto deste contato, se existir. realDeals vem ordenado por created_at
+  // desc, então o primeiro encontrado é o mais recente — é ele que representa "em que pé
+  // está esse cliente" no cabeçalho da conversa.
+  const selectedContactDeal = selectedConversation?.contactId
+    ? realDeals.find((d) => d.contact_id === selectedConversation.contactId)
+    : undefined
+  const selectedContactStage = selectedContactDeal
+    ? dealStages.find((s) => s.key === selectedContactDeal.stage)
+    : undefined
+
+  // Mover a etapa do funil de dentro da conversa. Se o contato ainda não tem pedido, o
+  // primeiro toque CRIA um já na etapa escolhida, em vez de exigir que a vendedora vá até
+  // o Funil preencher um formulário antes de poder classificar — que é exatamente o passo
+  // onde o registro de pedido deixava de acontecer na prática.
+  const handleSelectStage = async (stage: DealStage) => {
+    if (!selectedConversation?.contactId) return
+    setStageSheetOpen(false)
+    if (selectedContactDeal) {
+      await handleMoveInlineDeal(selectedContactDeal.id, stage)
+    } else {
+      await createInlineDeal(selectedConversation.contactName, stage, null)
+    }
+  }
+
+  /**
+   * Cria um lembrete (tarefa) já amarrado a este cliente E a esta conversa.
+   *
+   * `conversation_id` e `contact_id` são colunas que a tabela `tasks` sempre teve e que
+   * ninguém preenchia — a tela de Tarefas só sabia criar tarefa solta, escolhendo o cliente
+   * num seletor. Preenchendo aqui, a tarefa vira um caminho de volta: a lista de Tarefas
+   * ganha um botão que abre exatamente esta conversa.
+   *
+   * A organização não vai no insert de propósito: o trigger trg_autofill_org_tasks a
+   * preenche a partir de quem está chamando, mesmo padrão do insert de pedidos.
+   */
+  const handleCreateReminder = async (option: ReminderOption) => {
+    if (!selectedConversation?.contactId) return
+    setReminderSheetOpen(false)
+    setSavingReminder(true)
+    setErrorMessage(null)
+    try {
+      const supabase = createClient()
+      const { error } = await (supabase as unknown as {
+        from: (t: string) => { insert: (d: unknown) => Promise<{ error: { message: string } | null }> }
+      })
+        .from('tasks')
+        .insert({
+          title: `Retornar contato com ${selectedConversation.contactName}`,
+          due_date: option.dueDate().toISOString(),
+          status: 'pending',
+          priority: 'media',
+          contact_id: selectedConversation.contactId,
+          conversation_id: selectedConversation.id,
+          assigned_to_id: currentUserRealId,
+        })
+
+      if (error) {
+        console.error('[Inbox] Falha ao criar lembrete:', error.message)
+        setErrorMessage('Não foi possível criar o lembrete.')
+        return
+      }
+      showToast(`Lembrete criado para ${option.label.toLowerCase()}.`)
+    } catch {
+      setErrorMessage('Erro ao criar o lembrete.')
+    } finally {
+      setSavingReminder(false)
+    }
+  }
+
   // Apply Queue, Channel, and Search Filters
   const filteredConversations = conversations.filter((c) => {
     const effectiveCurrentUserId = viewMode === 'real' ? currentUserRealId : currentUserId
@@ -1167,8 +1318,11 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
 
   return (
     <div className="flex flex-col h-full min-h-0 bg-[#0b1320] text-slate-100 overflow-hidden relative">
-      {/* Header Banner & Mode Selector */}
-      <div className="bg-gradient-to-r from-emerald-950 via-teal-950 to-slate-900 border-b border-emerald-800/40 px-4 py-2 flex items-center justify-between text-xs shrink-0">
+      {/* Header Banner & Mode Selector — some no celular: dizia "Conversas Conectadas ao
+          Supabase", que é informação de quem monta o sistema, não de quem atende, e comia
+          uma faixa inteira da tela. O que era útil aqui (ligar/desligar notificação) foi
+          pro cabeçalho da própria lista, ver abaixo. */}
+      <div className="hidden lg:flex bg-gradient-to-r from-emerald-950 via-teal-950 to-slate-900 border-b border-emerald-800/40 px-4 py-2 items-center justify-between text-xs shrink-0">
         <div className="flex items-center gap-2">
           {viewMode === 'demo' ? (
             <>
@@ -1229,11 +1383,7 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
         </div>
       </div>
 
-      {toastMessage && (
-        <div className="absolute top-14 right-6 z-50 bg-emerald-600 text-white px-4 py-2.5 rounded-xl shadow-2xl flex items-center gap-2 text-xs font-semibold animate-bounce">
-          <span>{toastMessage}</span>
-        </div>
-      )}
+      <Toast message={toastMessage} />
 
       {errorMessage && (
         <div className="bg-rose-950/80 border-b border-rose-800 text-rose-200 px-4 py-2 text-xs flex items-center gap-2 shrink-0">
@@ -1249,6 +1399,25 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
           showMobileList ? 'flex' : 'hidden lg:flex'
         }`}>
           <div className="p-3 border-b border-slate-800 space-y-2.5">
+            {/* Título + notificações, só no celular: aqui o cabeçalho global mostra a marca,
+                não onde a pessoa está. No desktop a barra lateral já responde isso. */}
+            <div className="lg:hidden flex items-center justify-between gap-2">
+              <h1 className="text-lg font-bold text-slate-100">Conversas</h1>
+              {viewMode === 'real' && (
+                <button
+                  onClick={toggleNotifications}
+                  aria-label={notificationsEnabled ? 'Desativar notificações de novas mensagens' : 'Ativar notificações de novas mensagens'}
+                  className={`p-2 rounded-xl border transition ${
+                    notificationsEnabled
+                      ? 'bg-emerald-950/60 border-emerald-800 text-emerald-400'
+                      : 'bg-slate-900 border-slate-800 text-slate-400'
+                  }`}
+                >
+                  {notificationsEnabled ? <Bell className="w-4 h-4" /> : <BellOff className="w-4 h-4" />}
+                </button>
+              )}
+            </div>
+
             <Input
               type="text"
               placeholder="Buscar cliente ou mensagem..."
@@ -1257,64 +1426,56 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
               icon={<Search className="w-4 h-4" />}
             />
 
-            {/* Queue Filter Tabs: Minhas, Fila de Espera, Todas */}
-            <div className="grid grid-cols-3 gap-1 bg-slate-900/90 p-1 rounded-xl border border-slate-800 text-xs">
-              <button
-                onClick={() => setFilterQueue('all')}
-                className={`py-1.5 px-2 rounded-lg font-medium text-center transition ${
-                  filterQueue === 'all' ? 'bg-slate-800 text-emerald-400 font-semibold' : 'text-slate-400 hover:text-slate-200'
-                }`}
-                suppressHydrationWarning
-              >
-                Todas ({conversations.length})
-              </button>
-              <button
-                onClick={() => setFilterQueue('mine')}
-                className={`py-1.5 px-2 rounded-lg font-medium text-center transition ${
-                  filterQueue === 'mine' ? 'bg-emerald-950/80 text-emerald-400 font-semibold' : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                Minhas
-              </button>
-              <button
-                onClick={() => setFilterQueue('unassigned')}
-                className={`py-1.5 px-2 rounded-lg font-medium text-center transition ${
-                  filterQueue === 'unassigned' ? 'bg-amber-950/80 text-amber-400 font-semibold' : 'text-slate-400 hover:text-slate-200'
-                }`}
-                suppressHydrationWarning
-              >
-                Fila ({conversations.filter((c) => !c.currentAssigneeId).length})
-              </button>
-            </div>
+            {/* Filtros numa faixa só, rolável na horizontal. Eram DUAS faixas empilhadas
+                (fila e canal), ~80px gastos antes da primeira conversa aparecer. São duas
+                dimensões independentes de verdade, então continuam separadas por um traço
+                em vez de viverem misturadas na mesma lista de opções. */}
+            <div className="flex items-center gap-1.5 overflow-x-auto -mx-1 px-1 pb-0.5 text-xs [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+              {([
+                { key: 'all', label: `Todas (${conversations.length})` },
+                { key: 'unassigned', label: `Sem responsável (${conversations.filter((c) => !c.currentAssigneeId).length})` },
+                { key: 'mine', label: 'Minhas' },
+              ] as const).map((chip) => (
+                <button
+                  key={chip.key}
+                  onClick={() => setFilterQueue(chip.key)}
+                  aria-pressed={filterQueue === chip.key}
+                  suppressHydrationWarning
+                  className={`shrink-0 px-3 py-1.5 rounded-full font-medium border transition whitespace-nowrap ${
+                    filterQueue === chip.key
+                      ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40 font-semibold'
+                      : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200'
+                  }`}
+                >
+                  {chip.label}
+                </button>
+              ))}
 
-            {/* Channel Filters: All, WhatsApp, Instagram */}
-            <div className="flex gap-1 bg-slate-900/60 p-1 rounded-lg border border-slate-800/80 text-[11px]">
-              <button
-                onClick={() => setFilterChannel('all')}
-                className={`flex-1 py-1 px-2 rounded-md font-medium text-center transition ${
-                  filterChannel === 'all' ? 'bg-slate-800 text-slate-200 font-semibold' : 'text-slate-400'
-                }`}
-              >
-                Todos Canais
-              </button>
-              <button
-                onClick={() => setFilterChannel('whatsapp')}
-                className={`flex-1 py-1 px-2 rounded-md font-medium flex items-center justify-center gap-1 transition ${
-                  filterChannel === 'whatsapp' ? 'bg-emerald-950/80 text-emerald-400 font-semibold' : 'text-slate-400'
-                }`}
-              >
-                <Phone className="w-3 h-3 text-emerald-400" />
-                <span>WhatsApp</span>
-              </button>
-              <button
-                onClick={() => setFilterChannel('instagram')}
-                className={`flex-1 py-1 px-2 rounded-md font-medium flex items-center justify-center gap-1 transition ${
-                  filterChannel === 'instagram' ? 'bg-pink-950/80 text-pink-400 font-semibold' : 'text-slate-400'
-                }`}
-              >
-                <Instagram className="w-3 h-3 text-pink-400" />
-                <span>Instagram</span>
-              </button>
+              <span className="shrink-0 w-px h-5 bg-slate-800 mx-0.5" aria-hidden="true" />
+
+              {([
+                { key: 'whatsapp', label: 'WhatsApp', Icon: Phone },
+                { key: 'instagram', label: 'Instagram', Icon: Instagram },
+              ] as const).map(({ key, label, Icon }) => {
+                const active = filterChannel === key
+                return (
+                  <button
+                    key={key}
+                    // Age como interruptor: tocar no canal já ativo volta pra "todos os
+                    // canais", em vez de exigir um terceiro botão só pra desfazer.
+                    onClick={() => setFilterChannel(active ? 'all' : key)}
+                    aria-pressed={active}
+                    className={`shrink-0 px-3 py-1.5 rounded-full font-medium border transition whitespace-nowrap flex items-center gap-1.5 ${
+                      active
+                        ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40 font-semibold'
+                        : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200'
+                    }`}
+                  >
+                    <Icon className="w-3 h-3" />
+                    {label}
+                  </button>
+                )
+              })}
             </div>
           </div>
 
@@ -1367,52 +1528,63 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                       <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">{dateLabel}</span>
                     </div>
                   )}
+                  {/* Linha no formato que a vendedora já lê sem pensar: foto, nome, o que a
+                      pessoa falou por último, horário. O canal virou um selo pequeno na
+                      quina da foto e o estado do atendimento virou uma linha de texto
+                      discreta — antes eram até TRÊS etiquetas coloridas por linha (canal +
+                      grupo + fila/responsável), o que transformava a lista num mosaico e
+                      empurrava a última mensagem, que é o que realmente importa, pra
+                      terceiro plano. */}
                   <div
                     onClick={() => {
                       setSelectedConvId(conv.id)
                       setMobilePane('chat')
                     }}
-                    className={`p-3.5 cursor-pointer transition flex items-start gap-3 ${
-                      isSelected ? 'bg-slate-800/90 border-l-4 border-l-emerald-400' : 'hover:bg-slate-800/40'
+                    className={`px-3.5 py-3 cursor-pointer transition flex items-center gap-3 ${
+                      isSelected ? 'bg-slate-800/90 lg:border-l-4 lg:border-l-emerald-400' : 'hover:bg-slate-800/40 active:bg-slate-800/60'
                     }`}
                   >
-                    <Avatar name={conv.contactName} src={conv.contactAvatarUrl} size="md" />
+                    <div className="relative shrink-0">
+                      <Avatar name={conv.contactName} src={conv.contactAvatarUrl} size="md" />
+                      <span
+                        className={`absolute -bottom-0.5 -right-0.5 w-4 h-4 rounded-full flex items-center justify-center border-2 border-[#0f172a] ${
+                          isWhatsApp ? 'bg-emerald-500 text-slate-950' : 'bg-pink-500 text-white'
+                        }`}
+                        title={isWhatsApp ? 'WhatsApp' : 'Instagram'}
+                      >
+                        {isWhatsApp ? <Phone className="w-2 h-2" /> : <Instagram className="w-2 h-2" />}
+                        <span className="sr-only">{isWhatsApp ? 'WhatsApp' : 'Instagram'}</span>
+                      </span>
+                    </div>
 
                     <div className="flex-1 min-w-0">
-                      <div className="flex justify-between items-baseline mb-1">
-                        <h3 className="text-xs font-semibold text-slate-200 truncate">{conv.contactName}</h3>
-                        <span className="text-[10px] text-slate-500">{conv.lastMessageTime}</span>
+                      <div className="flex justify-between items-baseline gap-2">
+                        <h3 className="text-sm font-semibold text-slate-100 truncate flex items-center gap-1.5">
+                          <span className="truncate">{conv.contactName}</span>
+                          {conv.isGroup && <Users className="w-3.5 h-3.5 text-indigo-400 shrink-0" />}
+                        </h3>
+                        <span className="text-[10px] text-slate-500 shrink-0 tabular-nums">{conv.lastMessageTime}</span>
                       </div>
-                      <p className="text-xs text-slate-400 truncate mb-1.5">{conv.lastMessage}</p>
+                      <p className="text-xs text-slate-400 truncate mt-0.5">{conv.lastMessage}</p>
 
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        {isWhatsApp ? (
-                          <Badge variant="emerald" icon={<Phone className="w-3 h-3" />}>
-                            WhatsApp
-                          </Badge>
-                        ) : (
-                          <Badge variant="pink" icon={<Instagram className="w-3 h-3" />}>
-                            Instagram
-                          </Badge>
-                        )}
-                        {conv.isGroup && (
-                          <Badge variant="indigo" icon={<Users className="w-3 h-3" />}>
-                            Grupo
-                          </Badge>
-                        )}
-
-                        {conv.status === 'closed' ? (
-                          <Badge variant="slate" icon={<Archive className="w-3 h-3" />}>
-                            Encerrada
-                          </Badge>
-                        ) : !conv.currentAssigneeId ? (
-                          <Badge variant="amber">Fila de Espera</Badge>
-                        ) : (
-                          <Badge variant="teal" icon={<User className="w-3 h-3" />}>
-                            {conv.currentAssigneeName}
-                          </Badge>
-                        )}
-                      </div>
+                      {/* Só aparece quando diz algo: conversa encerrada, ninguém atendendo,
+                          ou quem está atendendo. Nunca as três coisas ao mesmo tempo. */}
+                      {conv.status === 'closed' ? (
+                        <span className="flex items-center gap-1 text-[10px] text-slate-500 mt-1">
+                          <Archive className="w-3 h-3 shrink-0" />
+                          Encerrada
+                        </span>
+                      ) : !conv.currentAssigneeId ? (
+                        <span className="flex items-center gap-1.5 text-[10px] text-amber-400/90 mt-1">
+                          <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" aria-hidden="true" />
+                          Sem responsável
+                        </span>
+                      ) : (
+                        <span className="flex items-center gap-1 text-[10px] text-slate-500 mt-1 truncate">
+                          <User className="w-3 h-3 shrink-0" />
+                          <span className="truncate">{conv.currentAssigneeName}</span>
+                        </span>
+                      )}
                     </div>
                   </div>
                   </Fragment>
@@ -1427,77 +1599,80 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
           <div className={`flex-1 flex flex-col bg-[#0b1320] min-w-0 ${
             showMobileChat ? 'flex' : 'hidden lg:flex'
           }`}>
-            {/* Thread Header */}
-            <div className="p-3.5 border-b border-slate-800 bg-[#0f172a]/90 flex items-center justify-between gap-3 shrink-0">
-              <div className="flex items-center gap-3 min-w-0 flex-1">
-                <button
-                  type="button"
-                  onClick={() => setMobilePane('list')}
-                  className="lg:hidden p-2 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition shrink-0"
-                  aria-label="Voltar para a lista de conversas"
-                  title="Voltar para a lista"
-                >
-                  <ArrowLeft className="w-4 h-4" />
-                </button>
+            {/* Thread Header — voltar, quem é o cliente, e um menu. Antes havia até quatro
+                botões com texto ("Assumir", "Transferir", "Encerrar" + um ícone de Kanban)
+                brigando por espaço com o nome numa tela de 375px. Só "Assumir" continua
+                visível: é a ação de abrir a conversa, e some assim que ela é feita. */}
+            <div className="px-2 py-2 lg:px-3.5 lg:py-3 border-b border-slate-800 bg-[#0f172a]/90 flex items-center gap-1.5 shrink-0">
+              <button
+                type="button"
+                onClick={() => setMobilePane('list')}
+                className="lg:hidden p-2 -mr-0.5 rounded-lg text-slate-300 hover:text-slate-100 hover:bg-slate-800 transition shrink-0"
+                aria-label="Voltar para a lista de conversas"
+              >
+                <ArrowLeft className="w-5 h-5" />
+              </button>
+
+              {/* Tocar no avatar/nome abre a ficha do cliente — é o gesto que a pessoa já
+                  traz do WhatsApp. Antes o único caminho era um ícone de Kanban sem rótulo
+                  no canto, que ninguém associa a "dados do contato". */}
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveTabRight('info')
+                  setMobilePane('details')
+                }}
+                className="flex items-center gap-2.5 min-w-0 flex-1 text-left py-1 pr-1 rounded-lg hover:bg-slate-800/50 transition focus:outline-none focus-visible:bg-slate-800/60"
+                aria-label={`Ver ficha de ${selectedConversation.contactName}`}
+              >
                 <Avatar name={selectedConversation.contactName} src={selectedConversation.contactAvatarUrl} size="md" />
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <h2 className="text-sm font-bold text-slate-100 truncate">{selectedConversation.contactName}</h2>
-                    <Badge variant={selectedConversation.channel === 'whatsapp' ? 'emerald' : 'pink'}>
-                      {selectedConversation.channel === 'whatsapp' ? 'WhatsApp' : 'Instagram Direct'}
-                    </Badge>
-                    {selectedConversation.isGroup && (
-                      <Badge variant="indigo" icon={<Users className="w-3 h-3" />}>
-                        Grupo
-                      </Badge>
+                <span className="min-w-0">
+                  <span className="flex items-center gap-1.5">
+                    <span className="text-sm font-semibold text-slate-100 truncate">
+                      {selectedConversation.contactName}
+                    </span>
+                    {selectedConversation.isGroup && <Users className="w-3.5 h-3.5 text-indigo-400 shrink-0" />}
+                  </span>
+                  {/* Linha de contexto comercial: a etapa do funil quando existe pedido
+                      (o que a vendedora precisa saber pra conduzir a conversa), e o canal
+                      como recurso quando ainda não existe. */}
+                  <span className="flex items-center gap-1.5 text-[11px] text-slate-400 truncate">
+                    {selectedContactStage ? (
+                      <>
+                        <span
+                          className={`w-1.5 h-1.5 rounded-full shrink-0 ${STAGE_DOT_CLASS[selectedContactStage.color]}`}
+                          aria-hidden="true"
+                        />
+                        <span className="truncate">{selectedContactStage.label}</span>
+                      </>
+                    ) : (
+                      <span className="truncate">
+                        {selectedConversation.channel === 'whatsapp' ? 'WhatsApp' : 'Instagram'}
+                        {selectedConversation.contactPhone && selectedConversation.contactPhone !== '-'
+                          ? ` · ${selectedConversation.contactPhone}`
+                          : ''}
+                      </span>
                     )}
-                  </div>
-                  <p className="text-xs text-slate-400">{selectedConversation.contactPhone}</p>
-                </div>
-              </div>
+                  </span>
+                </span>
+              </button>
 
-              <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
-                {/* Só no celular — em telas grandes essa coluna já aparece do lado, ver
-                    showMobileDetails acima. Sem isso, "Pedido" (mover contato pro funil)
-                    fica inacessível pra quem só usa o Inbox no celular. */}
-                <button
-                  type="button"
-                  onClick={() => setMobilePane('details')}
-                  className="lg:hidden p-2 rounded-xl bg-slate-900 border border-slate-700 text-slate-400 hover:text-emerald-400 hover:border-emerald-700 transition shrink-0"
-                  aria-label="Ver perfil, notas e pedido deste contato"
-                  title="Perfil, notas e pedido"
-                >
-                  <Kanban className="w-4 h-4" />
-                </button>
+              {selectedConversation.currentAssigneeId !== effectiveCurrentUserId && (
+                <Button onClick={() => handleAssume(selectedConversation.id)} size="sm" variant="primary" className="shrink-0">
+                  <UserPlus className="w-3.5 h-3.5" />
+                  <span>Assumir</span>
+                </Button>
+              )}
 
-                {selectedConversation.currentAssigneeId !== effectiveCurrentUserId && (
-                  <Button onClick={() => handleAssume(selectedConversation.id)} size="sm" variant="primary">
-                    <UserPlus className="w-3.5 h-3.5" />
-                    <span>Assumir</span>
-                  </Button>
-                )}
-
-                {canTransferConversations && (
-                  <Button onClick={() => setTransferModalOpen(true)} size="sm" variant="secondary">
-                    <ArrowRightLeft className="w-3.5 h-3.5" />
-                    <span>Transferir</span>
-                  </Button>
-                )}
-
-                {canCloseConversations && (
-                  isConversationClosed ? (
-                    <Button onClick={() => handleReopenConversation(selectedConversation.id)} size="sm" variant="secondary">
-                      <RotateCcw className="w-3.5 h-3.5" />
-                      <span>Reabrir</span>
-                    </Button>
-                  ) : (
-                    <Button onClick={() => handleCloseConversation(selectedConversation.id)} size="sm" variant="secondary">
-                      <Archive className="w-3.5 h-3.5" />
-                      <span>Encerrar</span>
-                    </Button>
-                  )
-                )}
-              </div>
+              <button
+                type="button"
+                onClick={() => setActionsSheetOpen(true)}
+                className="p-2 rounded-lg text-slate-300 hover:text-slate-100 hover:bg-slate-800 transition shrink-0"
+                aria-label="Mais ações desta conversa"
+                title="Mais ações"
+              >
+                <MoreVertical className="w-5 h-5" />
+              </button>
             </div>
 
             {isConversationClosed && (
@@ -1518,7 +1693,11 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
             )}
 
             {/* Thread Messages */}
-            <div className="flex-1 p-4 overflow-y-auto space-y-3.5 bg-[#080e18]">
+            <div
+              ref={messagesContainerRef}
+              onScroll={handleMessagesScroll}
+              className="flex-1 min-h-0 p-4 overflow-y-auto space-y-3.5 bg-[#080e18]"
+            >
               {selectedConversation.messages.map((msg) => {
                 if (msg.senderType === 'system') {
                   return (
@@ -1758,11 +1937,14 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                 )}
                 <input
                   type="text"
-                  placeholder="Digite sua resposta..."
+                  placeholder="Mensagem"
                   value={newMessageText}
                   onChange={(e) => setNewMessageText(e.target.value)}
                   disabled={isSendingMessage || uploadingMedia || !!compressionProgress}
-                  className="flex-1 min-w-0 px-4 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-xs text-slate-100 focus:outline-none focus:border-emerald-500 disabled:opacity-50"
+                  // text-base no celular pelo mesmo motivo do componente Input: fonte menor
+                  // que 16px faz o Safari do iPhone dar zoom ao focar. Num campo que é
+                  // focado o tempo todo, esse seria o incômodo mais repetido do app.
+                  className="flex-1 min-w-0 px-4 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-base lg:text-xs text-slate-100 focus:outline-none focus:border-emerald-500 disabled:opacity-50"
                 />
                 <Button type="submit" disabled={!newMessageText.trim() || isSendingMessage || uploadingMedia || !!compressionProgress} size="md" variant="primary">
                   {isSendingMessage ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
@@ -1772,19 +1954,21 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
             )}
           </div>
         ) : (
-          /* Empty State when no conversation selected */
-          <div className="flex-1 flex flex-col items-center justify-center p-8 text-center text-slate-400 bg-[#080e18]">
-            <InboxIcon className="w-12 h-12 text-slate-600 mb-3 animate-pulse" />
+          /* Empty State when no conversation selected — `hidden lg:flex` porque no celular
+             quem manda é a lista, que já ocupa a tela toda. Sem isso, esta coluna entrava
+             na mesma linha flex que ela e disputava largura com a lista. */
+          <div className="hidden lg:flex flex-1 flex-col items-center justify-center p-8 text-center text-slate-400 bg-[#080e18]">
+            <InboxIcon className="w-12 h-12 text-slate-600 mb-3" />
             <h3 className="text-base font-bold text-slate-200">Nenhuma conversa selecionada</h3>
             <p className="text-xs text-slate-400 max-w-sm mt-1">
-              Selecione um contato na lista lateral para iniciar ou continuar o atendimento.
+              Escolha um contato na lista ao lado para começar ou continuar o atendimento.
             </p>
           </div>
         )}
 
         {/* Col 3: Contact Profile & Internal Notes */}
         {selectedConversation && (
-          <div className={`w-full lg:w-72 lg:w-80 border-l border-slate-800 bg-[#0f172a] flex-col shrink-0 ${
+          <div className={`w-full lg:w-80 border-l border-slate-800 bg-[#0f172a] flex-col shrink-0 ${
             showMobileDetails ? 'flex' : 'hidden lg:flex'
           }`}>
             <div className="flex items-center border-b border-slate-800 text-xs">
@@ -1904,7 +2088,7 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                     placeholder="Nota interna privada visível para a equipe..."
                     value={newNoteText}
                     onChange={(e) => setNewNoteText(e.target.value)}
-                    className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-emerald-500"
+                    className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-base lg:text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-emerald-500"
                   />
                   <Button type="submit" disabled={!newNoteText.trim()} variant="secondary" className="w-full">
                     Adicionar Nota
@@ -1996,19 +2180,19 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                         placeholder="Ex: Kit marmitas fit semanal"
                         value={newDealTitle}
                         onChange={(e) => setNewDealTitle(e.target.value)}
-                        className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-emerald-500 text-xs"
+                        className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-emerald-500 text-base lg:text-xs"
                       />
                       <input
                         placeholder="Valor (R$) — opcional"
                         inputMode="decimal"
                         value={newDealValue}
                         onChange={(e) => setNewDealValue(e.target.value)}
-                        className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-emerald-500 text-xs"
+                        className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-emerald-500 text-base lg:text-xs"
                       />
                       <select
                         value={newDealStage}
                         onChange={(e) => setNewDealStage(e.target.value as DealStage)}
-                        className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-slate-100 focus:outline-none focus:border-emerald-500 text-xs"
+                        className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-slate-100 focus:outline-none focus:border-emerald-500 text-base lg:text-xs"
                       >
                         {dealStages.map((s) => (
                           <option key={s.key} value={s.key}>
@@ -2029,6 +2213,144 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
         )}
       </div>
 
+      {/* Menu "⋮" da conversa — o que antes eram botões soltos no cabeçalho, mais os
+          caminhos que só existiam escondidos atrás de um ícone (ficha, notas, pedido). */}
+      <BottomSheet
+        isOpen={actionsSheetOpen}
+        onClose={() => setActionsSheetOpen(false)}
+        title="Ações da conversa"
+        description={selectedConversation?.contactName}
+      >
+        <BottomSheetItem
+          icon={<Info className="w-[18px] h-[18px]" />}
+          label="Ver ficha do cliente"
+          onClick={() => {
+            setActionsSheetOpen(false)
+            setActiveTabRight('info')
+            setMobilePane('details')
+          }}
+        />
+        <BottomSheetItem
+          icon={<Kanban className="w-[18px] h-[18px]" />}
+          label={selectedContactStage ? 'Mover no funil' : 'Classificar no funil'}
+          hint={
+            viewMode !== 'real' || !selectedConversation?.contactId
+              ? 'Disponível no modo com dados reais'
+              : selectedContactStage
+              ? `Agora em "${selectedContactStage.label}"`
+              : 'Este cliente ainda não tem pedido'
+          }
+          disabled={viewMode !== 'real' || !selectedConversation?.contactId}
+          onClick={() => {
+            setActionsSheetOpen(false)
+            setStageSheetOpen(true)
+          }}
+        />
+        <BottomSheetItem
+          icon={<Clock className="w-[18px] h-[18px]" />}
+          label="Criar lembrete de retorno"
+          hint={
+            viewMode !== 'real' || !selectedConversation?.contactId
+              ? 'Disponível no modo com dados reais'
+              : 'Vira uma tarefa ligada a esta conversa'
+          }
+          disabled={viewMode !== 'real' || !selectedConversation?.contactId || savingReminder}
+          onClick={() => {
+            setActionsSheetOpen(false)
+            setReminderSheetOpen(true)
+          }}
+        />
+        <BottomSheetItem
+          icon={<FileText className="w-[18px] h-[18px]" />}
+          label="Notas internas"
+          hint="Só a equipe vê"
+          onClick={() => {
+            setActionsSheetOpen(false)
+            setActiveTabRight('notes')
+            setMobilePane('details')
+          }}
+        />
+        {canTransferConversations && (
+          <BottomSheetItem
+            icon={<ArrowRightLeft className="w-[18px] h-[18px]" />}
+            label="Transferir atendimento"
+            onClick={() => {
+              setActionsSheetOpen(false)
+              setTransferModalOpen(true)
+            }}
+          />
+        )}
+        {canCloseConversations && selectedConversation && (
+          <BottomSheetItem
+            icon={
+              isConversationClosed ? (
+                <RotateCcw className="w-[18px] h-[18px]" />
+              ) : (
+                <Archive className="w-[18px] h-[18px]" />
+              )
+            }
+            label={isConversationClosed ? 'Reabrir conversa' : 'Encerrar conversa'}
+            hint={isConversationClosed ? undefined : 'Reabre sozinha se o cliente escrever'}
+            onClick={() => {
+              setActionsSheetOpen(false)
+              if (isConversationClosed) {
+                void handleReopenConversation(selectedConversation.id)
+              } else {
+                void handleCloseConversation(selectedConversation.id)
+              }
+            }}
+          />
+        )}
+      </BottomSheet>
+
+      {/* Etapa do funil sem sair da conversa. Se o cliente ainda não tem pedido, escolher
+          uma etapa aqui já cria — ver handleSelectStage. */}
+      <BottomSheet
+        isOpen={stageSheetOpen}
+        onClose={() => setStageSheetOpen(false)}
+        title={selectedContactDeal ? 'Mover para a etapa' : 'Classificar neste cliente'}
+        description={selectedConversation?.contactName}
+      >
+        {dealStages.map((stage) => (
+          <BottomSheetItem
+            key={stage.key}
+            icon={<span className={`w-2.5 h-2.5 rounded-full ${STAGE_DOT_CLASS[stage.color]}`} aria-hidden="true" />}
+            label={stage.label}
+            selected={selectedContactDeal?.stage === stage.key}
+            disabled={savingDeal}
+            onClick={() => void handleSelectStage(stage.key)}
+          />
+        ))}
+        {!selectedContactDeal && (
+          <p className="px-3 pt-2 text-[11px] text-slate-500 leading-relaxed">
+            Isso cria o pedido já nessa etapa, usando o nome do cliente como título. Dá pra
+            ajustar título e valor depois, na aba Pedido ou no Funil.
+          </p>
+        )}
+      </BottomSheet>
+
+      {/* Lembrete de retorno — prazos prontos, um toque cada. Ver REMINDER_OPTIONS. */}
+      <BottomSheet
+        isOpen={reminderSheetOpen}
+        onClose={() => setReminderSheetOpen(false)}
+        title="Lembrar de retornar"
+        description={selectedConversation?.contactName}
+      >
+        {REMINDER_OPTIONS.map((option) => (
+          <BottomSheetItem
+            key={option.label}
+            icon={<Clock className="w-[18px] h-[18px]" />}
+            label={option.label}
+            hint={option.hint}
+            disabled={savingReminder}
+            onClick={() => void handleCreateReminder(option)}
+          />
+        ))}
+        <p className="px-3 pt-2 text-[11px] text-slate-500 leading-relaxed">
+          A tarefa aparece em Tarefas com um atalho de volta pra esta conversa.
+        </p>
+      </BottomSheet>
+
       {/* Transfer Modal */}
       <Modal
         isOpen={transferModalOpen}
@@ -2045,7 +2367,7 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
           <select
             value={targetAttendantId}
             onChange={(e) => setTargetAttendantId(e.target.value)}
-            className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
+            className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-base lg:text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
           >
             {transferOptions.map((att) => (
               <option key={att.id} value={att.id}>
