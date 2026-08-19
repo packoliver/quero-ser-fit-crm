@@ -16,7 +16,6 @@ import {
   Pencil,
   Trash2,
   AlertTriangle,
-  CheckCircle2,
   Download,
   X,
 } from 'lucide-react'

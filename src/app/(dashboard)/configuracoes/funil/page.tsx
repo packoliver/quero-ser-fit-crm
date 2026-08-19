@@ -8,7 +8,6 @@ import {
   Trash2,
   AlertCircle,
   AlertTriangle,
-  CheckCircle2,
   RefreshCw,
   ChevronUp,
   ChevronDown,
@@ -35,7 +34,6 @@ import {
 } from '@/lib/pipeline/stages'
 import { UserRole, CustomPermissions } from '@/types/database'
 import { hasPermission } from '@/lib/security/permissions'
-
 const COLOR_LABELS: Record<StageColor, string> = {
   slate: 'Cinza',
   amber: 'Âmbar',
@@ -45,24 +43,19 @@ const COLOR_LABELS: Record<StageColor, string> = {
   pink: 'Rosa',
   indigo: 'Índigo',
 }
-
 const emptyForm = { id: '', label: '', color: 'slate' as StageColor, isWon: false, isLost: false }
-
 export default function EtapasDoFunilPage() {
   const [stages, setStages] = useState<PipelineStage[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [toast, setToast] = useState<string | null>(null)
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-
   const [formOpen, setFormOpen] = useState(false)
   const [form, setForm] = useState(emptyForm)
   const [saving, setSaving] = useState(false)
   const isEditing = !!form.id
-
   const [deleteTarget, setDeleteTarget] = useState<PipelineStage | null>(null)
   const [seeding, setSeeding] = useState(false)
-
   // Papel + overrides de permissão do usuário logado — controla se os controles de
   // criar/editar/excluir/reordenar aparecem (mesma lógica de canDeleteMessages no
   // Inbox). O item de menu já fica escondido de atendentes (adminOnly em
@@ -70,7 +63,6 @@ export default function EtapasDoFunilPage() {
   // manage_pipeline_stages de um gerente específico via permissões granulares.
   const [currentUserRole, setCurrentUserRole] = useState<UserRole | null>(null)
   const [currentUserPermissions, setCurrentUserPermissions] = useState<CustomPermissions | null>(null)
-
   useEffect(() => {
     const timer = setTimeout(() => {
       const supabase = createClient() as unknown as {
@@ -97,16 +89,13 @@ export default function EtapasDoFunilPage() {
     }, 0)
     return () => clearTimeout(timer)
   }, [])
-
   // Antes do papel carregar, currentUserRole é null → hasPermission trata como
   // 'attendant' (o menos privilegiado), então os controles não piscam aparecendo e
   // sumindo pra quem não pode usá-los.
   const canManageStages = hasPermission(currentUserRole || 'attendant', currentUserPermissions, 'manage_pipeline_stages')
-
   useEffect(() => () => {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
   }, [])
-
   const showToast = (msg: string) => {
     setToast(msg)
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
@@ -115,7 +104,6 @@ export default function EtapasDoFunilPage() {
       toastTimerRef.current = null
     }, 3500)
   }
-
   const fetchStages = useCallback(async () => {
     setLoading(true)
     setError(null)
@@ -131,7 +119,6 @@ export default function EtapasDoFunilPage() {
         .from('pipeline_stages')
         .select('id, key, label, color, position, is_won, is_lost')
         .order('position', { ascending: true })
-
       if (dbError) {
         setError('Não foi possível carregar as etapas do funil.')
         return
@@ -143,26 +130,22 @@ export default function EtapasDoFunilPage() {
       setLoading(false)
     }
   }, [])
-
   useEffect(() => {
     const timer = setTimeout(() => {
       void fetchStages()
     }, 0)
     return () => clearTimeout(timer)
   }, [fetchStages])
-
   const openCreate = () => {
     setForm(emptyForm)
     setError(null)
     setFormOpen(true)
   }
-
   const openEdit = (stage: PipelineStage) => {
     setForm({ id: stage.id, label: stage.label, color: stage.color, isWon: stage.isWon, isLost: stage.isLost })
     setError(null)
     setFormOpen(true)
   }
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!form.label.trim()) return
@@ -170,7 +153,6 @@ export default function EtapasDoFunilPage() {
     setError(null)
     try {
       const supabase = createClient()
-
       if (isEditing) {
         const { error: dbError } = await (supabase as unknown as {
           from: (t: string) => {
@@ -180,7 +162,6 @@ export default function EtapasDoFunilPage() {
           .from('pipeline_stages')
           .update({ label: form.label.trim(), color: form.color, is_won: form.isWon, is_lost: form.isLost })
           .eq('id', form.id)
-
         if (dbError) {
           setError('Falha ao salvar a etapa.')
           return
@@ -189,7 +170,6 @@ export default function EtapasDoFunilPage() {
       } else {
         const key = slugifyStageKey(form.label.trim(), stages.map((s) => s.key))
         const position = stages.length ? Math.max(...stages.map((s) => s.position)) + 1 : 0
-
         const { error: dbError } = await (supabase as unknown as {
           from: (t: string) => {
             insert: (v: Record<string, unknown>) => Promise<{ error: { message: string; code?: string } | null }>
@@ -197,14 +177,12 @@ export default function EtapasDoFunilPage() {
         })
           .from('pipeline_stages')
           .insert({ key, label: form.label.trim(), color: form.color, position, is_won: form.isWon, is_lost: form.isLost })
-
         if (dbError) {
           setError(dbError.code === '23505' ? 'Já existe uma etapa parecida com esse nome.' : 'Falha ao criar a etapa.')
           return
         }
         showToast('Etapa criada!')
       }
-
       setFormOpen(false)
       void fetchStages()
     } catch {
@@ -213,7 +191,6 @@ export default function EtapasDoFunilPage() {
       setSaving(false)
     }
   }
-
   const requestDelete = async (stage: PipelineStage) => {
     setError(null)
     if (stages.length <= 1) {
@@ -232,7 +209,6 @@ export default function EtapasDoFunilPage() {
         .from('deals')
         .select('id', { count: 'exact', head: true })
         .eq('stage', stage.key)
-
       if ((count || 0) > 0) {
         setError(
           `Essa etapa tem ${count} pedido${count === 1 ? '' : 's'} vinculado${count === 1 ? '' : 's'} no Funil. Mova ${count === 1 ? 'ele' : 'eles'} para outra etapa antes de excluir.`
@@ -244,7 +220,6 @@ export default function EtapasDoFunilPage() {
       setError('Erro ao verificar pedidos vinculados a essa etapa.')
     }
   }
-
   const handleDelete = async () => {
     if (!deleteTarget) return
     setError(null)
@@ -258,7 +233,6 @@ export default function EtapasDoFunilPage() {
         .from('pipeline_stages')
         .delete()
         .eq('id', deleteTarget.id)
-
       if (dbError) {
         setError('Falha ao excluir a etapa.')
         return
@@ -271,7 +245,6 @@ export default function EtapasDoFunilPage() {
       setDeleteTarget(null)
     }
   }
-
   // Reordenar troca a `position` da etapa com a vizinha (subir/descer) — mais simples e
   // confiável do que drag-and-drop pra uma lista curta como essa.
   const moveStage = async (index: number, direction: -1 | 1) => {
@@ -279,13 +252,11 @@ export default function EtapasDoFunilPage() {
     if (targetIndex < 0 || targetIndex >= stages.length) return
     const current = stages[index]
     const target = stages[targetIndex]
-
     const reordered = [...stages]
     reordered[index] = { ...target, position: current.position }
     reordered[targetIndex] = { ...current, position: target.position }
     reordered.sort((a, b) => a.position - b.position)
     setStages(reordered)
-
     try {
       const supabase = createClient()
       const db = supabase as unknown as {
@@ -302,7 +273,6 @@ export default function EtapasDoFunilPage() {
       void fetchStages()
     }
   }
-
   const handleSeedDefaults = async () => {
     setSeeding(true)
     setError(null)
@@ -321,7 +291,6 @@ export default function EtapasDoFunilPage() {
       })
         .from('pipeline_stages')
         .insert(payload)
-
       if (dbError) {
         setError('Falha ao criar as etapas padrão.')
         return
@@ -334,18 +303,15 @@ export default function EtapasDoFunilPage() {
       setSeeding(false)
     }
   }
-
   return (
     <div className="p-4 lg:p-8 space-y-6 max-w-5xl mx-auto relative">
       <Toast message={toast} />
-
       {error && (
         <div className="p-4 rounded-xl bg-rose-950/40 border border-rose-800/50 text-rose-300 text-xs flex items-center gap-3">
           <AlertCircle className="w-5 h-5 shrink-0 text-rose-400" />
           <span>{error}</span>
         </div>
       )}
-
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-xl font-bold text-slate-100 flex items-center gap-2">
@@ -364,7 +330,6 @@ export default function EtapasDoFunilPage() {
           </Button>
         )}
       </div>
-
       {!loading && stages.length === 0 ? (
         <EmptyState
           icon={<ListOrdered className="w-6 h-6" />}
@@ -468,7 +433,6 @@ export default function EtapasDoFunilPage() {
           </CardBody>
         </Card>
       )}
-
       {/* Create/Edit Modal */}
       <Modal
         isOpen={formOpen}
@@ -484,7 +448,6 @@ export default function EtapasDoFunilPage() {
             value={form.label}
             onChange={(e) => setForm({ ...form, label: e.target.value })}
           />
-
           <div>
             <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5">Cor</label>
             <div className="flex flex-wrap gap-2">
@@ -503,7 +466,6 @@ export default function EtapasDoFunilPage() {
               ))}
             </div>
           </div>
-
           <div className="space-y-2 pt-1">
             <label className="flex items-center gap-2 text-slate-300">
               <input
@@ -524,7 +486,6 @@ export default function EtapasDoFunilPage() {
               <span>Etapa de perda (pedido não foi adiante)</span>
             </label>
           </div>
-
           <div className="flex justify-end gap-2 pt-2">
             <Button variant="secondary" type="button" onClick={() => setFormOpen(false)}>
               Cancelar
@@ -535,7 +496,6 @@ export default function EtapasDoFunilPage() {
           </div>
         </form>
       </Modal>
-
       {/* Delete Confirmation Modal */}
       <Modal
         isOpen={!!deleteTarget}

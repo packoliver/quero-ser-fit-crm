@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { Clock, Save, AlertCircle, CheckCircle2, Star } from 'lucide-react'
+import { Clock, Save, AlertCircle, Star } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Toast } from '@/components/ui/Toast'

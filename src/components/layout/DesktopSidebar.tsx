@@ -5,6 +5,8 @@ import { usePathname } from 'next/navigation'
 import { Dumbbell } from 'lucide-react'
 import { getNavItemsForRole } from '@/lib/navigation'
 import { UserRole } from '@/types/database'
+import { useUnread } from '@/components/layout/UnreadProvider'
+import { formatUnreadBadge } from '@/lib/inbox/unread'
 
 export interface DesktopSidebarProps {
   userRole?: UserRole
@@ -13,6 +15,9 @@ export interface DesktopSidebarProps {
 export function DesktopSidebar({ userRole = 'admin' }: DesktopSidebarProps) {
   const pathname = usePathname()
   const navItems = getNavItemsForRole(userRole)
+  // Antes do return abaixo de propósito: hook não pode ficar depois de uma saída
+  // condicional, senão a ordem das chamadas muda entre renderizações e o React quebra.
+  const { total: unreadTotal } = useUnread()
 
   // Hide sidebar on public login pages if rendered inside non-grouped layout
   if (pathname === '/login' || pathname === '/recuperar-senha') {
@@ -60,7 +65,15 @@ export function DesktopSidebar({ userRole = 'admin' }: DesktopSidebarProps) {
               }`}
             >
               <Icon className={`w-4 h-4 ${isActive ? 'text-emerald-400' : 'text-slate-400'}`} />
-              <span>{item.label}</span>
+              <span className="flex-1">{item.label}</span>
+              {/* Mesma contagem da barra do celular (ver UnreadProvider) — aqui cabe ao
+                  lado do rótulo, então não precisa ficar por cima do ícone. */}
+              {item.href === '/inbox' && unreadTotal > 0 && (
+                <span className="min-w-[20px] h-5 px-1.5 rounded-full bg-emerald-500 text-slate-950 text-[10px] font-bold flex items-center justify-center tabular-nums shrink-0">
+                  {formatUnreadBadge(unreadTotal)}
+                  <span className="sr-only"> mensagens não lidas</span>
+                </span>
+              )}
             </Link>
           )
         })}

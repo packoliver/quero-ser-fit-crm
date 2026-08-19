@@ -4,6 +4,8 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { getMobilePrimaryNavItems, getMoreNavItems, MORE_NAV_ITEM, type NavItem } from '@/lib/navigation'
 import { UserRole } from '@/types/database'
+import { useUnread } from '@/components/layout/UnreadProvider'
+import { formatUnreadBadge } from '@/lib/inbox/unread'
 
 export interface MobileBottomNavProps {
   userRole?: UserRole
@@ -11,6 +13,9 @@ export interface MobileBottomNavProps {
 
 export function MobileBottomNav({ userRole = 'admin' }: MobileBottomNavProps) {
   const pathname = usePathname()
+  // Antes do return abaixo de propósito: hook não pode ficar depois de uma saída
+  // condicional, senão a ordem das chamadas muda entre renderizações e o React quebra.
+  const { total: unreadTotal } = useUnread()
 
   if (pathname === '/login' || pathname === '/recuperar-senha') {
     return null
@@ -55,7 +60,18 @@ export function MobileBottomNav({ userRole = 'admin' }: MobileBottomNavProps) {
                 isActive ? 'text-emerald-400' : 'text-slate-400 hover:text-slate-200'
               }`}
             >
-              <Icon className="w-5 h-5 shrink-0" />
+              <span className="relative shrink-0">
+                <Icon className="w-5 h-5" />
+                {/* Bolinha de não lidas, só em Conversas. Fica na quina do ícone (e não ao
+                    lado do rótulo) porque é ali que o olho já procura, em qualquer app de
+                    mensagem. */}
+                {item.href === '/inbox' && unreadTotal > 0 && (
+                  <span className="absolute -top-1.5 -right-2.5 min-w-[18px] h-[18px] px-1 rounded-full bg-emerald-500 text-slate-950 text-[10px] font-bold flex items-center justify-center tabular-nums">
+                    {formatUnreadBadge(unreadTotal)}
+                    <span className="sr-only"> mensagens não lidas</span>
+                  </span>
+                )}
+              </span>
               <span className={`truncate max-w-full px-0.5 ${isActive ? 'font-semibold' : ''}`}>{item.label}</span>
             </Link>
           )

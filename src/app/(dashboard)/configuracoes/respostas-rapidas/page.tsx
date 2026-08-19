@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Zap, Plus, Pencil, Trash2, AlertCircle, CheckCircle2, AlertTriangle, RefreshCw } from 'lucide-react'
+import { Zap, Plus, Pencil, Trash2, AlertCircle, AlertTriangle, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { Modal } from '@/components/ui/Modal'

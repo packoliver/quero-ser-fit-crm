@@ -11,7 +11,6 @@ import {
   Pencil,
   Trash2,
   AlertTriangle,
-  CheckCircle2,
   Phone,
   DollarSign,
   GripVertical,

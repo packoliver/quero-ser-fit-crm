@@ -6,6 +6,7 @@ import { Header } from '@/components/layout/Header'
 import { MobileBottomNav } from '@/components/layout/MobileBottomNav'
 import { CurrentUserProvider } from '@/components/layout/CurrentUserProvider'
 import { MobileChromeProvider, useMobileChrome } from '@/components/layout/MobileChromeProvider'
+import { UnreadProvider } from '@/components/layout/UnreadProvider'
 import { createClient } from '@/lib/supabase/client'
 import { UserRole } from '@/types/database'
 import { NetworkStatus } from '@/components/pwa/NetworkStatus'
@@ -103,13 +104,15 @@ export default function DashboardLayout({
   return (
     <CurrentUserProvider value={{ role: currentRole, user: realUser, isRealSession }}>
       <MobileChromeProvider>
-        <DashboardShell
-          currentRole={currentRole}
-          onToggleRole={isRealSession ? undefined : toggleDemoRole}
-          realUser={realUser}
-        >
-          {children}
-        </DashboardShell>
+        <UnreadProvider>
+          <DashboardShell
+            currentRole={currentRole}
+            onToggleRole={isRealSession ? undefined : toggleDemoRole}
+            realUser={realUser}
+          >
+            {children}
+          </DashboardShell>
+        </UnreadProvider>
       </MobileChromeProvider>
     </CurrentUserProvider>
   )

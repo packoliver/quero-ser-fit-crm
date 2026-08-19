@@ -6,7 +6,6 @@ import {
   ShieldCheck,
   UserPlus,
   Shield,
-  CheckCircle2,
   Sparkles,
   Database,
   AlertCircle,

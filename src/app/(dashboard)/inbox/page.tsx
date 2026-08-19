@@ -51,6 +51,8 @@ import { Skeleton } from '@/components/ui/Skeleton'
 import { BottomSheet, BottomSheetItem } from '@/components/ui/BottomSheet'
 import { Toast } from '@/components/ui/Toast'
 import { useImmersiveMobile } from '@/components/layout/MobileChromeProvider'
+import { useUnread } from '@/components/layout/UnreadProvider'
+import { formatUnreadBadge } from '@/lib/inbox/unread'
 import { createClient } from '@/lib/supabase/client'
 import { subscribeToPush, unsubscribeFromPush } from '@/lib/pwa/subscribe'
 import { useDemoStorage } from '@/lib/demo/useDemoStorage'
@@ -217,6 +219,10 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
   const [viewMode, setViewMode] = useState<'demo' | 'real'>(
     process.env.NEXT_PUBLIC_ENABLE_DEMO_MODE === 'true' ? 'demo' : 'real'
   )
+
+  // Contagem de não lidas — mora no layout (ver UnreadProvider) pra bolinha da navegação
+  // continuar valendo com o Inbox fechado.
+  const { counts: unreadCounts, markRead } = useUnread()
 
   // Real-mode data
   const [realConversations, setRealConversations] = useState<UiConversation[]>([])
@@ -393,6 +399,21 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
     if (!el) return
     el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
   }, [selectedMessageCount])
+
+  // Marca como lida enquanto a conversa está aberta e a pessoa está de fato olhando.
+  //
+  // Cobre os dois casos que o clique na lista não pega: conversa aberta por link (o card
+  // "Abrir conversa" do Follow-up e das Tarefas, que seleciona sozinho) e mensagem que
+  // chega com a conversa JÁ na tela — sem isso ela apareceria como não lida na frente de
+  // quem acabou de recebê-la.
+  //
+  // `document.hidden` importa: com a aba em segundo plano ninguém viu nada, e zerar o
+  // aviso aí faria a mensagem passar despercebida — que é o oposto do que a bolinha serve.
+  useEffect(() => {
+    if (viewMode !== 'real' || !selectedConversation || selectedMessageCount === 0) return
+    if (typeof document !== 'undefined' && document.hidden) return
+    markRead(selectedConversation.id)
+  }, [viewMode, selectedConversation, selectedMessageCount, markRead])
 
 
   const showToast = (msg: string) => {
@@ -1520,6 +1541,9 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                 // só agrupa visualmente o que já está na ordem certa.
                 const dateLabel = formatDateHeader(conv.lastMessageAtIso)
                 const showDateHeader = index === 0 || dateLabel !== formatDateHeader(filteredConversations[index - 1].lastMessageAtIso)
+                // Vem do UnreadProvider (layout), não daqui: a mesma contagem alimenta a
+                // bolinha da barra de navegação, que precisa funcionar com o Inbox fechado.
+                const unreadCount = unreadCounts[conv.id] || 0
 
                 return (
                   <Fragment key={conv.id}>
@@ -1539,6 +1563,7 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                     onClick={() => {
                       setSelectedConvId(conv.id)
                       setMobilePane('chat')
+                      markRead(conv.id)
                     }}
                     className={`px-3.5 py-3 cursor-pointer transition flex items-center gap-3 ${
                       isSelected ? 'bg-slate-800/90 lg:border-l-4 lg:border-l-emerald-400' : 'hover:bg-slate-800/40 active:bg-slate-800/60'
@@ -1563,9 +1588,33 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                           <span className="truncate">{conv.contactName}</span>
                           {conv.isGroup && <Users className="w-3.5 h-3.5 text-indigo-400 shrink-0" />}
                         </h3>
-                        <span className="text-[10px] text-slate-500 shrink-0 tabular-nums">{conv.lastMessageTime}</span>
+                        <span
+                          className={`text-[10px] shrink-0 tabular-nums ${
+                            unreadCount > 0 ? 'text-emerald-400 font-semibold' : 'text-slate-500'
+                          }`}
+                        >
+                          {conv.lastMessageTime}
+                        </span>
                       </div>
-                      <p className="text-xs text-slate-400 truncate mt-0.5">{conv.lastMessage}</p>
+                      <div className="flex items-center gap-2 mt-0.5">
+                        <p
+                          className={`text-xs truncate flex-1 ${
+                            unreadCount > 0 ? 'text-slate-200 font-medium' : 'text-slate-400'
+                          }`}
+                        >
+                          {conv.lastMessage}
+                        </p>
+                        {/* A bolinha na linha da última mensagem, como em qualquer app de
+                            mensagem. O horário e a prévia também escurecem/clareiam junto:
+                            depender só da bolinha deixaria a distinção invisível pra quem
+                            não enxerga bem a diferença entre verde e cinza. */}
+                        {unreadCount > 0 && (
+                          <span className="shrink-0 min-w-[20px] h-5 px-1.5 rounded-full bg-emerald-500 text-slate-950 text-[10px] font-bold flex items-center justify-center tabular-nums">
+                            {formatUnreadBadge(unreadCount)}
+                            <span className="sr-only"> não lidas</span>
+                          </span>
+                        )}
+                      </div>
 
                       {/* Só aparece quando diz algo: conversa encerrada, ninguém atendendo,
                           ou quem está atendendo. Nunca as três coisas ao mesmo tempo. */}
