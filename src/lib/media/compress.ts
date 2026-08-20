@@ -143,14 +143,35 @@ interface VideoPass {
   maxWidth: number
   /** CRF do libx264 — menor = mais qualidade e mais pesado. */
   crf: number
+  /** Teto de quadros por segundo. Celular grava a 60fps com frequência, e cada quadro
+   * custa tempo de codificação — cortar pela metade quase dobra a velocidade. */
+  fps: number
+  /** Bitrate do áudio em kbps (sempre mono, ver -ac 1). */
+  audioKbps: number
 }
 
-// Duas tentativas: a primeira prioriza qualidade (ainda em resolução alta o bastante pra
-// ver detalhe de tecido/acabamento), a segunda é bem mais agressiva — só usada se a
-// primeira não coube no limite.
+/**
+ * Alvo: qualidade de vídeo de WhatsApp.
+ *
+ * A configuração anterior mirava 1280px de largura com preset "veryfast" — bonito, e
+ * inviável na prática. Este conversor roda em JavaScript dentro do navegador, sem usar o
+ * chip de vídeo do aparelho, e medimos num iPhone real: a barra andou de 33% pra 37% em 18
+ * segundos, o que projeta ~6 MINUTOS pra um vídeo só. Como havia até duas tentativas, o
+ * pior caso passava de 10 minutos. Num CRM de vendas, isso é a venda esperando.
+ *
+ * O que mudou e por que cada coisa acelera:
+ * - 640px em vez de 1280px: um quarto dos pixels pra codificar.
+ * - fps travado em 30: vídeo de celular costuma vir a 60.
+ * - preset ultrafast: gera arquivo maior, mas sobra espaço de sobra (a saída típica fica
+ *   em 2-4 MB contra um teto de 24 MB), então trocar tamanho por tempo aqui é de graça.
+ * - áudio mono a 96k: fala de vendedora não precisa de estéreo.
+ *
+ * A segunda passagem virou só rede de segurança pra vídeo muito longo; na prática a
+ * primeira já cabe com folga.
+ */
 const VIDEO_PASSES: VideoPass[] = [
-  { maxWidth: 1280, crf: 28 },
-  { maxWidth: 854, crf: 32 },
+  { maxWidth: 640, crf: 30, fps: 30, audioKbps: 96 },
+  { maxWidth: 480, crf: 34, fps: 24, audioKbps: 64 },
 ]
 
 async function runVideoPass(
@@ -173,11 +194,14 @@ async function runVideoPass(
     await ffmpeg.exec([
       '-i', inputName,
       '-c:v', 'libx264',
-      '-preset', 'veryfast',
+      '-preset', 'ultrafast',
       '-crf', String(pass.crf),
-      '-vf', `scale='min(${pass.maxWidth},iw)':-2`,
+      // fps depois do scale: reduz a resolução primeiro, então há menos pixels pra
+      // descartar quadro.
+      '-vf', `scale='min(${pass.maxWidth},iw)':-2,fps=${pass.fps}`,
       '-c:a', 'aac',
-      '-b:a', '128k',
+      '-b:a', `${pass.audioKbps}k`,
+      '-ac', '1',
       '-movflags', '+faststart',
       outputName,
     ])

@@ -504,7 +504,12 @@ export default function FunilPage() {
   // Derivado em vez de sincronizado por efeito: se as etapas ainda não carregaram, ou o
   // admin apagou justo a que estava em foco, isso já cai na primeira sem nenhum estado
   // intermediário inválido no meio do caminho.
-  const currentMobileStage = activeStages.find((s) => s.key === mobileStageKey) || activeStages[0]
+  // Enquanto a pessoa não escolheu etapa, abre na primeira que TEM pedido — não na
+  // primeira da lista. Abrir em "Lead" vazio enquanto os pedidos estão em "Negociando"
+  // faz parecer que o funil está vazio, e obriga a caçar onde as coisas estão.
+  const primeiraEtapaComPedido = activeStages.find((s) => activeDealList.some((d) => dealStage(d) === s.key))
+  const currentMobileStage =
+    activeStages.find((s) => s.key === mobileStageKey) || primeiraEtapaComPedido || activeStages[0]
   const currentMobileStageIndex = activeStages.findIndex((s) => s.key === currentMobileStage?.key)
   const mobileStageDeals = activeDealList.filter((d) => dealStage(d) === currentMobileStage?.key)
   const mobileStageTotal = mobileStageDeals.reduce((sum, d) => sum + (dealValue(d) || 0), 0)
@@ -527,8 +532,12 @@ export default function FunilPage() {
               </Badge>
             )}
           </div>
+          {/* Instrução por dispositivo: no celular não se arrasta nada — mandar "arraste o
+              card" pra quem está no telefone é ensinar um gesto que não existe ali. */}
           <p className="text-xs text-slate-400 mt-1">
-            Acompanhe cada pedido do primeiro contato até o pós-venda. Arraste o card ou use o seletor &quot;Mover&quot;.
+            Acompanhe cada pedido do primeiro contato até o pós-venda.
+            <span className="hidden lg:inline"> Arraste o card ou use o seletor &quot;Mover&quot;.</span>
+            <span className="lg:hidden"> Toque em &quot;Mover&quot; pra trocar a etapa.</span>
           </p>
         </div>
 
