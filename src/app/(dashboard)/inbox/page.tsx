@@ -19,6 +19,7 @@ import {
   Loader2,
   Inbox as InboxIcon,
   Paperclip,
+  Mic,
   Download,
   File as FileIcon,
   Check,
@@ -64,6 +65,8 @@ import { cacheEntity, readCachedEntity, queueEntityMutation } from '@/lib/offlin
 import { getOfflineScope } from '@/lib/offline/scope'
 import { PipelineStage, PipelineStageRow, DEFAULT_PIPELINE_STAGES, mapPipelineStageRow, STAGE_DOT_CLASS } from '@/lib/pipeline/stages'
 import { compressImageIfLarge, compressVideo, CompressProgress } from '@/lib/media/compress'
+import { useVoiceRecorder } from '@/lib/media/useVoiceRecorder'
+import { formatarDuracao } from '@/lib/media/audio'
 
 type MediaType = 'image' | 'video' | 'audio' | 'document' | 'sticker'
 
@@ -302,6 +305,9 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
   // Progresso da compressão de foto/vídeo grande demais pro limite de 24MB (ver
   // src/lib/media/compress.ts) — null quando não está comprimindo nada.
   const [compressionProgress, setCompressionProgress] = useState<CompressProgress | null>(null)
+  // Preparo do áudio gravado. Separado do progresso de vídeo porque o texto na tela é
+  // outro, e porque no iPhone ele nunca acontece (ver prepararParaEnvio em media/audio.ts).
+  const [audioProgress, setAudioProgress] = useState<CompressProgress | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const cameraInputRef = useRef<HTMLInputElement>(null)
   const [newNoteText, setNewNoteText] = useState('')
@@ -385,6 +391,7 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
 
   const conversations: UiConversation[] = viewMode === 'real' ? realConversations : storedConversations
   const selectedConversation = conversations.find((c) => c.id === selectedConvId)
+  const isConversationClosed = selectedConversation?.status === 'closed'
   const showMobileList = mobilePane === 'list' || !selectedConversation
   const showMobileChat = mobilePane === 'chat' && !!selectedConversation
   const showMobileDetails = mobilePane === 'details' && !!selectedConversation
@@ -1067,39 +1074,20 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
   // our own API routes, since a large video could blow past a serverless function's
   // request body limit), then sends the message with the resulting public URL. Shared
   // by both the paperclip (any file) and the camera (photo capture) inputs.
-  const handleFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    let file = e.target.files?.[0]
-    e.target.value = ''
-    if (!file || !selectedConversation || viewMode !== 'real' || !selectedConversation.organizationId) return
-
-    setErrorMessage(null)
-
-    // Foto grande (câmera moderna facilmente passa de 8-15MB): comprime sempre que valer
-    // a pena, rápido via Canvas — não é exclusivo de quando estoura o limite, também
-    // deixa o envio mais rápido numa conexão de dados fraca.
-    if (file.type.startsWith('image/')) {
-      file = await compressImageIfLarge(file)
-    }
-
-    // Vídeo grande demais pro limite: tenta comprimir com ffmpeg.wasm (mais pesado — só
-    // entra em ação quando realmente precisa). Mostra o progresso porque isso pode levar
-    // de alguns segundos a mais de um minuto, dependendo do aparelho e do tamanho do vídeo.
-    if (file.type.startsWith('video/') && file.size > MAX_MEDIA_SIZE_BYTES) {
-      try {
-        const compressed = await compressVideo(file, MAX_MEDIA_SIZE_BYTES, setCompressionProgress)
-        if (compressed) {
-          file = compressed
-        } else {
-          setErrorMessage(
-            'Não foi possível comprimir esse vídeo o suficiente pra caber no limite de 24MB — tente um vídeo mais curto ou grave em qualidade menor.'
-          )
-          setCompressionProgress(null)
-          return
-        }
-      } finally {
-        setCompressionProgress(null)
-      }
-    }
+  /**
+   * Sobe um arquivo pro storage e manda como mensagem.
+   *
+   * Compartilhado por três origens que chegam aqui já com um File pronto: o clipe de
+   * anexo, a câmera e o áudio gravado no microfone. Antes isto vivia dentro de
+   * handleFileSelected, amarrado ao <input type="file"> — e a gravação não tem input
+   * nenhum.
+   *
+   * `comLegenda` decide se o texto digitado vai junto: faz sentido numa foto, não numa
+   * mensagem de voz (nem o WhatsApp deixa). O texto só é consumido depois que o upload
+   * deu certo, pra que uma falha de rede não apague o que a pessoa escreveu.
+   */
+  const uploadAndSendMedia = async (file: File, { comLegenda }: { comLegenda: boolean }) => {
+    if (!selectedConversation || viewMode !== 'real' || !selectedConversation.organizationId) return
 
     if (file.size > MAX_MEDIA_SIZE_BYTES) {
       setErrorMessage('Arquivo maior que 24MB — esse é o limite de anexo do Instagram/WhatsApp. Comprima o vídeo/foto e tente de novo.')
@@ -1135,8 +1123,8 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
 
       const { data: publicUrlData } = supabase.storage.from('chat-media').getPublicUrl(path)
       const mediaType = detectMediaType(file.type || '')
-      const caption = newMessageText.trim()
-      setNewMessageText('')
+      const caption = comLegenda ? newMessageText.trim() : ''
+      if (comLegenda) setNewMessageText('')
       await sendRealMessage(caption, publicUrlData.publicUrl, mediaType)
     } catch {
       setErrorMessage('Erro inesperado ao enviar arquivo.')
@@ -1144,6 +1132,65 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
       setUploadingMedia(false)
     }
   }
+
+  const handleFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    let file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file || !selectedConversation || viewMode !== 'real' || !selectedConversation.organizationId) return
+
+    setErrorMessage(null)
+
+    // Foto grande (câmera moderna facilmente passa de 8-15MB): comprime sempre que valer
+    // a pena, rápido via Canvas — não é exclusivo de quando estoura o limite, também
+    // deixa o envio mais rápido numa conexão de dados fraca.
+    if (file.type.startsWith('image/')) {
+      file = await compressImageIfLarge(file)
+    }
+
+    // Vídeo grande demais pro limite: tenta comprimir com ffmpeg.wasm (mais pesado — só
+    // entra em ação quando realmente precisa). Mostra o progresso porque isso pode levar
+    // de alguns segundos a mais de um minuto, dependendo do aparelho e do tamanho do vídeo.
+    if (file.type.startsWith('video/') && file.size > MAX_MEDIA_SIZE_BYTES) {
+      try {
+        const compressed = await compressVideo(file, MAX_MEDIA_SIZE_BYTES, setCompressionProgress)
+        if (compressed) {
+          file = compressed
+        } else {
+          setErrorMessage(
+            'Não foi possível comprimir esse vídeo o suficiente pra caber no limite de 24MB — tente um vídeo mais curto ou grave em qualidade menor.'
+          )
+          setCompressionProgress(null)
+          return
+        }
+      } finally {
+        setCompressionProgress(null)
+      }
+    }
+
+    await uploadAndSendMedia(file, { comLegenda: true })
+  }
+
+  /**
+   * Gravação de voz. O áudio pronto entra no MESMO caminho do anexo — sobe pro storage e
+   * vai pela rota de envio de sempre. Nada de rota nova, nada de campo novo no banco: a
+   * ponta de áudio já existia dos dois lados, só não havia como gravar.
+   */
+  const gravador = useVoiceRecorder({
+    onPronto: (arquivo) => void uploadAndSendMedia(arquivo, { comLegenda: false }),
+    onProgressoConversao: setAudioProgress,
+  })
+
+  // Se a conversa muda (ou é encerrada) no meio de uma gravação, o áudio é descartado.
+  // Sem isto, duas coisas ruins: a barra de gravação some da tela e o microfone continua
+  // ligado sem nada indicando, e o áudio acabaria sendo enviado pra conversa que estiver
+  // aberta na hora em que terminar — ou seja, pro cliente errado.
+  // Mesma condição que decide se o campo de digitar aparece (ver isConversationClosed
+  // lá embaixo no JSX) — repetir a regra aqui seria garantia de as duas se separarem.
+  const composerAtivo = viewMode === 'real' && !!selectedConversation && !isConversationClosed
+  const { estado: estadoGravacao, cancelar: cancelarGravacao } = gravador
+  useEffect(() => {
+    if (!composerAtivo && estadoGravacao !== 'idle') cancelarGravacao()
+  }, [composerAtivo, estadoGravacao, cancelarGravacao])
 
   // Insere o conteúdo de uma resposta rápida no campo de texto — acrescenta numa nova
   // linha se já tiver algo digitado, em vez de sobrescrever o que o atendente começou a
@@ -1444,7 +1491,6 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
   // a permissão de verdade continua sendo garantida no banco, não aqui.
   const canTransferConversations =
     viewMode !== 'real' || hasPermission(currentUserRole || 'attendant', currentUserPermissions, 'transfer_conversations')
-  const isConversationClosed = selectedConversation?.status === 'closed'
 
   return (
     <div className="flex flex-col h-full min-h-0 bg-[#0b1320] text-slate-100 overflow-hidden relative">
@@ -1515,10 +1561,10 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
 
       <Toast message={toastMessage} />
 
-      {errorMessage && (
+      {(errorMessage || gravador.erro) && (
         <div className="bg-rose-950/80 border-b border-rose-800 text-rose-200 px-4 py-2 text-xs flex items-center gap-2 shrink-0">
           <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
-          <span>{errorMessage}</span>
+          <span>{errorMessage || gravador.erro}</span>
         </div>
       )}
 
@@ -2106,6 +2152,61 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
               </div>
             ) : (
             <form onSubmit={handleSendMessage} className="p-3 border-t border-slate-800 bg-[#0f172a] shrink-0">
+              {/* Enquanto grava, a barra inteira vira o controle da gravação: cronômetro,
+                  descartar e enviar. Deixar clipe/câmera/texto ativos ao lado só criaria
+                  jeitos de se perder no meio de uma gravação. */}
+              {gravador.estado !== 'idle' ? (
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={gravador.cancelar}
+                    title="Descartar gravação"
+                    aria-label="Descartar gravação"
+                    className="p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-slate-400 hover:text-rose-400 hover:border-rose-700 transition shrink-0"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+
+                  <div
+                    role="status"
+                    aria-live="polite"
+                    className="flex-1 min-w-0 flex items-center gap-2 px-4 py-2.5 bg-slate-900 border border-slate-700 rounded-xl"
+                  >
+                    {gravador.estado === 'recording' ? (
+                      <>
+                        <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse shrink-0" aria-hidden="true" />
+                        <span className="text-base lg:text-xs font-semibold text-slate-100 tabular-nums shrink-0">
+                          {formatarDuracao(gravador.segundos)}
+                        </span>
+                        <span className="text-xs text-slate-400 truncate">Gravando</span>
+                      </>
+                    ) : (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-400 shrink-0" />
+                        <span className="text-xs text-slate-400 truncate">
+                          {gravador.estado === 'requesting'
+                            ? 'Liberando o microfone...'
+                            : audioProgress?.stage === 'loading'
+                              ? 'Preparando o conversor de áudio...'
+                              : 'Preparando o áudio...'}
+                        </span>
+                      </>
+                    )}
+                  </div>
+
+                  <Button
+                    type="button"
+                    onClick={gravador.encerrar}
+                    disabled={gravador.estado !== 'recording'}
+                    size="md"
+                    variant="primary"
+                    aria-label="Enviar áudio gravado"
+                    title="Enviar áudio gravado"
+                  >
+                    <Send className="w-4 h-4" />
+                  </Button>
+                </div>
+              ) : (
               <div className="flex items-center gap-2">
                 {viewMode === 'real' && (
                   <>
@@ -2197,10 +2298,29 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                   // focado o tempo todo, esse seria o incômodo mais repetido do app.
                   className="flex-1 min-w-0 px-4 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-base lg:text-xs text-slate-100 focus:outline-none focus:border-emerald-500 disabled:opacity-50"
                 />
-                <Button type="submit" disabled={!newMessageText.trim() || isSendingMessage || uploadingMedia || !!compressionProgress} size="md" variant="primary">
-                  {isSendingMessage ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-                </Button>
+                {/* Igual ao WhatsApp: com o campo vazio o botão é o microfone; assim que
+                    há texto, vira enviar. Economiza espaço numa barra que já tem clipe,
+                    câmera e respostas rápidas, e é a troca que a pessoa já conhece de cor.
+                    Os dois são botão de verdade — nada aqui depende de segurar apertado. */}
+                {viewMode === 'real' && gravador.disponivel && !newMessageText.trim() ? (
+                  <Button
+                    type="button"
+                    onClick={gravador.iniciar}
+                    disabled={isSendingMessage || uploadingMedia || !!compressionProgress}
+                    size="md"
+                    variant="primary"
+                    aria-label="Gravar mensagem de áudio"
+                    title="Gravar mensagem de áudio"
+                  >
+                    <Mic className="w-4 h-4" />
+                  </Button>
+                ) : (
+                  <Button type="submit" disabled={!newMessageText.trim() || isSendingMessage || uploadingMedia || !!compressionProgress} size="md" variant="primary">
+                    {isSendingMessage ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                  </Button>
+                )}
               </div>
+              )}
             </form>
             )}
           </div>

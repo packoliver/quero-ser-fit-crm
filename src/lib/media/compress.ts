@@ -110,9 +110,12 @@ let ffmpegLoadPromise: Promise<any> | null = null
 
 /** Carrega o motor ffmpeg.wasm (núcleo single-thread, servido do nosso próprio domínio
  * via public/ffmpeg) sob demanda, uma única vez por sessão da página. ~32MB na primeira
- * vez; o navegador cacheia depois disso. */
+ * vez; o navegador cacheia depois disso.
+ *
+ * Exportado pra que a conversão de áudio (ver media/audio.ts) use ESTA instância. Duas
+ * instâncias significariam baixar e manter dois motores de 32MB na memória do celular. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function getFFmpeg(onProgress?: (p: CompressProgress) => void): Promise<any> {
+export async function getFFmpeg(onProgress?: (p: CompressProgress) => void): Promise<any> {
   if (ffmpegInstance) return ffmpegInstance
   if (ffmpegLoadPromise) return ffmpegLoadPromise
 
