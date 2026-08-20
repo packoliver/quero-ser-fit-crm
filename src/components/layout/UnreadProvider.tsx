@@ -3,6 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { sumUnread } from '@/lib/inbox/unread'
+import { setAppBadge } from '@/lib/pwa/badge'
 
 interface UnreadContextValue {
   /** conversa → quantidade de não lidas. Conversa sem nenhuma fica fora do mapa. */
@@ -166,10 +167,16 @@ export function UnreadProvider({ children }: { children: React.ReactNode }) {
     [userId]
   )
 
-  const value = useMemo(
-    () => ({ counts, total: sumUnread(counts), markRead }),
-    [counts, markRead]
-  )
+  const total = useMemo(() => sumUnread(counts), [counts])
+
+  // Mesmo número da barra inferior, agora no ícone da tela de início. Continua certo com o
+  // app fechado: quem escreve nesse intervalo é o service worker (ver o handler de push em
+  // public/sw.js), e ao abrir esta linha sobrescreve com a contagem real vinda do banco.
+  useEffect(() => {
+    setAppBadge(total)
+  }, [total])
+
+  const value = useMemo(() => ({ counts, total, markRead }), [counts, total, markRead])
 
   return <UnreadContext.Provider value={value}>{children}</UnreadContext.Provider>
 }

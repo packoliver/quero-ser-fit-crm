@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'qsf-crm-v1'
+const CACHE_VERSION = 'qsf-crm-v2'
 const STATIC_CACHE = `${CACHE_VERSION}-static`
 const OFFLINE_URL = '/offline.html'
 
@@ -14,13 +14,31 @@ self.addEventListener('push', (event) => {
   const body = typeof payload?.body === 'string' ? payload.body.slice(0, 240) : 'Você recebeu uma nova atualização.'
   const tag = typeof payload?.tag === 'string' ? payload.tag.slice(0, 120) : 'qsf-crm-message'
   const url = typeof payload?.url === 'string' ? payload.url : '/inbox'
-  event.waitUntil(self.registration.showNotification(title, {
-    body,
-    icon: '/icon-192.png',
-    badge: '/icon-192.png',
-    tag,
-    data: { url },
-  }))
+  event.waitUntil((async () => {
+    await self.registration.showNotification(title, {
+      body,
+      icon: '/icon-192.png',
+      // Silhueta branca em fundo transparente: é assim que o Android desenha este campo
+      // (recolore pelo tema do sistema). O ícone colorido de 192 virava um borrão verde.
+      // O iOS ignora 'badge'.
+      badge: '/badge-72.png',
+      tag,
+      data: { url },
+    })
+
+    // Número no ícone do app na tela de início, com o app fechado. Aqui não dá pra
+    // consultar o banco, então vale a quantidade de notificações ainda não dispensadas —
+    // é uma aproximação de "quantas chegaram desde que você olhou". Quando o app abre, o
+    // UnreadProvider sobrescreve com a contagem real (ver src/lib/pwa/badge.ts).
+    try {
+      if (self.navigator && typeof self.navigator.setAppBadge === 'function') {
+        const pendentes = await self.registration.getNotifications()
+        await self.navigator.setAppBadge(pendentes.length || 1)
+      }
+    } catch {
+      // Sem suporte, ou app fora da tela de início: a notificação em si já apareceu.
+    }
+  })())
 })
 
 self.addEventListener('notificationclick', (event) => {
@@ -50,7 +68,7 @@ self.addEventListener('notificationclick', (event) => {
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(STATIC_CACHE)
-      .then((cache) => cache.addAll([OFFLINE_URL, '/manifest.json', '/icon-192.png', '/icon-512.png']))
+      .then((cache) => cache.addAll([OFFLINE_URL, '/manifest.json', '/icon-192.png', '/icon-512.png', '/badge-72.png']))
       .then(() => self.skipWaiting())
   )
 })

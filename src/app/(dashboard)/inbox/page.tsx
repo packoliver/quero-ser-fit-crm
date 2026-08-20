@@ -56,7 +56,7 @@ import { useUnread } from '@/components/layout/UnreadProvider'
 import { formatUnreadBadge } from '@/lib/inbox/unread'
 import { matchesConversationFilters } from '@/lib/inbox/filters'
 import { createClient } from '@/lib/supabase/client'
-import { subscribeToPush, unsubscribeFromPush } from '@/lib/pwa/subscribe'
+import { subscribeToPush, unsubscribeFromPush, pushSetupMessage, hasPushSubscription } from '@/lib/pwa/subscribe'
 import { useDemoStorage } from '@/lib/demo/useDemoStorage'
 import { DealStage, UserRole, CustomPermissions } from '@/types/database'
 import { hasPermission } from '@/lib/security/permissions'
@@ -443,13 +443,16 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
   }, [viewMode, selectedConversation, selectedMessageCount, markRead])
 
 
-  const showToast = (msg: string) => {
+  // `duracao` existe pro caso em que o texto não é só uma confirmação e sim uma
+  // instrução ("adicione o app à tela de início"): 3,5 s não dá tempo de ler uma frase
+  // dessas, e o aviso some antes de servir pra alguma coisa.
+  const showToast = (msg: string, duracao = 3500) => {
     setToastMessage(msg)
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
     toastTimerRef.current = setTimeout(() => {
       setToastMessage(null)
       toastTimerRef.current = null
-    }, 3500)
+    }, duracao)
   }
 
   // Fetch real conversations, their messages/notes, and who's currently logged in.
@@ -733,6 +736,22 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
     document.title = unreadCount > 0 ? `(${unreadCount}) ${originalTitleRef.current}` : originalTitleRef.current
   }, [unreadCount])
 
+  // O localStorage lembra que o sino ficou ligado, mas quem manda é o aparelho. Se a
+  // inscrição sumiu — endpoint expirado, app reinstalado — o sino aceso vira uma promessa
+  // falsa: fica esperando notificação que não chega mais e nada na tela indica isso.
+  // Aqui a gente devolve o botão pro estado real, e a pessoa consegue ligar de novo.
+  useEffect(() => {
+    if (!notificationsEnabled) return
+    const timer = setTimeout(() => {
+      void hasPushSubscription().then((inscrito) => {
+        if (inscrito) return
+        setNotificationsEnabled(false)
+        localStorage.setItem('inbox_notifications_enabled', 'false')
+      })
+    }, 0)
+    return () => clearTimeout(timer)
+  }, [notificationsEnabled])
+
   const toggleNotifications = async () => {
     if (notificationsEnabled) {
       const unsubscribed = await unsubscribeFromPush()
@@ -745,9 +764,9 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
       showToast('Notificações desativadas.')
       return
     }
-    const pushSubscribed = await subscribeToPush()
-    if (!pushSubscribed) {
-      showToast('Não foi possível ativar as notificações neste dispositivo.')
+    const resultado = await subscribeToPush()
+    if (!resultado.ok) {
+      showToast(pushSetupMessage(resultado.reason), 7000)
       return
     }
     setNotificationsEnabled(true)
