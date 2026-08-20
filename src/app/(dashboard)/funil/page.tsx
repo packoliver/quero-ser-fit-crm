@@ -604,7 +604,7 @@ export default function FunilPage() {
                   key={stage.key}
                   onClick={() => setMobileStageKey(stage.key)}
                   aria-pressed={active}
-                  className={`shrink-0 px-3 py-1.5 rounded-full text-xs font-medium border transition whitespace-nowrap flex items-center gap-1.5 ${
+                  className={`shrink-0 min-h-[38px] px-3.5 rounded-full text-xs font-medium border transition whitespace-nowrap flex items-center gap-1.5 ${
                     active
                       ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40 font-semibold'
                       : 'bg-slate-900 text-slate-400 border-slate-800'
@@ -626,7 +626,7 @@ export default function FunilPage() {
               onClick={() => setMobileStageKey(activeStages[currentMobileStageIndex - 1]?.key ?? null)}
               disabled={currentMobileStageIndex <= 0}
               aria-label="Etapa anterior"
-              className="p-2 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-slate-800 disabled:opacity-30 disabled:hover:bg-transparent transition shrink-0"
+              className="p-3 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-slate-800 disabled:opacity-30 disabled:hover:bg-transparent transition shrink-0"
             >
               <ChevronLeft className="w-4 h-4" />
             </button>
@@ -642,7 +642,7 @@ export default function FunilPage() {
               onClick={() => setMobileStageKey(activeStages[currentMobileStageIndex + 1]?.key ?? null)}
               disabled={currentMobileStageIndex >= activeStages.length - 1}
               aria-label="Próxima etapa"
-              className="p-2 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-slate-800 disabled:opacity-30 disabled:hover:bg-transparent transition shrink-0"
+              className="p-3 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-slate-800 disabled:opacity-30 disabled:hover:bg-transparent transition shrink-0"
             >
               <ChevronRight className="w-4 h-4" />
             </button>
@@ -657,7 +657,9 @@ export default function FunilPage() {
               {mobileStageDeals.map((deal) => (
                 <div key={deal.id} className="p-3 bg-[#0f172a] border border-slate-800 rounded-2xl">
                   <DealCardBody deal={deal} />
-                  <div className="flex items-center gap-1.5 mt-3 pt-2.5 border-t border-slate-800/80">
+                  {/* gap-3 e não gap-1.5: excluir é destrutivo e ficava a 6px de editar,
+                      num alvo de 36px. Errar o toque aqui apaga um pedido. */}
+                  <div className="flex items-center gap-3 mt-3 pt-2.5 border-t border-slate-800/80">
                     <Button variant="secondary" size="sm" className="flex-1" onClick={() => setMovingDeal(deal)}>
                       <ArrowRightLeft className="w-3.5 h-3.5" />
                       <span>Mover</span>
@@ -666,7 +668,7 @@ export default function FunilPage() {
                       type="button"
                       onClick={() => openEditModal(deal)}
                       aria-label={`Editar pedido ${dealTitle(deal)}`}
-                      className="p-2.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-emerald-400 transition shrink-0"
+                      className="p-3.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-emerald-400 transition shrink-0"
                     >
                       <Pencil className="w-3.5 h-3.5" />
                     </button>
@@ -674,7 +676,7 @@ export default function FunilPage() {
                       type="button"
                       onClick={() => { setDeletingDeal(deal); setDeleteModalOpen(true) }}
                       aria-label={`Excluir pedido ${dealTitle(deal)}`}
-                      className="p-2.5 rounded-lg bg-slate-900 hover:bg-rose-950/60 border border-slate-800 hover:border-rose-800 text-slate-500 hover:text-rose-400 transition shrink-0"
+                      className="p-3.5 rounded-lg bg-slate-900 hover:bg-rose-950/60 border border-slate-800 hover:border-rose-800 text-slate-500 hover:text-rose-400 transition shrink-0"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
