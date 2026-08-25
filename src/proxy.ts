@@ -10,7 +10,7 @@ import { updateSession } from '@/lib/supabase/middleware'
  * Pra voltar a usar: troque para `false` e faça o deploy de novo. Nada além desta
  * constante precisa mudar.
  */
-const MANUTENCAO_ATIVA = true
+const MANUTENCAO_ATIVA = false
 
 function paginaDeManutencao(): NextResponse {
   const html = `<!doctype html>
