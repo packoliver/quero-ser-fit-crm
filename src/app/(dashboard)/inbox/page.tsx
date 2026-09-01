@@ -1311,6 +1311,7 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
         .insert({
           title,
           contact_id: selectedConversation.contactId,
+          conversation_id: selectedConversation.id,
           stage,
           value,
           ...(dealStages.find((s) => s.key === stage)?.isWon ? { closed_at: new Date().toISOString() } : {}),

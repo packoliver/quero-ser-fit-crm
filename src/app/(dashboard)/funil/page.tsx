@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
+import Link from 'next/link'
 import {
   Kanban,
   Plus,
@@ -17,6 +18,7 @@ import {
   ChevronLeft,
   ChevronRight,
   ArrowRightLeft,
+  MessageSquare,
 } from 'lucide-react'
 import { DemoDeal } from '@/lib/demo'
 import { Button } from '@/components/ui/Button'
@@ -37,6 +39,7 @@ export interface RealDeal {
   id: string
   title: string
   contact_id: string
+  conversation_id: string | null
   value: number | null
   stage: DealStage
   notes: string | null
@@ -79,16 +82,36 @@ function dealNotes(d: AnyDeal): string {
   return (isRealDeal(d) ? d.notes : d.notes) || ''
 }
 
+// Conversa do Inbox pra abrir a partir deste pedido: usa deals.conversation_id quando o
+// pedido já nasceu vinculado a uma conversa; senão cai no fallback (contato -> conversa
+// mais recente dele) pra pedidos antigos ou criados fora de uma conversa (ex.: modal
+// "Novo Pedido" do próprio Funil, que não passa por conversation_id nenhum).
+function dealConversationId(d: AnyDeal, contactConversationMap: Record<string, string>): string | null {
+  if (!isRealDeal(d)) return null
+  return d.conversation_id || contactConversationMap[d.contact_id] || null
+}
+
 /**
  * O miolo do card — o que o pedido É. Compartilhado entre o Kanban do desktop e a lista do
  * celular; o que muda entre os dois é só COMO se mexe nele (arrastar e um seletor lá,
  * botões e um painel aqui), e isso fica com cada layout.
  */
-function DealCardBody({ deal }: { deal: AnyDeal }) {
+function DealCardBody({ deal, conversationId }: { deal: AnyDeal; conversationId: string | null }) {
   return (
     <div className="min-w-0 flex-1">
       <h3 className="text-xs font-semibold text-slate-100 leading-snug">{dealTitle(deal)}</h3>
-      <p className="text-[11px] text-slate-400 mt-0.5 truncate">{dealContactName(deal)}</p>
+      {conversationId ? (
+        <Link
+          href={`/inbox?conversa=${conversationId}`}
+          title="Abrir conversa no Inbox"
+          className="flex items-center gap-1 text-[11px] text-emerald-400 hover:text-emerald-300 hover:underline mt-0.5 w-fit max-w-full"
+        >
+          <MessageSquare className="w-3 h-3 shrink-0" />
+          <span className="truncate">{dealContactName(deal)}</span>
+        </Link>
+      ) : (
+        <p className="text-[11px] text-slate-400 mt-0.5 truncate">{dealContactName(deal)}</p>
+      )}
       {dealContactPhone(deal) && (
         <span className="flex items-center gap-1 text-[10px] text-slate-500 mt-1">
           <Phone className="w-3 h-3" />
@@ -120,6 +143,9 @@ export default function FunilPage() {
   const [realDeals, setRealDeals] = useState<RealDeal[]>([])
   const [realContacts, setRealContacts] = useState<RealContactOption[]>([])
   const [stages, setStages] = useState<PipelineStage[]>([])
+  // Fallback pra pedidos sem deals.conversation_id preenchido: contato -> conversa mais
+  // recente dele, pra ainda dar pra clicar no nome e abrir o Inbox com contexto.
+  const [contactConversationMap, setContactConversationMap] = useState<Record<string, string>>({})
 
   const [createModalOpen, setCreateModalOpen] = useState(false)
   const [editModalOpen, setEditModalOpen] = useState(false)
@@ -186,7 +212,7 @@ export default function FunilPage() {
         // reforçar isolamento por tenant) — sem apontar qual usar, o PostgREST recusa o
         // embed com "Could not embed because more than one relationship was found" (erro
         // cru em inglês que chegava a aparecer pro usuário antes desta correção).
-        .select('id, title, contact_id, value, stage, notes, created_at, closed_at, contacts!deals_contact_id_fkey(name, phone)')
+        .select('id, title, contact_id, conversation_id, value, stage, notes, created_at, closed_at, contacts!deals_contact_id_fkey(name, phone)')
         .order('created_at', { ascending: false })
 
       if (dbError) {
@@ -229,6 +255,35 @@ export default function FunilPage() {
     }
   }, [])
 
+  const fetchContactConversationMap = useCallback(async () => {
+    try {
+      const supabase = createClient()
+      const { data } = await (supabase as unknown as {
+        from: (t: string) => {
+          select: (c: string) => {
+            order: (col: string, opt: { ascending: boolean }) => Promise<{ data: { id: string; contact_id: string }[] | null }>
+          }
+        }
+      })
+        .from('conversations')
+        .select('id, contact_id')
+        .order('last_message_at', { ascending: false })
+
+      if (data) {
+        const map: Record<string, string> = {}
+        // Ordenado da mais recente pra mais antiga — a primeira ocorrência de cada
+        // contato já é a conversa mais recente dele.
+        for (const conv of data) {
+          if (!map[conv.contact_id]) map[conv.contact_id] = conv.id
+        }
+        setContactConversationMap(map)
+      }
+    } catch {
+      // silencioso — mesmo padrão de fetchRealContacts/fetchStages: sem isso, o link
+      // "abrir conversa" só funciona pros pedidos que já têm deals.conversation_id.
+    }
+  }, [])
+
   // Etapas do Kanban — configuradas pelo admin em Configurações > Etapas do Funil (ver
   // src/lib/pipeline/stages.ts). Silencioso em caso de erro: activeStages cai pro modelo
   // padrão embutido no código, então o board não fica vazio por uma falha de rede aqui.
@@ -257,9 +312,10 @@ export default function FunilPage() {
       void fetchRealDeals()
       void fetchRealContacts()
       void fetchStages()
+      void fetchContactConversationMap()
     }, 0)
     return () => clearTimeout(timer)
-  }, [fetchRealDeals, fetchRealContacts, fetchStages])
+  }, [fetchRealDeals, fetchRealContacts, fetchStages, fetchContactConversationMap])
 
   // Realtime: um card que outra vendedora mover (ou uma etapa que o admin renomear)
   // aparece pra todo mundo sem precisar atualizar a página — mesmo padrão de debounce
@@ -375,7 +431,7 @@ export default function FunilPage() {
         // reforçar isolamento por tenant) — sem apontar qual usar, o PostgREST recusa o
         // embed com "Could not embed because more than one relationship was found" (erro
         // cru em inglês que chegava a aparecer pro usuário antes desta correção).
-        .select('id, title, contact_id, value, stage, notes, created_at, closed_at, contacts!deals_contact_id_fkey(name, phone)')
+        .select('id, title, contact_id, conversation_id, value, stage, notes, created_at, closed_at, contacts!deals_contact_id_fkey(name, phone)')
           .single()
 
         if (insertError) {
@@ -665,7 +721,7 @@ export default function FunilPage() {
             <div className="space-y-2.5">
               {mobileStageDeals.map((deal) => (
                 <div key={deal.id} className="p-3 bg-[#0f172a] border border-slate-800 rounded-2xl">
-                  <DealCardBody deal={deal} />
+                  <DealCardBody deal={deal} conversationId={dealConversationId(deal, contactConversationMap)} />
                   {/* gap-3 e não gap-1.5: excluir é destrutivo e ficava a 6px de editar,
                       num alvo de 36px. Errar o toque aqui apaga um pedido. */}
                   <div className="flex items-center gap-3 mt-3 pt-2.5 border-t border-slate-800/80">
@@ -747,7 +803,7 @@ export default function FunilPage() {
                       >
                         <div className="flex items-start gap-1.5">
                           <GripVertical className="w-3.5 h-3.5 text-slate-600 mt-0.5 shrink-0" />
-                          <DealCardBody deal={deal} />
+                          <DealCardBody deal={deal} conversationId={dealConversationId(deal, contactConversationMap)} />
                         </div>
 
                         <div className="flex items-center gap-1.5 mt-2.5 pt-2.5 border-t border-slate-800/80">
