@@ -104,6 +104,15 @@ function DealCardBody({ deal, conversationId }: { deal: AnyDeal; conversationId:
         <Link
           href={`/inbox?conversa=${conversationId}`}
           title="Abrir conversa no Inbox"
+          // O card do Kanban (desktop) é `draggable` pra arrastar entre etapas — sem isso,
+          // iniciar o clique em cima do link (com qualquer leve movimento do mouse, comum
+          // em cliques reais) é interpretado como "começar a arrastar o card" em vez de um
+          // clique, e o link nunca recebe o evento. stopPropagation impede que o mousedown
+          // chegue no <div draggable> pai; draggable={false} evita o comportamento nativo
+          // do navegador de "arrastar este link" (todo <a> é arrastável por padrão).
+          draggable={false}
+          onMouseDown={(e) => e.stopPropagation()}
+          onDragStart={(e) => e.preventDefault()}
           className="flex items-center gap-1 text-[11px] text-emerald-400 hover:text-emerald-300 hover:underline mt-0.5 w-fit max-w-full"
         >
           <MessageSquare className="w-3 h-3 shrink-0" />
