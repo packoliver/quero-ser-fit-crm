@@ -73,6 +73,33 @@ export async function POST(request: NextRequest, context: { params: Promise<{ se
     const events = uazapiProvider.parseWebhookPayload(jsonBody)
     const statusUpdates = uazapiProvider.parseStatusUpdates(jsonBody)
 
+    // Diagnóstico: qualquer payload que NÃO virou uma mensagem normal (ex: messages_update,
+    // connection, ou qualquer formato que parseStatusUpdates ainda não reconheça) fica
+    // registrado aqui — sem isso não há nenhum jeito de ver depois o formato real que a
+    // uazapi manda pra esses eventos (os logs do servidor em si não são consultáveis).
+    // Nunca derruba o processamento do webhook: puramente aditivo, best-effort.
+    if (events.length === 0) {
+      const eventType =
+        typeof jsonBody.EventType === 'string'
+          ? jsonBody.EventType
+          : typeof jsonBody.event === 'string'
+            ? jsonBody.event
+            : typeof jsonBody.type === 'string'
+              ? jsonBody.type
+              : 'desconhecido'
+      try {
+        await admin.from('webhook_events').insert({
+          provider: 'whatsapp_uazapi',
+          external_event_id: `diag_${crypto.randomUUID()}`,
+          event_type: `diag_${eventType}`,
+          payload: jsonBody,
+          processed: statusUpdates.length > 0,
+        })
+      } catch {
+        // best-effort — nunca deve impedir o processamento do resto do webhook
+      }
+    }
+
     // O segredo na URL já identifica a conexão com certeza — sobrescrevemos o
     // recipientId (que o parser só preenche com um valor de fallback, o nome da
     // instância) pelo external_identifier real salvo no banco, que é o que

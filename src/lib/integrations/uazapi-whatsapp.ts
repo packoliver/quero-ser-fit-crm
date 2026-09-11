@@ -207,33 +207,78 @@ export class UazapiWhatsAppProvider implements ICRMIntegrationProvider {
   /**
    * Atualizações de status (entregue/lido) de mensagens que NÓS enviamos chegam como um
    * evento separado (`EventType: "messages_update"`), não junto do evento `messages`
-   * comum. O formato exato não está documentado nem confirmado com um exemplo real
-   * ainda (diferente do parser de mensagem recebida acima, que foi corrigido depois de
-   * confirmar contra um payload de verdade) — por isso aceita algumas variações
-   * plausíveis de nome de campo e loga o que não reconhecer, pra facilitar ajustar
-   * depois de ver um exemplo real no log de produção.
+   * comum. O formato exato não está documentado nem confirmado com um exemplo real ainda
+   * (diferente do parser de mensagem recebida acima, que foi corrigido depois de
+   * confirmar contra um payload de verdade) — até 2026-09-11 esse evento nunca tinha
+   * chegado de verdade (ver excludeMessages em verify-connection.ts, removido nessa
+   * data). Por isso este parser aceita várias variações plausíveis de formato — incluindo
+   * o shape nativo do evento `messages.update` da Baileys (array de `{key, update}`, já
+   * que uazapi é construída em cima dessa lib) com status numérico (código de ack) — e
+   * loga o que não reconhecer, pra dar pra ajustar contra um payload real assim que um
+   * chegar em produção.
    */
   parseStatusUpdates(body: Record<string, unknown>): MessageStatusUpdate[] {
     try {
-      const eventType = typeof body.EventType === 'string' ? body.EventType.toLowerCase() : undefined
-      if (eventType !== 'messages_update' && eventType !== 'message_status' && eventType !== 'status') return []
+      const eventType =
+        typeof body.EventType === 'string'
+          ? body.EventType.toLowerCase()
+          : typeof body.event === 'string'
+            ? body.event.toLowerCase()
+            : typeof body.type === 'string'
+              ? body.type.toLowerCase()
+              : undefined
+      // Aceita "messages_update", "messages.update" (nome nativo do evento na Baileys),
+      // "message_status", "status" sozinho, ou qualquer coisa com "ack" no nome.
+      const looksLikeStatusEvent = !!eventType && /messages?[_.]?update|message[_.]?status|^status$|ack/.test(eventType)
+      if (!looksLikeStatusEvent) return []
 
-      const message = (body.message ?? body.data ?? body) as Record<string, unknown>
-      const externalId =
-        typeof message.messageid === 'string'
-          ? message.messageid
-          : typeof message.id === 'string'
-            ? message.id
-            : undefined
-      const rawStatus = typeof message.status === 'string' ? message.status.toLowerCase() : undefined
-      const status = rawStatus ? UAZAPI_STATUS_MAP[rawStatus] : undefined
+      // Alguns provedores baseados em Baileys mandam um ARRAY de `{key, update}` (o
+      // formato nativo do evento messages.update da lib) em vez de um único objeto —
+      // aceita os dois.
+      const rawEntries: Record<string, unknown>[] = Array.isArray(body.messages)
+        ? (body.messages as Record<string, unknown>[])
+        : Array.isArray(body.data)
+          ? (body.data as Record<string, unknown>[])
+          : [(body.message ?? body.data ?? body) as Record<string, unknown>]
 
-      if (!externalId || !status) {
-        console.error('uazapi parseStatusUpdates: payload de status não reconhecido:', JSON.stringify(body).slice(0, 500))
-        return []
+      const results: MessageStatusUpdate[] = []
+      for (const entry of rawEntries) {
+        const key = (entry.key as Record<string, unknown> | undefined) ?? entry
+        const update = (entry.update as Record<string, unknown> | undefined) ?? entry
+
+        const externalId =
+          typeof key.messageid === 'string'
+            ? key.messageid
+            : typeof key.id === 'string'
+              ? key.id
+              : typeof entry.messageid === 'string'
+                ? entry.messageid
+                : typeof entry.id === 'string'
+                  ? entry.id
+                  : undefined
+
+        const rawStatus = update.status
+        const status =
+          typeof rawStatus === 'string'
+            ? UAZAPI_STATUS_MAP[rawStatus.toLowerCase()]
+            : typeof rawStatus === 'number'
+              ? // Convenção comum em libs baseadas no protocolo do WhatsApp Web (Baileys):
+                // 2 = entregue no aparelho, 3+ = lido/reproduzido. 0/1 (pendente/enviado
+                // ao servidor) não avança nada — já é o que 'sent' já significa aqui.
+                rawStatus >= 3
+                ? 'read'
+                : rawStatus === 2
+                  ? 'delivered'
+                  : undefined
+              : undefined
+
+        if (externalId && status) results.push({ externalId, status })
       }
 
-      return [{ externalId, status }]
+      if (results.length === 0) {
+        console.error('uazapi parseStatusUpdates: payload de status não reconhecido:', JSON.stringify(body).slice(0, 500))
+      }
+      return results
     } catch (err) {
       console.error('Erro ao interpretar status de mensagem da uazapi:', err)
       return []

@@ -60,7 +60,21 @@ export async function registerUazapiWebhook(
         enabled: true,
         url: webhookUrl,
         events: ['messages', 'messages_update', 'connection'],
-        excludeMessages: ['wasSentByApi'],
+        // ATENÇÃO — NÃO reintroduzir excludeMessages: ['wasSentByApi'].
+        //
+        // Isso filtrava justamente as mensagens enviadas pela nossa própria API — e
+        // 'messages_update' (confirmação de entrega/leitura) chega como um evento
+        // 'messages' carregando o mesmo objeto de mensagem, então o filtro também
+        // suprimia a confirmação de TODA mensagem que o CRM manda (100% do tráfego
+        // enviado). Resultado: nenhuma mensagem enviada pelo CRM jamais avançava de
+        // "enviado" (1 check) pra "entregue" (2 checks) — confirmado em produção: 0 de
+        // 5870+ mensagens enviadas já tinham chegado a 'delivered'/'read'.
+        //
+        // O eco de 'messages' que volta pra uma mensagem que O PRÓPRIO CRM já enviou não
+        // duplica: persistOutgoingEchoEvent (persist-event.ts) já dedupla por
+        // messages.external_id antes de inserir qualquer coisa, e 99,96% das mensagens
+        // enviadas nos últimos 30 dias já têm external_id salvo corretamente (conferido
+        // direto no banco antes desta mudança).
         addUrlEvents: false,
         addUrlTypesMessages: false,
       }),
