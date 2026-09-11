@@ -46,6 +46,7 @@ export interface RealTask {
    * direto pro contexto em vez de procurar o cliente na lista. Coluna que já existia na
    * tabela `tasks` e simplesmente não estava sendo lida. */
   conversation_id: string | null
+  updated_at: string
   /** Flattened from the joined `profiles`/`contacts` rows at fetch time — never sent back on write. */
   assignee_name: string | null
   contact_name: string | null
@@ -185,7 +186,7 @@ export default function TarefasPage() {
       const [tasksRes, membersRes, contactsRes] = await Promise.all([
         typed
           .from('tasks')
-          .select('id, title, description, due_date, status, priority, assigned_to_id, contact_id, conversation_id, created_at, contacts(name), profiles(full_name)')
+          .select('id, title, description, due_date, status, priority, assigned_to_id, contact_id, conversation_id, created_at, updated_at, contacts(name), profiles(full_name)')
           .order('created_at', { ascending: false }),
         typed.from('organization_members').select('user_id, profiles(full_name)'),
         typed.from('contacts').select('id, name').order('name', { ascending: true }),
@@ -207,6 +208,7 @@ export default function TarefasPage() {
         contact_id: string | null
         conversation_id: string | null
         created_at: string
+        updated_at: string
         contacts: { name: string | null } | null
         profiles: { full_name: string | null } | null
       }>
@@ -224,6 +226,7 @@ export default function TarefasPage() {
           assignee_name: t.profiles?.full_name || null,
           contact_name: t.contacts?.name || null,
           created_at: t.created_at,
+          updated_at: t.updated_at,
         }))
       setRealTasks(mappedTasks)
       if (offlineScope) await cacheEntity(offlineScope, 'tasks', mappedTasks)
@@ -254,7 +257,11 @@ export default function TarefasPage() {
     if (viewMode === 'real' && 'created_at' in task) {
       const offlineScope = await getOfflineScope()
       if (!navigator.onLine && offlineScope) {
-        await queueEntityMutation(offlineScope, 'task.update', { id: task.id, status: nextStatus }, null)
+        // task.updated_at (a versão em cache no momento em que ficou offline) vai junto
+        // como baseUpdatedAt — é o que permite o servidor perceber, ao sincronizar, se
+        // outra pessoa já mudou essa tarefa nesse meio tempo, em vez de aplicar por cima
+        // sem checar nada.
+        await queueEntityMutation(offlineScope, 'task.update', { id: task.id, status: nextStatus }, task.updated_at)
         setRealTasks((prev) => prev.map((t) => (t.id === task.id ? { ...t, status: nextStatus } : t)))
         showToast('Status salvo localmente e aguardando sincronização.')
         return
@@ -306,7 +313,7 @@ export default function TarefasPage() {
               select: (c: string) => {
                 single: () => Promise<{
                   data:
-                    | { id: string; title: string; description: string | null; due_date: string | null; status: TaskStatus; priority: 'alta' | 'media' | 'baixa' | null; assigned_to_id: string | null; contact_id: string | null; conversation_id: string | null; created_at: string; contacts: { name: string | null } | null; profiles: { full_name: string | null } | null }
+                    | { id: string; title: string; description: string | null; due_date: string | null; status: TaskStatus; priority: 'alta' | 'media' | 'baixa' | null; assigned_to_id: string | null; contact_id: string | null; conversation_id: string | null; created_at: string; updated_at: string; contacts: { name: string | null } | null; profiles: { full_name: string | null } | null }
                     | null
                   error: { message: string } | null
                 }>
@@ -324,7 +331,7 @@ export default function TarefasPage() {
             contact_id: newTask.contactId || null,
             assigned_to_id: newTask.assigneeId || null,
           })
-          .select('id, title, description, due_date, status, priority, assigned_to_id, contact_id, conversation_id, created_at, contacts(name), profiles(full_name)')
+          .select('id, title, description, due_date, status, priority, assigned_to_id, contact_id, conversation_id, created_at, updated_at, contacts(name), profiles(full_name)')
           .single()
 
         if (insertError) {
@@ -349,6 +356,7 @@ export default function TarefasPage() {
               assignee_name: created.profiles?.full_name || null,
               contact_name: created.contacts?.name || null,
               created_at: created.created_at,
+              updated_at: created.updated_at,
             },
             ...realTasks,
           ])

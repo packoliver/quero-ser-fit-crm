@@ -44,6 +44,7 @@ export interface RealDeal {
   stage: DealStage
   notes: string | null
   created_at: string
+  updated_at: string
   closed_at: string | null
   contacts?: { name: string; phone: string | null } | null
 }
@@ -221,7 +222,7 @@ export default function FunilPage() {
         // reforçar isolamento por tenant) — sem apontar qual usar, o PostgREST recusa o
         // embed com "Could not embed because more than one relationship was found" (erro
         // cru em inglês que chegava a aparecer pro usuário antes desta correção).
-        .select('id, title, contact_id, conversation_id, value, stage, notes, created_at, closed_at, contacts!deals_contact_id_fkey(name, phone)')
+        .select('id, title, contact_id, conversation_id, value, stage, notes, created_at, updated_at, closed_at, contacts!deals_contact_id_fkey(name, phone)')
         .order('created_at', { ascending: false })
 
       if (dbError) {
@@ -368,7 +369,11 @@ export default function FunilPage() {
       const updates: Record<string, unknown> = { stage: newStage }
       if (activeStages.find((s) => s.key === newStage)?.isWon && !deal.closed_at) updates.closed_at = new Date().toISOString()
       if (!navigator.onLine && offlineScope) {
-        await queueEntityMutation(offlineScope, 'deal.update', { id: deal.id, ...updates }, null)
+        // deal.updated_at (a versão em cache no momento em que ficou offline) vai junto
+        // como baseUpdatedAt — é o que permite o servidor perceber, ao sincronizar, se
+        // outra pessoa já mudou esse pedido nesse meio tempo, em vez de aplicar por cima
+        // sem checar nada.
+        await queueEntityMutation(offlineScope, 'deal.update', { id: deal.id, ...updates }, deal.updated_at)
         setRealDeals((prev) => prev.map((d) => (d.id === deal.id ? { ...d, stage: newStage, closed_at: (updates.closed_at as string) || d.closed_at } : d)))
         showToast('Etapa salva localmente e aguardando sincronização.')
         return
@@ -440,7 +445,7 @@ export default function FunilPage() {
         // reforçar isolamento por tenant) — sem apontar qual usar, o PostgREST recusa o
         // embed com "Could not embed because more than one relationship was found" (erro
         // cru em inglês que chegava a aparecer pro usuário antes desta correção).
-        .select('id, title, contact_id, conversation_id, value, stage, notes, created_at, closed_at, contacts!deals_contact_id_fkey(name, phone)')
+        .select('id, title, contact_id, conversation_id, value, stage, notes, created_at, updated_at, closed_at, contacts!deals_contact_id_fkey(name, phone)')
           .single()
 
         if (insertError) {
