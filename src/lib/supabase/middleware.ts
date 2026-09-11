@@ -2,6 +2,20 @@ import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 import { Database, UserRole } from '@/types/database'
 
+// Todo early-return deste middleware (redirect ou 401 json) precisa levar consigo os
+// cookies que o `setAll` do Supabase pode ter acabado de rotacionar (refresh token
+// consumido, novo access token emitido) — sem isso, um NextResponse.redirect()/json() novo
+// descarta esses cookies silenciosamente, o token novo nunca chega no navegador, e a
+// próxima requisição reusa o refresh token já consumido: a sessão morre no meio do
+// trabalho, sem aviso nenhum, bem na hora que deveria ter sido renovada. Ver o padrão
+// oficial do @supabase/ssr pra middleware Next.js.
+function comCookiesRotacionados(response: NextResponse, supabaseResponse: NextResponse): NextResponse {
+  supabaseResponse.cookies.getAll().forEach((cookie) => {
+    response.cookies.set(cookie)
+  })
+  return response
+}
+
 export async function updateSession(request: NextRequest) {
   let supabaseResponse = NextResponse.next({
     request,
@@ -42,17 +56,17 @@ export async function updateSession(request: NextRequest) {
   // demo flags, and placeholder configuration must never grant access.
   if ((authError || !user) && !isPublicRoute && pathname !== '/') {
     if (isApiRoute) {
-      return NextResponse.json({ error: 'Não autenticado.' }, { status: 401 })
+      return comCookiesRotacionados(NextResponse.json({ error: 'Não autenticado.' }, { status: 401 }), supabaseResponse)
     }
     const url = request.nextUrl.clone()
     url.pathname = '/login'
-    return NextResponse.redirect(url)
+    return comCookiesRotacionados(NextResponse.redirect(url), supabaseResponse)
   }
 
   if (user && pathname === '/login') {
     const url = request.nextUrl.clone()
     url.pathname = '/inbox'
-    return NextResponse.redirect(url)
+    return comCookiesRotacionados(NextResponse.redirect(url), supabaseResponse)
   }
 
   const isIntegrationsRoute = pathname.startsWith('/configuracoes/integracoes')
@@ -64,7 +78,9 @@ export async function updateSession(request: NextRequest) {
         from: (table: string) => {
           select: (cols: string) => {
             eq: (col: string, val: string) => {
-              maybeSingle: () => Promise<{ data: { role: UserRole } | null; error: unknown }>
+              limit: (n: number) => {
+                maybeSingle: () => Promise<{ data: { role: UserRole } | null; error: unknown }>
+              }
             }
           }
         }
@@ -72,6 +88,11 @@ export async function updateSession(request: NextRequest) {
         .from('organization_members')
         .select('role')
         .eq('user_id', user.id)
+        // .limit(1) evita PGRST116 (linha ambígua) se o usuário algum dia pertencer a mais
+        // de uma organização — sem isso, .maybeSingle() com 2+ linhas volta erro, `role`
+        // vira null, e até um admin de verdade era mandado de volta pro Inbox sem
+        // explicação nenhuma. Mesmo padrão já usado em team/create-member/route.ts.
+        .limit(1)
         .maybeSingle()
 
       const role = memberError ? null : member?.role || null
@@ -82,12 +103,12 @@ export async function updateSession(request: NextRequest) {
       if (!allowed) {
         const url = request.nextUrl.clone()
         url.pathname = '/inbox'
-        return NextResponse.redirect(url)
+        return comCookiesRotacionados(NextResponse.redirect(url), supabaseResponse)
       }
     } catch {
       const url = request.nextUrl.clone()
       url.pathname = '/inbox'
-      return NextResponse.redirect(url)
+      return comCookiesRotacionados(NextResponse.redirect(url), supabaseResponse)
     }
   }
 
