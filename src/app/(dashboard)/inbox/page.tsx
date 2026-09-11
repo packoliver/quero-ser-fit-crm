@@ -93,11 +93,18 @@ interface UiMessage {
   senderName: string
   content: string
   time: string
-  status?: 'sent' | 'delivered' | 'read' | 'failed'
+  // 'sending' é só local (nunca vem do banco) — a mensagem otimista mostrada na hora que a
+  // pessoa manda, antes do servidor confirmar. Ver optimisticMessages mais abaixo.
+  status?: 'sending' | 'sent' | 'delivered' | 'read' | 'failed'
   mediaUrl?: string | null
   mediaType?: MediaType | null
   /** Only meaningful for a contact message inside a group — that specific member's photo, when we have it cached. */
   senderAvatarUrl?: string | null
+}
+
+/** Uma UiMessage local, mostrada na hora antes do servidor confirmar o envio. */
+interface OptimisticMessage extends UiMessage {
+  conversationId: string
 }
 
 interface UiConversation {
@@ -252,6 +259,14 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
   }, [realConversations])
   const [loadingReal, setLoadingReal] = useState(false)
   const [realTeamMembers, setRealTeamMembers] = useState<RealTeamMember[]>([])
+  // Espelho de realTeamMembers pro mesmo motivo do realConversationsRef acima —
+  // fetchConversationMessages usa isso pra resolver o nome de quem mandou (quando é a
+  // equipe, não o cliente) sem precisar buscar organization_members de novo a cada evento
+  // de tempo real (fetchRealData já busca essa mesma lista pra popular este estado).
+  const realTeamMembersRef = useRef<RealTeamMember[]>([])
+  useEffect(() => {
+    realTeamMembersRef.current = realTeamMembers
+  }, [realTeamMembers])
   const [currentUserRealId, setCurrentUserRealId] = useState<string | null>(null)
   // Papel + overrides de permissão do usuário logado — determina, por ex., se o botão de
   // excluir mensagem aparece. Carregado uma vez junto com o resto dos dados reais;
@@ -443,11 +458,17 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
   //
   // `document.hidden` importa: com a aba em segundo plano ninguém viu nada, e zerar o
   // aviso aí faria a mensagem passar despercebida — que é o oposto do que a bolinha serve.
+  // `showMobileChat` cobre o mesmo problema no celular: dar "voltar" deixa a conversa
+  // ainda selecionada no estado (só o painel de chat fica escondido por CSS), e sem essa
+  // checagem uma mensagem que chega nesse momento era marcada como lida sem a pessoa ter
+  // visto — ficava "perdida" até trocar de conversa e voltar. No desktop isso não muda
+  // nada: selecionar uma conversa já deixa mobilePane em 'chat' e não existe botão
+  // "voltar" que volte pra 'list' por lá.
   useEffect(() => {
-    if (viewMode !== 'real' || !selectedConversation || selectedMessageCount === 0) return
+    if (viewMode !== 'real' || !selectedConversation || selectedMessageCount === 0 || !showMobileChat) return
     if (typeof document !== 'undefined' && document.hidden) return
     markRead(selectedConversation.id, selectedConversation.lastMessageAtIso)
-  }, [viewMode, selectedConversation, selectedMessageCount, markRead])
+  }, [viewMode, selectedConversation, selectedMessageCount, markRead, showMobileChat])
 
 
   // `duracao` existe pro caso em que o texto não é só uma confirmação e sim uma
@@ -640,7 +661,17 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
         data: { user },
       } = await supabase.auth.getUser()
 
-      const [msgRes, membersRes, profilesRes] = await Promise.all([
+      // isGroup decide se vale a pena buscar whatsapp_profiles: essa tabela só é consultada
+      // mais abaixo (perfilPorId) quando a mensagem tem group_sender_id, ou seja, nunca numa
+      // conversa 1:1 — a grande maioria. Sem essa checagem, toda atualização em tempo real
+      // (mesmo de uma conversa comum) baixava a tabela de perfis da organização inteira à
+      // toa. organization_members nem é buscado de novo aqui: fetchRealData já popula
+      // realTeamMembers com a mesma informação (ver realTeamMembersRef acima).
+      const conv = realConversationsRef.current.find((c) => c.id === conversationId)
+      const isGroup = !!conv?.isGroup
+      const nomeDoContato = conv?.contactName || 'Cliente'
+
+      const [msgRes, profilesRes] = await Promise.all([
         (supabase as unknown as {
           from: (t: string) => { select: (c: string) => { eq: (col: string, v: string) => { order: (col: string, o: { ascending: boolean }) => { limit: (n: number) => Promise<{ data: unknown[] | null }> } } } }
         })
@@ -649,10 +680,10 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
           .eq('conversation_id', conversationId)
           .order('created_at', { ascending: false })
           .limit(500),
-        (supabase as unknown as { from: (t: string) => { select: (c: string) => Promise<{ data: unknown[] | null }> } })
-          .from('organization_members').select('user_id, profiles(full_name)'),
-        (supabase as unknown as { from: (t: string) => { select: (c: string) => Promise<{ data: unknown[] | null }> } })
-          .from('whatsapp_profiles').select('external_id, name, avatar_url'),
+        isGroup
+          ? (supabase as unknown as { from: (t: string) => { select: (c: string) => Promise<{ data: unknown[] | null }> } })
+              .from('whatsapp_profiles').select('external_id, name, avatar_url')
+          : Promise.resolve({ data: [] as unknown[] }),
       ])
 
       const rows = ((msgRes.data || []) as Array<{
@@ -667,10 +698,8 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
         created_at: string
       }>).slice().reverse()
 
-      const members = (membersRes.data || []) as Array<{ user_id: string; profiles: { full_name: string | null } | null }>
       const perfis = (profilesRes.data || []) as Array<{ external_id: string; name: string | null; avatar_url: string | null }>
       const perfilPorId = new Map(perfis.map((x) => [x.external_id, x]))
-      const nomeDoContato = realConversationsRef.current.find((c) => c.id === conversationId)?.contactName || 'Cliente'
 
       const msgs = rows.map<UiMessage>((m) => ({
         id: m.id,
@@ -685,7 +714,7 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
             ? 'Sistema'
             : m.sender_id === user?.id
             ? 'Você'
-            : members.find((mm) => mm.user_id === m.sender_id)?.profiles?.full_name || 'Atendente',
+            : realTeamMembersRef.current.find((mm) => mm.id === m.sender_id)?.fullName || 'Atendente',
         content: m.content,
         time: formatTime(m.created_at),
         status: m.status || undefined,
@@ -882,7 +911,16 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
   // celular/computador de novo e a mensagem não tinha aparecido" sem precisar de F5 manual.
   useEffect(() => {
     if (viewMode !== 'real') return
-    const resync = () => void fetchRealData(true)
+    // fetchRealData sozinho só atualiza a LISTA (pré-visualização, badge de não-lida) — o
+    // histórico da conversa aberta só recarrega quando realtimeTick muda (ver o efeito de
+    // fetchConversationMessages mais acima). Sem bump aqui, uma mensagem que chegou com o
+    // socket caído (celular dormindo, troca de rede) atualizava o badge da lista mas nunca
+    // aparecia na conversa que a pessoa está olhando — ficava "sumida" até trocar de
+    // conversa e voltar.
+    const resync = () => {
+      void fetchRealData(true)
+      setRealtimeTick((n) => n + 1)
+    }
     const handleVisibility = () => {
       if (document.visibilityState === 'visible') resync()
     }
@@ -1047,7 +1085,7 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
   // fila de envio (drainTextSendQueue, logo abaixo) pode chamar isso bem depois de
   // enfileirado, quando a pessoa já pode ter trocado de conversa — sem isso, uma mensagem
   // enfileirada enquanto a conversa A estava aberta podia ir pra conversa B.
-  const sendRealMessage = async (conversationId: string, content: string, mediaUrl?: string, mediaType?: MediaType) => {
+  const sendRealMessage = async (conversationId: string, content: string, mediaUrl?: string, mediaType?: MediaType): Promise<boolean> => {
     try {
       const res = await fetch('/api/messages/send', {
         method: 'POST',
@@ -1057,19 +1095,30 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
       const body = await res.json()
       if (!res.ok) {
         setErrorMessage(body.error || 'Falha ao enviar mensagem.')
+        fetchRealData()
+        return false
       }
       fetchRealData()
+      return true
     } catch {
       setErrorMessage('Erro de conexão ao enviar mensagem.')
+      return false
     }
   }
+
+  // Mensagens que ainda não foram confirmadas pelo servidor, mostradas na hora — status
+  // "sending" (um relógio/spinner) até confirmar, vira "failed" (bolha vermelha, já existe
+  // o estilo pronto mais abaixo) se der erro. Sem isso, a mensagem só aparecia na tela
+  // quando o eco do tempo real voltava — em conexão lenta/instável, parecia que nada tinha
+  // acontecido, e às vezes levava a mandar a mesma coisa de novo.
+  const [optimisticMessages, setOptimisticMessages] = useState<OptimisticMessage[]>([])
 
   // Fila de envio de texto: cada linha mandada entra aqui e é enviada pro servidor uma de
   // cada vez, NA ORDEM, mas sem travar o campo de digitar — a pessoa pode escrever e
   // mandar a próxima linha na hora, sem esperar a anterior terminar de chegar no cliente.
   // Antes disso o campo ficava desabilitado até o fetch anterior responder (reportado
   // como "só deixa digitar uma linha de cada vez, tem que esperar chegar pro cliente").
-  const textSendQueueRef = useRef<{ conversationId: string; content: string }[]>([])
+  const textSendQueueRef = useRef<{ conversationId: string; content: string; localId: string }[]>([])
   const isDrainingTextQueueRef = useRef(false)
   const [queuedMessageCount, setQueuedMessageCount] = useState(0)
 
@@ -1078,7 +1127,18 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
     isDrainingTextQueueRef.current = true
     while (textSendQueueRef.current.length > 0) {
       const next = textSendQueueRef.current[0]
-      await sendRealMessage(next.conversationId, next.content)
+      const ok = await sendRealMessage(next.conversationId, next.content)
+      if (ok) {
+        // Sucesso: some a bolha otimista — a de verdade chega em seguida pelo eco do
+        // tempo real (fetchRealData, chamado dentro de sendRealMessage, já atualiza a
+        // lista de conversas; o histórico da conversa aberta recarrega via realtimeTick).
+        setOptimisticMessages((prev) => prev.filter((m) => m.id !== next.localId))
+      } else {
+        // Falha: mantém a bolha, só marca como falhada — fica vermelha com "Falha ao
+        // enviar" (mesmo estilo já usado pra mensagem com status='failed' vinda do banco),
+        // e o texto continua visível e selecionável em vez de simplesmente sumir.
+        setOptimisticMessages((prev) => prev.map((m) => (m.id === next.localId ? { ...m, status: 'failed' } : m)))
+      }
       textSendQueueRef.current.shift()
       setQueuedMessageCount(textSendQueueRef.current.length)
     }
@@ -1254,7 +1314,20 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
     setNewMessageText('')
 
     if (viewMode === 'real') {
-      textSendQueueRef.current.push({ conversationId: selectedConversation.id, content: textToSend })
+      const localId = `optimistic-${crypto.randomUUID()}`
+      setOptimisticMessages((prev) => [
+        ...prev,
+        {
+          id: localId,
+          conversationId: selectedConversation.id,
+          senderType: 'user',
+          senderName: 'Você',
+          content: textToSend,
+          time: formatTime(new Date().toISOString()),
+          status: 'sending',
+        },
+      ])
+      textSendQueueRef.current.push({ conversationId: selectedConversation.id, content: textToSend, localId })
       setQueuedMessageCount(textSendQueueRef.current.length)
       void drainTextSendQueue()
       return
@@ -2026,7 +2099,10 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
               onScroll={handleMessagesScroll}
               className="flex-1 min-h-0 p-4 overflow-y-auto space-y-3.5 bg-[#080e18]"
             >
-              {selectedConversation.messages.map((msg) => {
+              {/* Mensagens confirmadas + as ainda otimistas (mandadas agora, sem resposta
+                  do servidor ainda) desta conversa, nessa ordem — a otimista vem sempre
+                  depois porque é a mais nova. */}
+              {[...selectedConversation.messages, ...optimisticMessages.filter((m) => m.conversationId === selectedConvId)].map((msg) => {
                 if (msg.senderType === 'system') {
                   return (
                     <div key={msg.id} className="flex justify-center my-2">
@@ -2128,6 +2204,8 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                             <CheckCheck className="w-3 h-3 text-sky-300" />
                           ) : msg.status === 'delivered' ? (
                             <CheckCheck className="w-3 h-3" />
+                          ) : msg.status === 'sending' ? (
+                            <Loader2 className="w-3 h-3 animate-spin" />
                           ) : (
                             <Check className="w-3 h-3" />
                           )
@@ -2135,10 +2213,28 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                       </span>
                     </div>
                     {isFailed && (
-                      <span className="text-[10px] text-rose-400 flex items-center gap-1 mt-1 px-1">
-                        <AlertCircle className="w-3 h-3" />
-                        Falha ao enviar
-                      </span>
+                      // Só a bolha OTIMISTA (id começa com "optimistic-") tem o texto ainda
+                      // vivo em memória — clicar recupera pro campo pra tentar de novo, sem
+                      // precisar redigitar. Uma mensagem que falhou vindo do banco (outro
+                      // caminho, não este) não tem esse botão — não há o que recuperar aqui.
+                      msg.id.startsWith('optimistic-') ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setNewMessageText(msg.content)
+                            setOptimisticMessages((prev) => prev.filter((m) => m.id !== msg.id))
+                          }}
+                          className="text-[10px] text-rose-400 hover:text-rose-300 flex items-center gap-1 mt-1 px-1"
+                        >
+                          <AlertCircle className="w-3 h-3" />
+                          Falha ao enviar — toque pra recuperar o texto
+                        </button>
+                      ) : (
+                        <span className="text-[10px] text-rose-400 flex items-center gap-1 mt-1 px-1">
+                          <AlertCircle className="w-3 h-3" />
+                          Falha ao enviar
+                        </span>
+                      )
                     )}
                     </div>
                   </div>
