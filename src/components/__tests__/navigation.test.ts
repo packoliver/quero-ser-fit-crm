@@ -8,9 +8,9 @@ import {
 import { UserRole } from '@/types/database'
 
 describe('Navegação e Permissões de Menu por Perfil (Fase 2)', () => {
-  it('deve retornar todas as 13 opções de menu para o perfil Administrador', () => {
+  it('deve retornar todas as 14 opções de menu para o perfil Administrador', () => {
     const adminNav = getNavItemsForRole('admin')
-    expect(adminNav.length).toBe(13)
+    expect(adminNav.length).toBe(14)
 
     const labels = adminNav.map((n) => n.label)
     expect(labels).toContain('Conversas')
@@ -20,6 +20,7 @@ describe('Navegação e Permissões de Menu por Perfil (Fase 2)', () => {
     expect(labels).toContain('Tarefas')
     expect(labels).toContain('Relatórios')
     expect(labels).toContain('Respostas Rápidas')
+    expect(labels).toContain('Preferências')
     expect(labels).toContain('Automações')
     expect(labels).toContain('Etapas do Funil')
     expect(labels).toContain('Equipe')
@@ -30,7 +31,7 @@ describe('Navegação e Permissões de Menu por Perfil (Fase 2)', () => {
 
   it('deve ocultar Equipe e Integrações para o perfil Atendente', () => {
     const attendantNav = getNavItemsForRole('attendant')
-    expect(attendantNav.length).toBe(7)
+    expect(attendantNav.length).toBe(8)
 
     const labels = attendantNav.map((n) => n.label)
     expect(labels).toContain('Conversas')
@@ -40,6 +41,7 @@ describe('Navegação e Permissões de Menu por Perfil (Fase 2)', () => {
     expect(labels).toContain('Tarefas')
     expect(labels).toContain('Relatórios')
     expect(labels).toContain('Respostas Rápidas')
+    expect(labels).toContain('Preferências')
 
     expect(labels).not.toContain('Equipe')
     expect(labels).not.toContain('Integrações')
@@ -62,7 +64,7 @@ describe('Navegação mobile: barra inferior enxuta + tela "Mais"', () => {
     for (const role of roles) {
       const primary = getMobilePrimaryNavItems(role)
       // 3 + o botão "Mais" = 4 alvos de toque, o teto confortável num aparelho de 375px.
-      // Antes a barra recebia a lista inteira: 13 itens no admin, 7 no atendente.
+      // Antes a barra recebia a lista inteira: 14 itens no admin, 8 no atendente.
       expect(primary.length).toBe(3)
       expect(primary.map((i) => i.href)).toEqual(['/inbox', '/funil', '/tarefas'])
     }

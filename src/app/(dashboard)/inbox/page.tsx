@@ -67,6 +67,7 @@ import { PipelineStage, PipelineStageRow, DEFAULT_PIPELINE_STAGES, mapPipelineSt
 import { compressImageIfLarge, compressVideo, CompressProgress } from '@/lib/media/compress'
 import { useVoiceRecorder } from '@/lib/media/useVoiceRecorder'
 import { formatarDuracao } from '@/lib/media/audio'
+import { useEnterToSend } from '@/lib/preferences/composer'
 
 type MediaType = 'image' | 'video' | 'audio' | 'document' | 'sticker'
 
@@ -315,6 +316,19 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
 
   // Action States
   const [newMessageText, setNewMessageText] = useState('')
+  // Preferência salva no aparelho (não no banco — ver src/lib/preferences/composer.ts):
+  // Enter manda a mensagem (padrão, igual hoje) ou só pula linha, igual desligar "Enter is
+  // Send" no WhatsApp Desktop. Shift+Enter sempre pula linha nos dois modos.
+  const [enterToSend] = useEnterToSend()
+  const messageTextareaRef = useRef<HTMLTextAreaElement>(null)
+  // Cresce junto com o texto (até um teto) igual WhatsApp — sem isso, uma mensagem de
+  // várias linhas ficaria escondida rolando dentro de uma caixa de altura fixa.
+  useEffect(() => {
+    const el = messageTextareaRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${Math.min(el.scrollHeight, 120)}px`
+  }, [newMessageText])
   const [isSendingMessage, setIsSendingMessage] = useState(false)
   const [uploadingMedia, setUploadingMedia] = useState(false)
   // Progresso da compressão de foto/vídeo grande demais pro limite de 24MB (ver
@@ -1329,7 +1343,10 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
   }
 
   // Handle Send Message
-  const handleSendMessage = (e: React.FormEvent) => {
+  // Tipo aceita tanto o submit do <form> (clique no botão) quanto o keydown do Enter no
+  // textarea (ver onKeyDown do composer) — só usa e.preventDefault() daqui, então qualquer
+  // evento React serve.
+  const handleSendMessage = (e: { preventDefault: () => void }) => {
     e.preventDefault()
     // Guarda só contra o duplo-clique/toque no mesmo instante (ver comentário de
     // isSendingRef lá em cima) — libera de novo logo em seguida, na próxima microtask,
@@ -2471,18 +2488,34 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                     </div>
                   </>
                 )}
-                <input
-                  type="text"
+                <textarea
+                  ref={messageTextareaRef}
                   placeholder="Mensagem"
                   value={newMessageText}
                   onChange={(e) => setNewMessageText(e.target.value)}
+                  onKeyDown={(e) => {
+                    // Durante composição de IME (acentos/idiomas asiáticos digitados em
+                    // etapas) o Enter confirma o caractere, não envia — deixa passar.
+                    if (e.nativeEvent.isComposing) return
+                    if (e.key !== 'Enter') return
+                    // Shift+Enter sempre pula linha, nos dois modos — é o atalho universal
+                    // de chat pra isso, então funciona mesmo com "Enter envia" ligado.
+                    if (e.shiftKey) return
+                    if (!enterToSend) return // Enter puro só pula linha (comportamento padrão do textarea)
+                    e.preventDefault()
+                    handleSendMessage(e)
+                  }}
+                  rows={1}
                   // De propósito NUNCA desabilitado por envio/upload em andamento — a fila de
                   // envio (textSendQueueRef/drainTextSendQueue) deixa digitar e mandar a
                   // próxima linha na hora, sem esperar a anterior chegar no cliente.
                   // text-base no celular pelo mesmo motivo do componente Input: fonte menor
                   // que 16px faz o Safari do iPhone dar zoom ao focar. Num campo que é
                   // focado o tempo todo, esse seria o incômodo mais repetido do app.
-                  className="flex-1 min-w-0 px-4 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-base lg:text-xs text-slate-100 focus:outline-none focus:border-emerald-500"
+                  // enterKeyHint troca o ícone do teclado virtual (celular) pra combinar com
+                  // o modo: "Enviar" quando Enter envia, seta de nova linha quando não envia.
+                  enterKeyHint={enterToSend ? 'send' : 'enter'}
+                  className="flex-1 min-w-0 px-4 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-base lg:text-xs text-slate-100 focus:outline-none focus:border-emerald-500 resize-none leading-normal max-h-[120px] overflow-y-auto"
                 />
                 {/* Igual ao WhatsApp: com o campo vazio o botão é o microfone; assim que
                     há texto, vira enviar. Economiza espaço numa barra que já tem clipe,
