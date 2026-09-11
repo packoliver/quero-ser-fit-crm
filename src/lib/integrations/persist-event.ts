@@ -200,6 +200,14 @@ async function persistOutgoingEchoEvent(
   })
 
   if (msgError) {
+    // 23505 = a trava messages_org_external_id_unique pegou uma corrida (outra chamada
+    // concorrente — o /api/messages/send do próprio CRM, ou outra entrega do mesmo
+    // webhook — já inseriu essa mensagem entre a checagem no início desta função e este
+    // insert). Não é erro, é exatamente o que a trava existe pra fazer: a mensagem já está
+    // salva, só não fomos nós que a inserimos desta vez.
+    if ('code' in msgError && msgError.code === '23505') {
+      return { success: true, conversationId }
+    }
     console.error('[persistOutgoingEchoEvent] Erro ao inserir mensagem:', msgError)
     return { success: false }
   }
@@ -443,6 +451,13 @@ export async function persistInboundEvent(
     .single()
 
   if (msgError) {
+    // 23505 = a trava messages_org_external_id_unique pegou uma corrida (a checagem por
+    // external_id lá em cima já tenta evitar isso, mas não é atômica — duas entregas do
+    // mesmo webhook quase simultâneas podem passar pelas duas checagens antes de qualquer
+    // uma das duas terminar de inserir). Não é erro: a mensagem já está salva.
+    if ('code' in msgError && msgError.code === '23505') {
+      return { success: true, conversationId }
+    }
     console.error('[persistInboundEvent] Erro ao inserir mensagem no Supabase:', msgError)
     return { success: false }
   }

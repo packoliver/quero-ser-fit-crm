@@ -215,6 +215,25 @@ async function handlePost(request: NextRequest) {
   })
 
   if (insertError) {
+    // 23505 = a trava messages_org_external_id_unique (ver migration
+    // add_unique_index_messages_external_id) pegou uma corrida: o eco do próprio envio
+    // (webhook da uazapi) chegou e já inseriu essa mesma mensagem antes deste insert
+    // terminar. Se o envio externo funcionou, isso NÃO é uma falha — a mensagem já está
+    // salva (pelo caminho do eco), só não fomos nós que inserimos desta vez. Sem esse
+    // desvio, a vendedora veria "falha ao enviar" numa mensagem que na verdade chegou certinho.
+    const insertErrorCode = (insertError as { code?: string }).code
+    if (insertErrorCode === '23505' && result.success) {
+      await attemptsWriter.from('outbound_message_attempts').update({
+        status: 'sent',
+        external_id: result.externalId || null,
+        error_message: null,
+      }).eq('organization_id', conversation.organization_id).eq('idempotency_key', idempotencyKey)
+
+      await db.from('conversations').update({ last_message_at: new Date().toISOString() }).eq('id', conversation.id)
+
+      return NextResponse.json({ success: true, externalId: result.externalId })
+    }
+
     // Se o envio externo TAMBÉM falhou (não só o insert local), não marca como "sent" —
     // uma tentativa futura com essa mesma idempotencyKey precisa poder tentar de novo em
     // vez de receber de volta um falso "sucesso" (ver outbound_message_attempts acima:
