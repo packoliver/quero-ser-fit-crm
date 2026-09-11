@@ -262,12 +262,14 @@ export class UazapiWhatsAppProvider implements ICRMIntegrationProvider {
           typeof rawStatus === 'string'
             ? UAZAPI_STATUS_MAP[rawStatus.toLowerCase()]
             : typeof rawStatus === 'number'
-              ? // Convenção comum em libs baseadas no protocolo do WhatsApp Web (Baileys):
-                // 2 = entregue no aparelho, 3+ = lido/reproduzido. 0/1 (pendente/enviado
-                // ao servidor) não avança nada — já é o que 'sent' já significa aqui.
-                rawStatus >= 3
+              ? // Enum real de status da Baileys (proto.WebMessageInfo.Status), a lib em cima
+                // da qual a uazapi é construída: ERROR=0, PENDING=1, SERVER_ACK=2 (só chegou
+                // no servidor do WhatsApp, não no aparelho do cliente — NÃO é "entregue"),
+                // DELIVERY_ACK=3 (entregue de verdade), READ=4, PLAYED=5 (áudio ouvido).
+                // 0-2 não avança nada — 'sent' já cobre esse caso.
+                rawStatus >= 4
                 ? 'read'
-                : rawStatus === 2
+                : rawStatus === 3
                   ? 'delivered'
                   : undefined
               : undefined

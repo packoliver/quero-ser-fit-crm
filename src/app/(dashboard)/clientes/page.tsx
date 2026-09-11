@@ -404,21 +404,45 @@ export default function ClientesPage() {
     setError(null)
 
     if (viewMode === 'real') {
+      // O bloqueio de verdade é a política de RLS (exige a permissão delete_clients) — esta
+      // checagem aqui é só pra não deixar nem tentar quando já se sabe que vai ser negado,
+      // com uma mensagem clara em vez de deixar cair no "0 linhas afetadas" genérico abaixo.
+      if (!canDeleteClients) {
+        setError('Você não tem permissão para excluir clientes.')
+        setDeleteModalOpen(false)
+        return
+      }
+
       try {
         const supabase = createClient()
-        const { error: deleteError } = await (supabase as unknown as {
+        // .select('id') depois do delete é o que permite diferenciar "excluiu de verdade"
+        // de "RLS bloqueou silenciosamente" — sem select nenhum, o Supabase não retorna
+        // erro quando a política de segurança filtra a exclusão pra 0 linhas (não é bug do
+        // Supabase, é assim que RLS funciona: a política vira parte do WHERE). Sem essa
+        // checagem, quem não tem permissão via um "Cliente excluído com sucesso" falso — o
+        // cliente sumia da tela na hora mas continuava intacto no banco.
+        const { data: deletedRows, error: deleteError } = await (supabase as unknown as {
           from: (t: string) => {
             delete: () => {
-              eq: (col: string, val: string) => Promise<{ error: { message: string } | null }>
+              eq: (col: string, val: string) => {
+                select: (c: string) => Promise<{ data: { id: string }[] | null; error: { message: string } | null }>
+              }
             }
           }
         })
           .from('contacts')
           .delete()
           .eq('id', selectedContact.id)
+          .select('id')
 
         if (deleteError) {
           setError('Não foi possível excluir o cliente no Supabase.')
+          setDeleteModalOpen(false)
+          return
+        }
+
+        if (!deletedRows || deletedRows.length === 0) {
+          setError('Você não tem permissão para excluir clientes — nada foi apagado.')
           setDeleteModalOpen(false)
           return
         }
@@ -463,6 +487,7 @@ export default function ClientesPage() {
   const isRealContactEntry = (c: RealContact | DemoContact): c is RealContact => !('isDemo' in c)
 
   const canExportClients = hasPermission(currentUserRole || 'attendant', currentUserPermissions, 'export_clients')
+  const canDeleteClients = hasPermission(currentUserRole || 'attendant', currentUserPermissions, 'delete_clients')
 
   // Exporta exatamente o que está na tela (respeitando busca + filtro de tag ativos) —
   // não a base inteira por baixo dos panos, pra bater com o que o atendente está vendo.
@@ -713,14 +738,16 @@ export default function ClientesPage() {
                 >
                   <Pencil className="w-3.5 h-3.5" />
                 </button>
-                <button
-                  type="button"
-                  onClick={() => setDeleteModalOpen(true)}
-                  className="p-2 rounded-xl bg-slate-900 hover:bg-rose-950/60 border border-slate-700 hover:border-rose-800 text-slate-400 hover:text-rose-400 transition"
-                  title="Excluir cliente"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
+                {canDeleteClients && (
+                  <button
+                    type="button"
+                    onClick={() => setDeleteModalOpen(true)}
+                    className="p-2 rounded-xl bg-slate-900 hover:bg-rose-950/60 border border-slate-700 hover:border-rose-800 text-slate-400 hover:text-rose-400 transition"
+                    title="Excluir cliente"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                )}
               </div>
             </div>
 

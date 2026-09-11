@@ -668,7 +668,11 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
       // toa. organization_members nem é buscado de novo aqui: fetchRealData já popula
       // realTeamMembers com a mesma informação (ver realTeamMembersRef acima).
       const conv = realConversationsRef.current.find((c) => c.id === conversationId)
-      const isGroup = !!conv?.isGroup
+      // Quando `conv` ainda não existe (ex: abrindo direto por link ?conversa=... antes de
+      // fetchRealData popular a lista pela primeira vez), o padrão é buscar os perfis mesmo
+      // — não dá pra saber se é grupo ainda, e é melhor gastar uma busca à toa uma vez do
+      // que abrir um grupo sem foto de ninguém na primeira olhada.
+      const isGroup = conv ? conv.isGroup : true
       const nomeDoContato = conv?.contactName || 'Cliente'
 
       const [msgRes, profilesRes] = await Promise.all([
@@ -1129,9 +1133,14 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
       const next = textSendQueueRef.current[0]
       const ok = await sendRealMessage(next.conversationId, next.content)
       if (ok) {
-        // Sucesso: some a bolha otimista — a de verdade chega em seguida pelo eco do
-        // tempo real (fetchRealData, chamado dentro de sendRealMessage, já atualiza a
-        // lista de conversas; o histórico da conversa aberta recarrega via realtimeTick).
+        // Busca o histórico da conversa ANTES de tirar a bolha otimista — sem isso havia uma
+        // janela de ~400ms (o debounce do eco em tempo real) em que nem a bolha otimista nem
+        // a mensagem de verdade apareciam na tela, como se a mensagem tivesse sumido por um
+        // instante logo depois de confirmada. Só busca se a conversa enviada ainda é a que
+        // está aberta — se a pessoa já trocou, não há o que sincronizar na tela agora.
+        if (next.conversationId === selectedConvIdRef.current) {
+          await fetchConversationMessages(next.conversationId)
+        }
         setOptimisticMessages((prev) => prev.filter((m) => m.id !== next.localId))
       } else {
         // Falha: mantém a bolha, só marca como falhada — fica vermelha com "Falha ao
