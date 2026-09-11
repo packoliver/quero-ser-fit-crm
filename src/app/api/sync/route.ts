@@ -90,6 +90,14 @@ export async function POST(request: NextRequest) {
     }
   }
 
+  // Tudo abaixo só roda se ninguém decidiu status='conflict'/'rejected' ainda (o cheque de
+  // baseUpdatedAt logo acima). Antes, só o ramo de 'contact' respeitava isso (checava
+  // status==='applied' na própria condição) — 'task' e 'deal' entravam de qualquer jeito
+  // mesmo com um conflito já detectado, aplicando a escrita por cima da versão mais nova
+  // de outra pessoa. Envolver tudo aqui fecha isso pras três tabelas de uma vez, e também
+  // impede cair no `else` final (que sobrescrevia a mensagem de conflito de propósito por
+  // "Operação ainda não habilitada offline" — mensagem sem sentido nenhum pra quem só
+  // estava tentando editar um contato que mudou enquanto estava offline).
   if (status === 'applied' && table === 'contact') {
     const values = { name: typeof payload.name === 'string' ? payload.name.trim().slice(0, 200) : '', email: typeof payload.email === 'string' ? payload.email.slice(0, 320) : null, phone: typeof payload.phone === 'string' ? payload.phone.slice(0, 40) : null, notes: typeof payload.notes === 'string' ? payload.notes.slice(0, 5000) : null }
     if (!values.name && !update) { status = 'rejected'; errorMessage = 'Nome obrigatório.' }
@@ -101,17 +109,54 @@ export async function POST(request: NextRequest) {
       const response = await admin.from('contacts').insert({ ...values, organization_id: context.organizationId, status: 'active' }).select('id, name, email, phone, notes, updated_at').single()
       result = response.data; errorMessage = response.error?.message || null
     }
-  } else if (table === 'task') {
-    const values = { title: typeof payload.title === 'string' ? payload.title.trim().slice(0, 240) : '', description: typeof payload.description === 'string' ? payload.description.slice(0, 5000) : null, status: typeof payload.status === 'string' ? payload.status : 'pending', priority: typeof payload.priority === 'string' ? payload.priority : 'media' }
-    if (!values.title && !update) { status = 'rejected'; errorMessage = 'Título obrigatório.' }
-    else if (update) { const response = await admin.from('tasks').update(values).eq('id', recordId!).eq('organization_id', context.organizationId).select('id, title, description, status, priority, updated_at').maybeSingle(); result = response.data; errorMessage = response.error?.message || null }
-    else { const response = await admin.from('tasks').insert({ ...values, organization_id: context.organizationId }).select('id, title, description, status, priority, updated_at').single(); result = response.data; errorMessage = response.error?.message || null }
-  } else if (table === 'deal') {
-    const values = { title: typeof payload.title === 'string' ? payload.title.trim().slice(0, 240) : '', value: typeof payload.value === 'number' ? payload.value : null, stage: typeof payload.stage === 'string' ? payload.stage : 'lead', notes: typeof payload.notes === 'string' ? payload.notes.slice(0, 5000) : null }
-    if (!values.title && !update) { status = 'rejected'; errorMessage = 'Título obrigatório.' }
-    else if (update) { const response = await admin.from('deals').update(values).eq('id', recordId!).eq('organization_id', context.organizationId).select('id, title, value, stage, notes, updated_at').maybeSingle(); result = response.data; errorMessage = response.error?.message || null }
-    else { const contactId = uuid(payload.contact_id); if (!contactId) { status = 'rejected'; errorMessage = 'Contato obrigatório.' } else { const response = await admin.from('deals').insert({ ...values, contact_id: contactId, organization_id: context.organizationId }).select('id, title, value, stage, notes, updated_at').single(); result = response.data; errorMessage = response.error?.message || null } }
-  } else if (operation === 'note.create') {
+  } else if (status === 'applied' && table === 'task') {
+    if (update) {
+      // Só inclui os campos que REALMENTE vieram no payload — uma atualização offline
+      // parcial (ex.: {id, status}, o que a tela de Tarefas manda ao marcar como
+      // concluída) não pode apagar título/descrição/prioridade que não vieram junto.
+      // Antes, os campos ausentes do payload caíam nos valores padrão abaixo (title
+      // virava '', description virava null, priority voltava pra 'media') e SOBRESCREVIAM
+      // o que já existia no banco.
+      const updateValues: Record<string, unknown> = {}
+      if (typeof payload.title === 'string') updateValues.title = payload.title.trim().slice(0, 240)
+      if (typeof payload.description === 'string') updateValues.description = payload.description.slice(0, 5000)
+      if (typeof payload.status === 'string') updateValues.status = payload.status
+      if (typeof payload.priority === 'string') updateValues.priority = payload.priority
+      if (Object.keys(updateValues).length === 0) {
+        status = 'rejected'; errorMessage = 'Nenhum campo para atualizar.'
+      } else {
+        const response = await admin.from('tasks').update(updateValues).eq('id', recordId!).eq('organization_id', context.organizationId).select('id, title, description, status, priority, updated_at').maybeSingle()
+        result = response.data; errorMessage = response.error?.message || null
+      }
+    } else {
+      const values = { title: typeof payload.title === 'string' ? payload.title.trim().slice(0, 240) : '', description: typeof payload.description === 'string' ? payload.description.slice(0, 5000) : null, status: typeof payload.status === 'string' ? payload.status : 'pending', priority: typeof payload.priority === 'string' ? payload.priority : 'media' }
+      if (!values.title) { status = 'rejected'; errorMessage = 'Título obrigatório.' }
+      else { const response = await admin.from('tasks').insert({ ...values, organization_id: context.organizationId }).select('id, title, description, status, priority, updated_at').single(); result = response.data; errorMessage = response.error?.message || null }
+    }
+  } else if (status === 'applied' && table === 'deal') {
+    if (update) {
+      // Mesmo raciocínio do ramo de 'task' acima: só atualiza os campos que vieram no
+      // payload. A tela do Funil manda {id, stage, closed_at?} ao mover um pedido de
+      // etapa — sem essa checagem, title/value/notes eram apagados e closed_at nunca
+      // chegava a ser gravado.
+      const updateValues: Record<string, unknown> = {}
+      if (typeof payload.title === 'string') updateValues.title = payload.title.trim().slice(0, 240)
+      if (typeof payload.value === 'number') updateValues.value = payload.value
+      if (typeof payload.stage === 'string') updateValues.stage = payload.stage
+      if (typeof payload.notes === 'string') updateValues.notes = payload.notes.slice(0, 5000)
+      if (typeof payload.closed_at === 'string') updateValues.closed_at = payload.closed_at
+      if (Object.keys(updateValues).length === 0) {
+        status = 'rejected'; errorMessage = 'Nenhum campo para atualizar.'
+      } else {
+        const response = await admin.from('deals').update(updateValues).eq('id', recordId!).eq('organization_id', context.organizationId).select('id, title, value, stage, notes, closed_at, updated_at').maybeSingle()
+        result = response.data; errorMessage = response.error?.message || null
+      }
+    } else {
+      const values = { title: typeof payload.title === 'string' ? payload.title.trim().slice(0, 240) : '', value: typeof payload.value === 'number' ? payload.value : null, stage: typeof payload.stage === 'string' ? payload.stage : 'lead', notes: typeof payload.notes === 'string' ? payload.notes.slice(0, 5000) : null }
+      if (!values.title) { status = 'rejected'; errorMessage = 'Título obrigatório.' }
+      else { const contactId = uuid(payload.contact_id); if (!contactId) { status = 'rejected'; errorMessage = 'Contato obrigatório.' } else { const response = await admin.from('deals').insert({ ...values, contact_id: contactId, organization_id: context.organizationId }).select('id, title, value, stage, notes, updated_at').single(); result = response.data; errorMessage = response.error?.message || null } }
+    }
+  } else if (status === 'applied' && operation === 'note.create') {
     const conversationId = uuid(payload.conversationId)
     const content = typeof payload.content === 'string' ? payload.content.trim().slice(0, 5000) : ''
     if (!conversationId || !content) {
@@ -128,11 +173,16 @@ export async function POST(request: NextRequest) {
         errorMessage = response.error?.message || null
       }
     }
-  } else {
+  } else if (status === 'applied') {
     status = 'rejected'; errorMessage = 'Operação ainda não habilitada offline.'
   }
 
-  if (errorMessage) {
+  // Só reclassifica com base no TEXTO da mensagem quando ela veio de um erro de banco
+  // inesperado durante o insert/update acima (status ainda 'applied' até aqui, só a
+  // mensagem foi setada) — nunca sobre uma decisão que a própria função já tomou de
+  // propósito (o conflito de baseUpdatedAt lá no topo, ou uma rejeição de validação tipo
+  // "Nome obrigatório"), que já tem o status certo e não deve ser reescrita.
+  if (status === 'applied' && errorMessage) {
     if (errorMessage.includes('updated_at') || errorMessage.includes('permission') || errorMessage.includes('not found')) status = 'conflict'
     else status = 'rejected'
   }
