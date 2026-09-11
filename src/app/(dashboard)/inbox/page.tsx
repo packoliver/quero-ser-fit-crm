@@ -1043,18 +1043,16 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
   }
 
   // Sends a message in real mode — text-only or with an already-uploaded media URL attached.
-  const sendRealMessage = async (content: string, mediaUrl?: string, mediaType?: MediaType) => {
-    if (!selectedConversation) return
-    // Ver comentário de isSendingRef acima: se uma segunda chamada já entrou aqui
-    // enquanto a primeira ainda está em voo, aborta esta em vez de mandar em duplicado.
-    if (isSendingRef.current) return
-    isSendingRef.current = true
-    setIsSendingMessage(true)
+  // Recebe conversationId explícito (em vez de ler selectedConversation aqui dentro): a
+  // fila de envio (drainTextSendQueue, logo abaixo) pode chamar isso bem depois de
+  // enfileirado, quando a pessoa já pode ter trocado de conversa — sem isso, uma mensagem
+  // enfileirada enquanto a conversa A estava aberta podia ir pra conversa B.
+  const sendRealMessage = async (conversationId: string, content: string, mediaUrl?: string, mediaType?: MediaType) => {
     try {
       const res = await fetch('/api/messages/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ conversationId: selectedConversation.id, content, mediaUrl, mediaType, idempotencyKey: crypto.randomUUID() }),
+        body: JSON.stringify({ conversationId, content, mediaUrl, mediaType, idempotencyKey: crypto.randomUUID() }),
       })
       const body = await res.json()
       if (!res.ok) {
@@ -1063,10 +1061,28 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
       fetchRealData()
     } catch {
       setErrorMessage('Erro de conexão ao enviar mensagem.')
-    } finally {
-      setIsSendingMessage(false)
-      isSendingRef.current = false
     }
+  }
+
+  // Fila de envio de texto: cada linha mandada entra aqui e é enviada pro servidor uma de
+  // cada vez, NA ORDEM, mas sem travar o campo de digitar — a pessoa pode escrever e
+  // mandar a próxima linha na hora, sem esperar a anterior terminar de chegar no cliente.
+  // Antes disso o campo ficava desabilitado até o fetch anterior responder (reportado
+  // como "só deixa digitar uma linha de cada vez, tem que esperar chegar pro cliente").
+  const textSendQueueRef = useRef<{ conversationId: string; content: string }[]>([])
+  const isDrainingTextQueueRef = useRef(false)
+  const [queuedMessageCount, setQueuedMessageCount] = useState(0)
+
+  const drainTextSendQueue = async () => {
+    if (isDrainingTextQueueRef.current) return
+    isDrainingTextQueueRef.current = true
+    while (textSendQueueRef.current.length > 0) {
+      const next = textSendQueueRef.current[0]
+      await sendRealMessage(next.conversationId, next.content)
+      textSendQueueRef.current.shift()
+      setQueuedMessageCount(textSendQueueRef.current.length)
+    }
+    isDrainingTextQueueRef.current = false
   }
 
   // Handle attaching a file — uploads straight from the browser to Supabase Storage
@@ -1078,28 +1094,28 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
    * Sobe um arquivo pro storage e manda como mensagem.
    *
    * Compartilhado por três origens que chegam aqui já com um File pronto: o clipe de
-   * anexo, a câmera e o áudio gravado no microfone. Antes isto vivia dentro de
-   * handleFileSelected, amarrado ao <input type="file"> — e a gravação não tem input
-   * nenhum.
+   * anexo (que pode mandar vários de uma vez — ver handleFileSelected), a câmera e o
+   * áudio gravado no microfone.
    *
-   * `comLegenda` decide se o texto digitado vai junto: faz sentido numa foto, não numa
-   * mensagem de voz (nem o WhatsApp deixa). O texto só é consumido depois que o upload
-   * deu certo, pra que uma falha de rede não apague o que a pessoa escreveu.
+   * conversationId/organizationId/caption vêm explícitos de quem chama, capturados no
+   * momento em que o envio começou — não lidos de volta de `selectedConversation`/
+   * `newMessageText` aqui dentro, porque o upload pode demorar (vídeo grande, conexão
+   * ruim) e a pessoa pode trocar de conversa ou continuar digitando nesse meio tempo.
    */
-  const uploadAndSendMedia = async (file: File, { comLegenda }: { comLegenda: boolean }) => {
-    if (!selectedConversation || viewMode !== 'real' || !selectedConversation.organizationId) return
-
+  const uploadAndSendMedia = async (
+    file: File,
+    { conversationId, organizationId, caption }: { conversationId: string; organizationId: string; caption: string }
+  ) => {
     if (file.size > MAX_MEDIA_SIZE_BYTES) {
-      setErrorMessage('Arquivo maior que 24MB — esse é o limite de anexo do Instagram/WhatsApp. Comprima o vídeo/foto e tente de novo.')
+      setErrorMessage(`"${file.name}" é maior que 24MB — esse é o limite de anexo do Instagram/WhatsApp. Comprima o vídeo/foto e tente de novo.`)
       return
     }
 
-    setUploadingMedia(true)
     try {
       const supabase = createClient()
       const ext = file.name.includes('.') ? file.name.split('.').pop() : 'bin'
       // IDs are generated only after a user selects a file, never during render.
-      const path = `${selectedConversation.organizationId}/${selectedConversation.id}/${crypto.randomUUID()}.${ext}`
+      const path = `${organizationId}/${conversationId}/${crypto.randomUUID()}.${ext}`
 
       const { error: uploadError } = await supabase.storage
         .from('chat-media')
@@ -1115,59 +1131,74 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
         console.error('[Inbox] Falha ao enviar anexo:', uploadError.message)
         setErrorMessage(
           isSizeError
-            ? 'Arquivo grande demais para o limite de anexo (24MB) — comprima o vídeo/foto e tente de novo.'
-            : 'Falha ao enviar arquivo. Tente novamente em alguns instantes.'
+            ? `"${file.name}" grande demais para o limite de anexo (24MB) — comprima o vídeo/foto e tente de novo.`
+            : `Falha ao enviar "${file.name}". Tente novamente em alguns instantes.`
         )
         return
       }
 
       const { data: publicUrlData } = supabase.storage.from('chat-media').getPublicUrl(path)
       const mediaType = detectMediaType(file.type || '')
-      const caption = comLegenda ? newMessageText.trim() : ''
-      if (comLegenda) setNewMessageText('')
-      await sendRealMessage(caption, publicUrlData.publicUrl, mediaType)
+      await sendRealMessage(conversationId, caption, publicUrlData.publicUrl, mediaType)
     } catch {
-      setErrorMessage('Erro inesperado ao enviar arquivo.')
-    } finally {
-      setUploadingMedia(false)
+      setErrorMessage(`Erro inesperado ao enviar "${file.name}".`)
     }
   }
 
+  // Seleciona um ou vários arquivos de uma vez (o input do clipe tem `multiple`) e manda
+  // cada um em sequência, um de cada vez pro servidor — na ordem, sem precisar reabrir o
+  // seletor 20 vezes pra mandar 20 fotos.
   const handleFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    let file = e.target.files?.[0]
+    const files = Array.from(e.target.files ?? [])
     e.target.value = ''
-    if (!file || !selectedConversation || viewMode !== 'real' || !selectedConversation.organizationId) return
+    if (files.length === 0 || !selectedConversation || viewMode !== 'real' || !selectedConversation.organizationId) return
 
+    const conversationId = selectedConversation.id
+    const organizationId = selectedConversation.organizationId
     setErrorMessage(null)
 
-    // Foto grande (câmera moderna facilmente passa de 8-15MB): comprime sempre que valer
-    // a pena, rápido via Canvas — não é exclusivo de quando estoura o limite, também
-    // deixa o envio mais rápido numa conexão de dados fraca.
-    if (file.type.startsWith('image/')) {
-      file = await compressImageIfLarge(file)
-    }
+    // A legenda digitada vai só no primeiro arquivo do lote — repetir a mesma legenda em
+    // 20 fotos não faz sentido (nem o WhatsApp faz isso). Captura e limpa o campo já aqui,
+    // antes do loop, pra pessoa poder digitar a próxima mensagem enquanto o lote sobe.
+    const captionText = newMessageText.trim()
+    if (captionText) setNewMessageText('')
 
-    // Vídeo grande demais pro limite: tenta comprimir com ffmpeg.wasm (mais pesado — só
-    // entra em ação quando realmente precisa). Mostra o progresso porque isso pode levar
-    // de alguns segundos a mais de um minuto, dependendo do aparelho e do tamanho do vídeo.
-    if (file.type.startsWith('video/') && file.size > MAX_MEDIA_SIZE_BYTES) {
-      try {
-        const compressed = await compressVideo(file, MAX_MEDIA_SIZE_BYTES, setCompressionProgress)
-        if (compressed) {
-          file = compressed
-        } else {
-          setErrorMessage(
-            'Não foi possível comprimir esse vídeo o suficiente pra caber no limite de 24MB — tente um vídeo mais curto ou grave em qualidade menor.'
-          )
-          setCompressionProgress(null)
-          return
+    setUploadingMedia(true)
+    try {
+      for (let i = 0; i < files.length; i++) {
+        let file = files[i]
+
+        // Foto grande (câmera moderna facilmente passa de 8-15MB): comprime sempre que valer
+        // a pena, rápido via Canvas — não é exclusivo de quando estoura o limite, também
+        // deixa o envio mais rápido numa conexão de dados fraca.
+        if (file.type.startsWith('image/')) {
+          file = await compressImageIfLarge(file)
         }
-      } finally {
-        setCompressionProgress(null)
-      }
-    }
 
-    await uploadAndSendMedia(file, { comLegenda: true })
+        // Vídeo grande demais pro limite: tenta comprimir com ffmpeg.wasm (mais pesado —
+        // só entra em ação quando realmente precisa). Mostra o progresso porque isso pode
+        // levar de alguns segundos a mais de um minuto, dependendo do aparelho/tamanho.
+        if (file.type.startsWith('video/') && file.size > MAX_MEDIA_SIZE_BYTES) {
+          let compressed: File | null = null
+          try {
+            compressed = await compressVideo(file, MAX_MEDIA_SIZE_BYTES, setCompressionProgress)
+          } finally {
+            setCompressionProgress(null)
+          }
+          if (!compressed) {
+            setErrorMessage(
+              `Não foi possível comprimir "${file.name}" o suficiente pra caber no limite de 24MB — pulando esse arquivo.`
+            )
+            continue
+          }
+          file = compressed
+        }
+
+        await uploadAndSendMedia(file, { conversationId, organizationId, caption: i === 0 ? captionText : '' })
+      }
+    } finally {
+      setUploadingMedia(false)
+    }
   }
 
   /**
@@ -1176,7 +1207,13 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
    * ponta de áudio já existia dos dois lados, só não havia como gravar.
    */
   const gravador = useVoiceRecorder({
-    onPronto: (arquivo) => void uploadAndSendMedia(arquivo, { comLegenda: false }),
+    onPronto: (arquivo) => {
+      if (!selectedConversation?.organizationId) return
+      const conversationId = selectedConversation.id
+      const organizationId = selectedConversation.organizationId
+      setUploadingMedia(true)
+      void uploadAndSendMedia(arquivo, { conversationId, organizationId, caption: '' }).finally(() => setUploadingMedia(false))
+    },
     onProgressoConversao: setAudioProgress,
   })
 
@@ -1201,19 +1238,30 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
   }
 
   // Handle Send Message
-  const handleSendMessage = async (e: React.FormEvent) => {
+  const handleSendMessage = (e: React.FormEvent) => {
     e.preventDefault()
-    if (!newMessageText.trim() || !selectedConversation || isSendingMessage || isSendingRef.current) return
+    // Guarda só contra o duplo-clique/toque no mesmo instante (ver comentário de
+    // isSendingRef lá em cima) — libera de novo logo em seguida, na próxima microtask,
+    // pra não impedir a PRÓXIMA linha, diferente, de ser mandada na hora.
+    if (isSendingRef.current) return
+    if (!newMessageText.trim() || !selectedConversation) return
+    isSendingRef.current = true
+    queueMicrotask(() => {
+      isSendingRef.current = false
+    })
 
     const textToSend = newMessageText
     setNewMessageText('')
 
     if (viewMode === 'real') {
-      await sendRealMessage(textToSend)
+      textSendQueueRef.current.push({ conversationId: selectedConversation.id, content: textToSend })
+      setQueuedMessageCount(textSendQueueRef.current.length)
+      void drainTextSendQueue()
       return
     }
 
-    isSendingRef.current = true
+    // Modo demo (simulação local, sem Supabase real) segue sequencial como antes — a
+    // resposta automática simulada depende disso, e não é o que foi reportado.
     setIsSendingMessage(true)
 
     // Demo mode
@@ -2097,13 +2145,18 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                 )
               })}
 
-              {/* Sending / Auto-reply Indicator */}
-              {isSendingMessage && (
+              {/* Sending / Auto-reply Indicator — no modo real reflete a fila de envio
+                  (queuedMessageCount), não mais um único "enviando" que travava o campo. */}
+              {(viewMode === 'real' ? queuedMessageCount > 0 : isSendingMessage) && (
                 <div className="flex justify-start my-2">
                   <div className="bg-slate-900 border border-slate-800 px-3.5 py-2 rounded-2xl text-slate-400 text-xs flex items-center gap-2">
                     <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-400" />
                     <span>
-                      {viewMode === 'real' ? 'Enviando...' : `${selectedConversation.contactName} está digitando uma resposta...`}
+                      {viewMode === 'real'
+                        ? queuedMessageCount > 1
+                          ? `Enviando ${queuedMessageCount} mensagens...`
+                          : 'Enviando...'
+                        : `${selectedConversation.contactName} está digitando uma resposta...`}
                     </span>
                   </div>
                 </div>
@@ -2216,14 +2269,17 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                       type="file"
                       className="hidden"
                       accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx"
+                      // Seleciona vários arquivos de uma vez (ex: 20 fotos) — handleFileSelected
+                      // manda cada um em sequência, sem precisar reabrir o seletor pra cada um.
+                      multiple
                       onChange={handleFileSelected}
-                      disabled={uploadingMedia || isSendingMessage || !!compressionProgress}
+                      disabled={uploadingMedia || !!compressionProgress}
                     />
                     <button
                       type="button"
                       onClick={() => fileInputRef.current?.click()}
-                      disabled={uploadingMedia || isSendingMessage || !!compressionProgress}
-                      title="Anexar imagem, vídeo, áudio ou documento"
+                      disabled={uploadingMedia || !!compressionProgress}
+                      title="Anexar imagem, vídeo, áudio ou documento (pode selecionar vários de uma vez)"
                       className="p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-slate-400 hover:text-emerald-400 hover:border-emerald-700 transition disabled:opacity-50 shrink-0"
                     >
                       {uploadingMedia ? <Loader2 className="w-4 h-4 animate-spin" /> : <Paperclip className="w-4 h-4" />}
@@ -2238,12 +2294,12 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                       accept="image/*"
                       capture="environment"
                       onChange={handleFileSelected}
-                      disabled={uploadingMedia || isSendingMessage || !!compressionProgress}
+                      disabled={uploadingMedia || !!compressionProgress}
                     />
                     <button
                       type="button"
                       onClick={() => cameraInputRef.current?.click()}
-                      disabled={uploadingMedia || isSendingMessage || !!compressionProgress}
+                      disabled={uploadingMedia || !!compressionProgress}
                       title="Tirar foto"
                       className="p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-slate-400 hover:text-emerald-400 hover:border-emerald-700 transition disabled:opacity-50 shrink-0"
                     >
@@ -2254,7 +2310,7 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                       <button
                         type="button"
                         onClick={() => setQuickRepliesOpen((v) => !v)}
-                        disabled={isSendingMessage || uploadingMedia || !!compressionProgress}
+                        disabled={uploadingMedia || !!compressionProgress}
                         title="Respostas rápidas"
                         className="p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-slate-400 hover:text-emerald-400 hover:border-emerald-700 transition disabled:opacity-50"
                       >
@@ -2293,11 +2349,13 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                   placeholder="Mensagem"
                   value={newMessageText}
                   onChange={(e) => setNewMessageText(e.target.value)}
-                  disabled={isSendingMessage || uploadingMedia || !!compressionProgress}
+                  // De propósito NUNCA desabilitado por envio/upload em andamento — a fila de
+                  // envio (textSendQueueRef/drainTextSendQueue) deixa digitar e mandar a
+                  // próxima linha na hora, sem esperar a anterior chegar no cliente.
                   // text-base no celular pelo mesmo motivo do componente Input: fonte menor
                   // que 16px faz o Safari do iPhone dar zoom ao focar. Num campo que é
                   // focado o tempo todo, esse seria o incômodo mais repetido do app.
-                  className="flex-1 min-w-0 px-4 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-base lg:text-xs text-slate-100 focus:outline-none focus:border-emerald-500 disabled:opacity-50"
+                  className="flex-1 min-w-0 px-4 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-base lg:text-xs text-slate-100 focus:outline-none focus:border-emerald-500"
                 />
                 {/* Igual ao WhatsApp: com o campo vazio o botão é o microfone; assim que
                     há texto, vira enviar. Economiza espaço numa barra que já tem clipe,
@@ -2307,7 +2365,7 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                   <Button
                     type="button"
                     onClick={gravador.iniciar}
-                    disabled={isSendingMessage || uploadingMedia || !!compressionProgress}
+                    disabled={uploadingMedia || !!compressionProgress}
                     size="md"
                     variant="primary"
                     aria-label="Gravar mensagem de áudio"
@@ -2316,8 +2374,15 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                     <Mic className="w-4 h-4" />
                   </Button>
                 ) : (
-                  <Button type="submit" disabled={!newMessageText.trim() || isSendingMessage || uploadingMedia || !!compressionProgress} size="md" variant="primary">
-                    {isSendingMessage ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                  // Nunca desabilitado por envio em andamento — só quando não há texto
+                  // nenhum pra mandar. O ícone gira enquanto a fila de texto (real) ou a
+                  // resposta simulada (demo) está em voo, mas isso é só cosmético.
+                  <Button type="submit" disabled={!newMessageText.trim()} size="md" variant="primary">
+                    {(viewMode === 'real' ? queuedMessageCount > 0 : isSendingMessage) ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Send className="w-4 h-4" />
+                    )}
                   </Button>
                 )}
               </div>
