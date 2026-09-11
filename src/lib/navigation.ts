@@ -13,6 +13,7 @@ import {
   Code2,
   ListOrdered,
   MoreHorizontal,
+  Keyboard,
   type LucideIcon,
 } from 'lucide-react'
 import { UserRole } from '@/types/database'
@@ -34,6 +35,10 @@ export const allNavItems: NavItem[] = [
   // Não é admin-only: é uma biblioteca de textos prontos pra equipe inteira usar no
   // Inbox, igual tags — não mexe com credenciais nem dados sensíveis.
   { href: '/configuracoes/respostas-rapidas', label: 'Respostas Rápidas', icon: Zap },
+  // Preferência de digitação salva no localStorage do aparelho, não no banco — por isso
+  // não é adminOnly: não é dado da organização, é hábito de cada pessoa (ver
+  // src/lib/preferences/composer.ts).
+  { href: '/configuracoes/preferencias', label: 'Preferências', icon: Keyboard },
   { href: '/configuracoes/horario-atendimento', label: 'Automações', icon: Clock, adminOnly: true },
   // Não é sobre credenciais — é a lista de etapas do Kanban (Lead, Fechado, Perdido...).
   // adminOnly:true só pra não poluir o menu de quem atende; gerente continua vendo,
