@@ -21,7 +21,23 @@ export function NetworkStatus() {
       if (!member || cancelled) return
       const result = await replayOfflineMutations({ userId: user.id, organizationId: member.organization_id } satisfies OfflineScope)
       if (!cancelled && (result.synced || result.failed || result.conflicts)) {
-        setSyncMessage(`${result.synced} sincronizada(s), ${result.failed} falha(s), ${result.conflicts} conflito(s).`)
+        // Quando dá pra identificar o registro (título/nome veio na resposta do
+        // servidor), a mensagem fica acionável — "Fulano" foi alterado por outra pessoa —
+        // em vez de só um número que não diz o que fazer com ele.
+        const conflictLabels = result.conflictDetails.map((c) => c.label).filter((l): l is string => !!l)
+        const conflictPart =
+          result.conflicts > 0
+            ? conflictLabels.length > 0
+              ? ` "${conflictLabels.join('", "')}" foi alterado por outra pessoa enquanto você estava offline — sua edição NÃO foi salva, confira a versão atual.`
+              : `, ${result.conflicts} conflito(s) — alguém alterou o registro enquanto você estava offline.`
+            : ''
+        setSyncMessage(`${result.synced} sincronizada(s), ${result.failed} falha(s)${conflictPart}`)
+        // Some sozinho depois de um tempo — mas só quando não há conflito pra resolver
+        // (esse fica na tela até a pessoa recarregar/navegar, de propósito: é o único
+        // caso onde alguém precisa realmente fazer alguma coisa a respeito).
+        if (result.conflicts === 0) {
+          window.setTimeout(() => { if (!cancelled) setSyncMessage(null) }, 6000)
+        }
       }
     }
     const handleOffline = () => setOnline(false)

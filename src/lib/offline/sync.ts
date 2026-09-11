@@ -6,13 +6,25 @@ export async function queueOfflineMutation(scope: OfflineScope, operation: strin
   return id
 }
 
-export async function replayOfflineMutations(scope: OfflineScope): Promise<{ synced: number; failed: number; conflicts: number }> {
-  if (typeof navigator !== 'undefined' && !navigator.onLine) return { synced: 0, failed: 0, conflicts: 0 }
+export interface ReplayConflict {
+  operation: string
+  /** Nome de exibição do registro em conflito, quando o servidor devolveu o suficiente pra
+   * identificar (title de tarefa/pedido, name de contato) — usado só pra deixar o aviso na
+   * tela acionável ("X foi alterado por outra pessoa") em vez de um "1 conflito" genérico
+   * que a pessoa não tem como agir sem ir caçar qual registro é. */
+  label: string | null
+}
+
+export async function replayOfflineMutations(
+  scope: OfflineScope
+): Promise<{ synced: number; failed: number; conflicts: number; conflictDetails: ReplayConflict[] }> {
+  if (typeof navigator !== 'undefined' && !navigator.onLine) return { synced: 0, failed: 0, conflicts: 0, conflictDetails: [] }
 
   const pending = await listPendingMutations(scope)
   let synced = 0
   let failed = 0
   let conflicts = 0
+  const conflictDetails: ReplayConflict[] = []
 
   for (const mutation of pending) {
     try {
@@ -30,6 +42,10 @@ export async function replayOfflineMutations(scope: OfflineScope): Promise<{ syn
       } else if (response.status === 409) {
         await updateMutation(mutation.id, { status: 'conflict', lastError: responseBody?.error || 'Conflito de sincronização.', serverResult: responseBody?.result })
         conflicts++
+        // O 'result' de um conflito é a versão ATUAL do registro no banco (ver
+        // /api/sync/route.ts) — title cobre task/deal, name cobre contact.
+        const serverRecord = responseBody?.result as { title?: string; name?: string } | undefined
+        conflictDetails.push({ operation: mutation.operation, label: serverRecord?.title || serverRecord?.name || null })
         break
       } else if (response.status >= 400 && response.status < 500) {
         await updateMutation(mutation.id, { status: 'failed', lastError: responseBody?.error || 'Operação rejeitada pelo servidor.' })
@@ -45,5 +61,5 @@ export async function replayOfflineMutations(scope: OfflineScope): Promise<{ syn
     }
   }
 
-  return { synced, failed, conflicts }
+  return { synced, failed, conflicts, conflictDetails }
 }
