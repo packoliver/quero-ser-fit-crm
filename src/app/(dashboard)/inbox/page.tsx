@@ -1265,29 +1265,51 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
    * Gravação de voz. O áudio pronto entra no MESMO caminho do anexo — sobe pro storage e
    * vai pela rota de envio de sempre. Nada de rota nova, nada de campo novo no banco: a
    * ponta de áudio já existia dos dois lados, só não havia como gravar.
+   *
+   * recordingTargetRef guarda PRA QUAL conversa a gravação é, capturado no instante em
+   * que o toque no microfone inicia (ver iniciarGravacao mais abaixo) — não lido de volta
+   * de `selectedConversation` aqui dentro. Sem isso, um áudio gravado pra Maria que só
+   * termina de processar depois da vendedora já ter trocado pra conversa do João ia
+   * parar na tela do João: `selectedConversation` no momento em que onPronto dispara é
+   * "o que está aberto AGORA", não "pra quem eu estava gravando".
    */
+  const recordingTargetRef = useRef<{ conversationId: string; organizationId: string } | null>(null)
   const gravador = useVoiceRecorder({
     onPronto: (arquivo) => {
-      if (!selectedConversation?.organizationId) return
-      const conversationId = selectedConversation.id
-      const organizationId = selectedConversation.organizationId
+      const alvo = recordingTargetRef.current
+      recordingTargetRef.current = null
+      if (!alvo) return
       setUploadingMedia(true)
-      void uploadAndSendMedia(arquivo, { conversationId, organizationId, caption: '' }).finally(() => setUploadingMedia(false))
+      void uploadAndSendMedia(arquivo, { conversationId: alvo.conversationId, organizationId: alvo.organizationId, caption: '' }).finally(() =>
+        setUploadingMedia(false)
+      )
     },
     onProgressoConversao: setAudioProgress,
   })
 
-  // Se a conversa muda (ou é encerrada) no meio de uma gravação, o áudio é descartado.
-  // Sem isto, duas coisas ruins: a barra de gravação some da tela e o microfone continua
-  // ligado sem nada indicando, e o áudio acabaria sendo enviado pra conversa que estiver
-  // aberta na hora em que terminar — ou seja, pro cliente errado.
+  const iniciarGravacao = () => {
+    if (!selectedConversation?.organizationId) return
+    recordingTargetRef.current = { conversationId: selectedConversation.id, organizationId: selectedConversation.organizationId }
+    gravador.iniciar()
+  }
+
+  // Se a conversa muda (pra outra ou pra nenhuma) ou é encerrada no meio de uma gravação,
+  // o áudio é descartado. Sem isto, duas coisas ruins: a barra de gravação some da tela e
+  // o microfone continua ligado sem nada indicando, e — mesmo com o roteamento explícito
+  // acima já garantindo que o áudio vai pra conversa certa — ficaria estranho o áudio ser
+  // mandado "escondido" bem depois, pra uma conversa que não está mais na tela.
   // Mesma condição que decide se o campo de digitar aparece (ver isConversationClosed
   // lá embaixo no JSX) — repetir a regra aqui seria garantia de as duas se separarem.
   const composerAtivo = viewMode === 'real' && !!selectedConversation && !isConversationClosed
   const { estado: estadoGravacao, cancelar: cancelarGravacao } = gravador
   useEffect(() => {
-    if (!composerAtivo && estadoGravacao !== 'idle') cancelarGravacao()
-  }, [composerAtivo, estadoGravacao, cancelarGravacao])
+    if (estadoGravacao === 'idle') return
+    const trocouDeConversa = selectedConvId !== recordingTargetRef.current?.conversationId
+    if (!composerAtivo || trocouDeConversa) {
+      cancelarGravacao()
+      recordingTargetRef.current = null
+    }
+  }, [composerAtivo, selectedConvId, estadoGravacao, cancelarGravacao])
 
   // Insere o conteúdo de uma resposta rápida no campo de texto — acrescenta numa nova
   // linha se já tiver algo digitado, em vez de sobrescrever o que o atendente começou a
@@ -2460,7 +2482,7 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                 {viewMode === 'real' && gravador.disponivel && !newMessageText.trim() ? (
                   <Button
                     type="button"
-                    onClick={gravador.iniciar}
+                    onClick={iniciarGravacao}
                     disabled={uploadingMedia || !!compressionProgress}
                     size="md"
                     variant="primary"

@@ -236,6 +236,26 @@ export async function persistInboundEvent(
     return persistOutgoingEchoEvent(db, event, matchedConnection)
   }
 
+  // Reentrega do mesmo evento pelo provedor (acontece — a resposta pode demorar por causa
+  // do download de mídia, e o provedor reenvia se achar que não recebemos) não deve
+  // duplicar a mensagem do cliente. webhook_events evita reprocessar na maioria dos casos,
+  // mas não fecha a janela de corrida entre duas entregas quase simultâneas (nenhuma das
+  // duas via webhook_events ainda marcada como processada quando a outra também chega) —
+  // confirmado um caso real assim em produção (duas linhas idênticas, 10s de diferença).
+  // Mesma proteção que persistOutgoingEchoEvent já usa no caminho de eco, agora também
+  // aqui no caminho normal de mensagem recebida: dedupla por external_id antes de inserir.
+  if (event.externalEventId) {
+    const { data: existingMsg } = (await db
+      .from('messages')
+      .select('id, conversation_id')
+      .eq('external_id', event.externalEventId)
+      .eq('organization_id', matchedConnection.organization_id)
+      .maybeSingle()) as { data: { id: string; conversation_id: string } | null }
+    if (existingMsg) {
+      return { success: true, conversationId: existingMsg.conversation_id }
+    }
+  }
+
   const channelType = event.provider === 'instagram_meta' ? 'instagram' : 'whatsapp'
 
   // conversationKey is the stable identity of the THREAD (the contact for a 1:1 chat,
