@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
-import { Sparkles, RefreshCw, AlertTriangle, TrendingUp, TrendingDown, Lock } from 'lucide-react'
+import { Sparkles, RefreshCw, AlertTriangle, TrendingUp, TrendingDown, Lock, History, Loader2 } from 'lucide-react'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
@@ -66,6 +66,8 @@ export default function InsightsPage() {
   const [error, setError] = useState<string | null>(null)
   const [period, setPeriod] = useState<PeriodFilter>('all')
   const [seller, setSeller] = useState<string>('all')
+  const [backfilling, setBackfilling] = useState(false)
+  const [backfillProgress, setBackfillProgress] = useState<{ examined: number; analyzed: number } | null>(null)
 
   const fetchInsights = useCallback(async () => {
     setLoading(true)
@@ -184,6 +186,43 @@ export default function InsightsPage() {
     }
   }, [])
 
+  // Analisa o histórico: conversas que já existiam antes desta feature entrar no ar nunca
+  // passam pela IA sozinhas (o monitoramento normal só reage a mensagem NOVA a partir de
+  // agora). Chama /api/ai/backfill-conversations em lotes pequenos, em loop, até `done`
+  // — retomável (se a pessoa fechar a aba no meio, um novo clique continua de onde parou,
+  // porque a rota só olha conversas que ainda não têm nenhuma análise salva).
+  const runBackfill = useCallback(async () => {
+    setBackfilling(true)
+    setBackfillProgress({ examined: 0, analyzed: 0 })
+    setError(null)
+    try {
+      let cursor: string | null = null
+      for (;;) {
+        const response = await fetch('/api/ai/backfill-conversations', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ cursor }),
+        })
+        if (!response.ok) {
+          setError('A análise do histórico parou no meio — tente de novo, ela continua de onde ficou.')
+          break
+        }
+        const data = (await response.json()) as { done: boolean; examined: number; analyzed: number; nextCursor: string | null }
+        setBackfillProgress((prev) => ({
+          examined: (prev?.examined ?? 0) + data.examined,
+          analyzed: (prev?.analyzed ?? 0) + data.analyzed,
+        }))
+        if (data.done) break
+        cursor = data.nextCursor
+      }
+      await fetchInsights()
+    } catch {
+      setError('Erro de conexão durante a análise do histórico.')
+    } finally {
+      setBackfilling(false)
+    }
+  }, [fetchInsights])
+
   useEffect(() => {
     // setTimeout(0): mesmo truque usado em horario-atendimento/page.tsx pra chamar uma
     // função que faz setState logo de cara (aqui, fetchInsights/setLoading) sem cair no
@@ -251,11 +290,27 @@ export default function InsightsPage() {
             Análise automática por IA das conversas: o que precisa de atenção agora, e o que fechou (ou não) e por quê.
           </p>
         </div>
-        <Button type="button" variant="secondary" size="sm" onClick={() => void fetchInsights()} disabled={loading}>
-          <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
-          Atualizar
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button type="button" variant="secondary" size="sm" onClick={() => void runBackfill()} disabled={backfilling || loading}>
+            {backfilling ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <History className="w-3.5 h-3.5" />}
+            Analisar conversas antigas
+          </Button>
+          <Button type="button" variant="secondary" size="sm" onClick={() => void fetchInsights()} disabled={loading || backfilling}>
+            <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+            Atualizar
+          </Button>
+        </div>
       </div>
+
+      {backfilling && backfillProgress && (
+        <div className="p-3 rounded-xl bg-emerald-950/30 border border-emerald-800/40 text-emerald-300 text-xs flex items-center gap-3">
+          <Loader2 className="w-4 h-4 shrink-0 animate-spin" />
+          <span>
+            Analisando o histórico… {backfillProgress.examined} conversas examinadas, {backfillProgress.analyzed} analisadas pela IA até
+            agora. Pode deixar a tela aberta ou navegar — se fechar no meio, um novo clique continua de onde parou.
+          </span>
+        </div>
+      )}
 
       {error && (
         <div className="p-4 rounded-xl bg-rose-950/40 border border-rose-800/50 text-rose-300 text-xs flex items-center gap-3">
@@ -268,7 +323,13 @@ export default function InsightsPage() {
         <EmptyState
           icon={<Sparkles className="w-5 h-5" />}
           title="Nenhuma conversa analisada ainda"
-          description="As análises aparecem aqui automaticamente conforme as conversas acontecem. Se isto continuar vazio por muito tempo, confirme com quem administra o CRM se a chave da IA (GEMINI_API_KEY) já foi configurada no servidor."
+          description="Conversas novas são analisadas automaticamente. Pra ver o histórico (conversas de antes desta tela existir), clique em 'Analisar conversas antigas' acima. Se isto continuar vazio depois disso, confirme se a chave da IA (GEMINI_API_KEY) já foi configurada no servidor."
+          action={
+            <Button type="button" size="sm" onClick={() => void runBackfill()} disabled={backfilling}>
+              {backfilling ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <History className="w-3.5 h-3.5" />}
+              Analisar conversas antigas
+            </Button>
+          }
         />
       )}
 
