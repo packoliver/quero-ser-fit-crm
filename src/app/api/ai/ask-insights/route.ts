@@ -53,7 +53,10 @@ export async function POST(request: NextRequest) {
 
   if (!result) {
     return NextResponse.json(
-      { error: 'Não foi possível responder agora. Confirme se o gateway de IA está configurado e no ar, e se já existe alguma conversa analisada.' },
+      {
+        error:
+          'Não foi possível responder por aqui. Se o seu gateway de IA só roda em localhost (ver npm run insights:local), esta barra não alcança ele — use "npm run insights:ask -- \'sua pergunta\'" no terminal em vez disso. Se o gateway é público, confirme se OMNIROUTE_BASE_URL está configurado na Vercel e se já existe alguma conversa analisada.',
+      },
       { status: 502 }
     )
   }
