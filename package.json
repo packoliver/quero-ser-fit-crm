@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "check": "node src/scripts/run-checks.js",
-    "insights:local": "node scripts/analyze-conversations.js"
+    "insights:local": "node scripts/analyze-conversations.js",
+    "insights:ask": "node scripts/ask-insights.js"
   },
   "dependencies": {
     "@ffmpeg/core": "^0.12.10",
