@@ -361,13 +361,28 @@ export default function FunilPage() {
   // nenhuma); no modo demo sempre usa o modelo padrão, já que não há organização real.
   const activeStages: PipelineStage[] = viewMode === 'real' ? (stages.length ? stages : DEFAULT_PIPELINE_STAGES) : DEFAULT_PIPELINE_STAGES
 
+  // Dispara a análise de IA (Insights) quando um pedido pousa numa etapa Ganha/Perdida —
+  // fire-and-forget de propósito: nunca espera a resposta nem trata erro, porque isso não
+  // pode atrasar nem quebrar o fluxo de mover o pedido no Kanban. Sem GEMINI_API_KEY
+  // configurada no servidor, essa chamada só não faz nada (ver /api/ai/analyze-conversation).
+  const notifyDealClosedForInsights = (deal: AnyDeal, knownOutcome: 'ganha' | 'perdida') => {
+    const conversationId = dealConversationId(deal, contactConversationMap)
+    if (!conversationId || !isRealDeal(deal)) return
+    void fetch('/api/ai/analyze-conversation', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ conversationId, dealId: deal.id, knownOutcome }),
+    }).catch(() => {})
+  }
+
   const moveDeal = async (deal: AnyDeal, newStage: DealStage) => {
     if (dealStage(deal) === newStage) return
 
     if (viewMode === 'real' && isRealDeal(deal)) {
+      const targetStage = activeStages.find((s) => s.key === newStage)
       const offlineScope = await getOfflineScope()
       const updates: Record<string, unknown> = { stage: newStage }
-      if (activeStages.find((s) => s.key === newStage)?.isWon && !deal.closed_at) updates.closed_at = new Date().toISOString()
+      if (targetStage?.isWon && !deal.closed_at) updates.closed_at = new Date().toISOString()
       if (!navigator.onLine && offlineScope) {
         // deal.updated_at (a versão em cache no momento em que ficou offline) vai junto
         // como baseUpdatedAt — é o que permite o servidor perceber, ao sincronizar, se
@@ -398,6 +413,8 @@ export default function FunilPage() {
           prev.map((d) => (d.id === deal.id ? { ...d, stage: newStage, closed_at: (updates.closed_at as string) || d.closed_at } : d))
         )
         showToast(`Pedido movido para "${activeStages.find((s) => s.key === newStage)?.label}"!`)
+        if (targetStage?.isWon) notifyDealClosedForInsights(deal, 'ganha')
+        else if (targetStage?.isLost) notifyDealClosedForInsights(deal, 'perdida')
       } catch {
         setError('Erro ao mover o pedido.')
       }

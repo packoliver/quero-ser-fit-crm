@@ -21,6 +21,12 @@ const serverEnvSchema = z.object({
   NEXT_PUBLIC_VAPID_PUBLIC_KEY: z.string().optional(),
   VAPID_PRIVATE_KEY: z.string().optional(),
   VAPID_SUBJECT: z.string().url().optional(),
+  // IA (Insights) — opcional de propósito: sem essa chave, a análise de conversas por IA
+  // só fica desligada (ver src/lib/ai/gemini.ts), o resto do CRM funciona normal. Chave
+  // gerada em https://aistudio.google.com/apikey. GEMINI_MODEL deixa trocar de modelo
+  // (custo/qualidade) sem precisar de deploy — ver default em src/lib/ai/gemini.ts.
+  GEMINI_API_KEY: z.string().optional(),
+  GEMINI_MODEL: z.string().optional(),
 })
 
 export type ServerEnv = z.infer<typeof serverEnvSchema>
@@ -60,6 +66,8 @@ export function getServerEnv(): ServerEnv {
     NEXT_PUBLIC_VAPID_PUBLIC_KEY: process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || undefined,
     VAPID_PRIVATE_KEY: process.env.VAPID_PRIVATE_KEY || undefined,
     VAPID_SUBJECT: process.env.VAPID_SUBJECT || undefined,
+    GEMINI_API_KEY: process.env.GEMINI_API_KEY || undefined,
+    GEMINI_MODEL: process.env.GEMINI_MODEL || undefined,
   }
 
   const result = serverEnvSchema.safeParse(rawEnv)
