@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest'
-import { __testing } from '@/lib/ai/gemini'
+import { __testing } from '@/lib/ai/client'
 
-const { parseResponse, buildPrompt } = __testing
+const { parseResponse, buildPrompt, extractJson } = __testing
 
-describe('Análise de conversa por IA — parsing da resposta do Gemini', () => {
+describe('Análise de conversa por IA — parsing da resposta do gateway', () => {
   it('deve aceitar uma resposta bem formada', () => {
     const result = parseResponse(
       JSON.stringify({
@@ -64,6 +64,27 @@ describe('Análise de conversa por IA — parsing da resposta do Gemini', () => 
       null
     )
     expect(result?.outcomeReason).toBeNull()
+  })
+
+  it('deve aceitar resposta embrulhada num bloco de código markdown (comum em modelos menores/gratuitos)', () => {
+    const wrapped = '```json\n' + JSON.stringify({ status: 'ok', signals: [], summary: 'tudo bem', outcome: 'aberta', outcomeReason: '' }) + '\n```'
+    const result = parseResponse(wrapped, null)
+    expect(result?.status).toBe('ok')
+    expect(result?.summary).toBe('tudo bem')
+  })
+})
+
+describe('extractJson — remoção de cerca markdown', () => {
+  it('deve remover ```json ... ``` ao redor do conteúdo', () => {
+    expect(extractJson('```json\n{"a":1}\n```')).toBe('{"a":1}')
+  })
+
+  it('deve remover ``` ... ``` sem a palavra json', () => {
+    expect(extractJson('```\n{"a":1}\n```')).toBe('{"a":1}')
+  })
+
+  it('deve devolver o texto como está quando não há cerca', () => {
+    expect(extractJson('{"a":1}')).toBe('{"a":1}')
   })
 })
 

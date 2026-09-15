@@ -323,7 +323,7 @@ export default function InsightsPage() {
         <EmptyState
           icon={<Sparkles className="w-5 h-5" />}
           title="Nenhuma conversa analisada ainda"
-          description="Conversas novas são analisadas automaticamente. Pra ver o histórico (conversas de antes desta tela existir), clique em 'Analisar conversas antigas' acima. Se isto continuar vazio depois disso, confirme se a chave da IA (GEMINI_API_KEY) já foi configurada no servidor."
+          description="Conversas novas são analisadas automaticamente. Pra ver o histórico (conversas de antes desta tela existir), clique em 'Analisar conversas antigas' acima. Se isto continuar vazio depois disso, confirme se o gateway de IA (OMNIROUTE_BASE_URL) já foi configurado no servidor e está no ar."
           action={
             <Button type="button" size="sm" onClick={() => void runBackfill()} disabled={backfilling}>
               {backfilling ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <History className="w-3.5 h-3.5" />}

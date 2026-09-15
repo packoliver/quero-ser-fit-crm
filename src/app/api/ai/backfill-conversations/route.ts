@@ -5,7 +5,7 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { scheduleConversationAnalysis } from '@/lib/ai/insights'
 
 // Poucas conversas por chamada, de propósito: cada uma pode levar até TIMEOUT_MS (ver
-// src/lib/ai/gemini.ts) pra responder, e isto roda DENTRO do tempo de resposta da rota
+// src/lib/ai/client.ts) pra responder, e isto roda DENTRO do tempo de resposta da rota
 // (sem after() — ao contrário dos outros gatilhos, aqui o cliente espera o resultado pra
 // mostrar progresso). A tela de Insights chama isto em loop até `done: true`.
 const BATCH_SIZE = 3
