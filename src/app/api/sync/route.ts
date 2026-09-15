@@ -1,9 +1,10 @@
-import { NextRequest, NextResponse } from 'next/server'
+import { NextRequest, NextResponse, after } from 'next/server'
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { hasPermission } from '@/lib/security/permissions'
+import { scheduleConversationAnalysis } from '@/lib/ai/insights'
 import type { CustomPermissions, UserRole } from '@/types/database'
 
 const idempotencySchema = z.string().uuid()
@@ -148,8 +149,35 @@ export async function POST(request: NextRequest) {
       if (Object.keys(updateValues).length === 0) {
         status = 'rejected'; errorMessage = 'Nenhum campo para atualizar.'
       } else {
-        const response = await admin.from('deals').update(updateValues).eq('id', recordId!).eq('organization_id', context.organizationId).select('id, title, value, stage, notes, closed_at, updated_at').maybeSingle()
+        const response = await admin.from('deals').update(updateValues).eq('id', recordId!).eq('organization_id', context.organizationId).select('id, title, value, stage, notes, closed_at, updated_at, conversation_id').maybeSingle()
         result = response.data; errorMessage = response.error?.message || null
+
+        // Um pedido movido pra etapa Ganha/Perdida ENQUANTO offline só é sincronizado
+        // aqui, minutos ou horas depois — este é o único lugar que sabe, de verdade, que a
+        // mudança pegou (o Funil já mandou uma tentativa otimista lá em moveDeal, que essa
+        // rota pode rejeitar por conflito). Dispara a mesma análise final de IA que o
+        // caminho online dispara na hora.
+        const updatedDeal = result as { stage?: string; conversation_id?: string | null } | null
+        if (updatedDeal?.conversation_id && typeof updateValues.stage === 'string') {
+          const { data: stageRow } = await admin
+            .from('pipeline_stages')
+            .select('is_won, is_lost')
+            .eq('organization_id', context.organizationId)
+            .eq('key', updateValues.stage)
+            .maybeSingle()
+          const knownOutcome = stageRow?.is_won ? 'ganha' : stageRow?.is_lost ? 'perdida' : null
+          if (knownOutcome) {
+            after(() =>
+              scheduleConversationAnalysis(admin, {
+                conversationId: updatedDeal.conversation_id!,
+                organizationId: context.organizationId,
+                dealId: recordId!,
+                finalize: true,
+                knownOutcome,
+              })
+            )
+          }
+        }
       }
     } else {
       const values = { title: typeof payload.title === 'string' ? payload.title.trim().slice(0, 240) : '', value: typeof payload.value === 'number' ? payload.value : null, stage: typeof payload.stage === 'string' ? payload.stage : 'lead', notes: typeof payload.notes === 'string' ? payload.notes.slice(0, 5000) : null }

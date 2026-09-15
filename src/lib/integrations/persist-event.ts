@@ -1,3 +1,4 @@
+import { after } from 'next/server'
 import { AdminClient } from '@/lib/supabase/admin'
 import { Json } from '@/types/database'
 import { IncomingWebhookEvent, MessageStatusUpdate } from './types'
@@ -7,6 +8,7 @@ import { fetchInstagramUserProfile } from './instagram-meta'
 import { fetchUazapiChatDetails } from './uazapi-whatsapp'
 import { maybeSendAutoReply } from './auto-reply'
 import { maybeCaptureCsatReply } from './csat'
+import { scheduleConversationAnalysis } from '@/lib/ai/insights'
 
 const STATUS_RANK: Record<string, number> = { sent: 0, delivered: 1, read: 2 }
 
@@ -531,6 +533,19 @@ export async function processInboundEvents(
         .eq('external_event_id', event.externalEventId)
 
       processedCount++
+
+      // Diferente do bloco abaixo, isto roda pra QUALQUER mensagem nova (cliente OU eco de
+      // uma resposta mandada fora do CRM) — "monitorar toda mensagem" inclui as duas
+      // direções. Via after(): roda depois da resposta ao provedor do webhook já ter
+      // saído, então nunca atrasa a confirmação de recebimento.
+      if (persistResult.conversationId) {
+        after(() =>
+          scheduleConversationAnalysis(admin, {
+            conversationId: persistResult.conversationId!,
+            organizationId: connection.organization_id,
+          })
+        )
+      }
 
       // Nada disso se aplica a um echo (mensagem que NÓS mandamos, capturada de volta) —
       // notificação de "nova mensagem", resposta automática fora do horário e captura de

@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server'
+import { NextRequest, NextResponse, after } from 'next/server'
 import { createHash, randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import { createClient } from '@/lib/supabase/server'
@@ -7,6 +7,7 @@ import { decryptToken } from '@/lib/security/encryption'
 import { MetaWhatsAppProvider } from '@/lib/integrations/whatsapp-meta'
 import { MetaInstagramProvider } from '@/lib/integrations/instagram-meta'
 import { UazapiWhatsAppProvider } from '@/lib/integrations/uazapi-whatsapp'
+import { scheduleConversationAnalysis } from '@/lib/ai/insights'
 
 const whatsappProvider = new MetaWhatsAppProvider()
 const instagramProvider = new MetaInstagramProvider()
@@ -231,6 +232,7 @@ async function handlePost(request: NextRequest) {
 
       await db.from('conversations').update({ last_message_at: new Date().toISOString() }).eq('id', conversation.id)
 
+      after(() => scheduleConversationAnalysis(admin, { conversationId: conversation.id, organizationId: conversation.organization_id }))
       return NextResponse.json({ success: true, externalId: result.externalId })
     }
 
@@ -258,5 +260,6 @@ async function handlePost(request: NextRequest) {
     return NextResponse.json({ error: result.error || 'Falha ao enviar mensagem.' }, { status: 502 })
   }
 
+  after(() => scheduleConversationAnalysis(admin, { conversationId: conversation.id, organizationId: conversation.organization_id }))
   return NextResponse.json({ success: true, externalId: result.externalId })
 }

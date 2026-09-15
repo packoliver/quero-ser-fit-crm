@@ -14,6 +14,7 @@ import {
   ListOrdered,
   MoreHorizontal,
   Keyboard,
+  Sparkles,
   type LucideIcon,
 } from 'lucide-react'
 import { UserRole } from '@/types/database'
@@ -32,6 +33,11 @@ export const allNavItems: NavItem[] = [
   { href: '/follow-up', label: 'Follow-up', icon: Clock3 },
   { href: '/tarefas', label: 'Tarefas', icon: CheckSquare },
   { href: '/relatorios', label: 'Relatórios', icon: BarChart3, adminOnly: false },
+  // adminOnly:true de propósito (mesmo padrão de Automações/Etapas do Funil): mostra pra
+  // manager também (não está em ADMIN_ONLY_HREFS), mas some pro attendant — os resumos
+  // aqui apontam POR vendedor(a) quem perdeu negociação e por quê, dado sensível demais
+  // pra ficar visível pra quem está sendo avaliado (ver src/app/(dashboard)/insights/page.tsx).
+  { href: '/insights', label: 'Insights', icon: Sparkles, adminOnly: true },
   // Não é admin-only: é uma biblioteca de textos prontos pra equipe inteira usar no
   // Inbox, igual tags — não mexe com credenciais nem dados sensíveis.
   { href: '/configuracoes/respostas-rapidas', label: 'Respostas Rápidas', icon: Zap },
