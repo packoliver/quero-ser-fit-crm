@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { __testing } from '@/lib/ai/client'
 
-const { parseResponse, buildPrompt, extractJson } = __testing
+const { parseResponse, buildPrompt, extractJson, buildQaPrompt } = __testing
 
 describe('Análise de conversa por IA — parsing da resposta do gateway', () => {
   it('deve aceitar uma resposta bem formada', () => {
@@ -99,5 +99,14 @@ describe('Análise de conversa por IA — construção do prompt', () => {
   it('sem desfecho conhecido, deve pedir pra IA avaliar o estado sozinha', () => {
     const prompt = buildPrompt('[10:00] Cliente: oi', null)
     expect(prompt).toContain('Avalie, só pelo conteúdo da conversa')
+  })
+})
+
+describe('Pergunte à IA — construção do prompt de pergunta livre', () => {
+  it('deve incluir o contexto e a pergunta, e instruir a não inventar resposta', () => {
+    const prompt = buildQaPrompt('- Cliente: Maria | Status: ok | Desfecho: ganha', 'quantas vendas fechamos?')
+    expect(prompt).toContain('- Cliente: Maria | Status: ok | Desfecho: ganha')
+    expect(prompt).toContain('quantas vendas fechamos?')
+    expect(prompt).toContain('SOMENTE nos dados acima')
   })
 })

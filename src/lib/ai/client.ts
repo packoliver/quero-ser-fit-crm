@@ -180,5 +180,59 @@ export async function analyzeConversation({
   }
 }
 
+function buildQaPrompt(context: string, question: string): string {
+  return `Você é um assistente que responde perguntas sobre o desempenho comercial de uma empresa do ramo fitness ("Quero Ser Fit"), com base em análises de IA já feitas sobre conversas de WhatsApp/Instagram.
+
+DADOS (uma linha por conversa analisada — cliente, vendedor(a), status, desfecho e resumo):
+${context}
+
+PERGUNTA: ${question}
+
+Responda em português, de forma direta e objetiva, citando números quando fizer sentido (quantidades, percentuais). Baseie-se SOMENTE nos dados acima — se a pergunta não puder ser respondida com eles, diga isso claramente em vez de inventar uma resposta.`
+}
+
+/**
+ * Pergunta livre sobre o conjunto de conversas já analisadas (ver
+ * src/lib/ai/insights.ts::answerQuestionAboutInsights, que monta o `context`) — devolve
+ * texto puro, não JSON estruturado (essa é uma resposta pra pessoa ler, não um dado pra
+ * salvar no banco). Mesma postura de falha das outras funções deste arquivo: null em
+ * qualquer problema, nunca lança.
+ */
+export async function askQuestion({ context, question }: { context: string; question: string }): Promise<string | null> {
+  const { OMNIROUTE_BASE_URL, OMNIROUTE_API_KEY, OMNIROUTE_MODEL } = getServerEnv()
+  if (!OMNIROUTE_BASE_URL || !question.trim() || !context.trim()) return null
+
+  try {
+    const baseUrl = OMNIROUTE_BASE_URL.replace(/\/+$/, '')
+    const response = await withTimeout(
+      fetch(`${baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(OMNIROUTE_API_KEY ? { Authorization: `Bearer ${OMNIROUTE_API_KEY}` } : {}),
+        },
+        body: JSON.stringify({
+          model: OMNIROUTE_MODEL || DEFAULT_MODEL,
+          messages: [{ role: 'user', content: buildQaPrompt(context, question) }],
+          temperature: 0.3,
+        }),
+      }),
+      TIMEOUT_MS
+    )
+
+    if (!response.ok) {
+      console.error('[ai] Gateway respondeu com erro (pergunta livre):', response.status, await response.text().catch(() => ''))
+      return null
+    }
+
+    const data = (await response.json()) as ChatCompletionsResponse
+    const raw = data.choices?.[0]?.message?.content
+    return raw ? raw.trim() : null
+  } catch (err) {
+    console.error('[ai] Falha ao responder pergunta:', err)
+    return null
+  }
+}
+
 // Exportado só pra teste (validação do parsing sem precisar chamar a API de verdade).
-export const __testing = { parseResponse, buildPrompt, extractJson }
+export const __testing = { parseResponse, buildPrompt, extractJson, buildQaPrompt }
