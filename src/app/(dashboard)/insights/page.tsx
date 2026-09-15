@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
-import { Sparkles, RefreshCw, AlertTriangle, TrendingUp, TrendingDown, Lock, History, Loader2 } from 'lucide-react'
+import { Sparkles, RefreshCw, AlertTriangle, TrendingUp, TrendingDown, Lock, History, Loader2, Send } from 'lucide-react'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
@@ -28,13 +28,28 @@ interface InsightRow {
   sellerName: string | null
 }
 
+interface QaEntry {
+  question: string
+  answer: string
+  consideredCount: number
+}
+
 type PeriodFilter = 'all' | '7' | '30' | '90'
+type StatusFilter = 'all' | 'atencao' | 'risco'
+type TabKey = 'attention' | 'won' | 'lost'
+const PAGE_SIZE = 20
 
 const STATUS_BADGE: Record<InsightRow['status'], { variant: 'emerald' | 'amber' | 'rose'; label: string }> = {
   ok: { variant: 'emerald', label: 'Ok' },
   atencao: { variant: 'amber', label: 'Atenção' },
   risco: { variant: 'rose', label: 'Risco' },
 }
+
+const TABS: { key: TabKey; label: string; icon: typeof AlertTriangle }[] = [
+  { key: 'attention', label: 'Precisam de atenção', icon: AlertTriangle },
+  { key: 'won', label: 'Ganhas', icon: TrendingUp },
+  { key: 'lost', label: 'Perdidas', icon: TrendingDown },
+]
 
 function formatCurrency(value: number | null): string | null {
   if (value === null) return null
@@ -66,8 +81,22 @@ export default function InsightsPage() {
   const [error, setError] = useState<string | null>(null)
   const [period, setPeriod] = useState<PeriodFilter>('all')
   const [seller, setSeller] = useState<string>('all')
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [backfilling, setBackfilling] = useState(false)
   const [backfillProgress, setBackfillProgress] = useState<{ examined: number; analyzed: number } | null>(null)
+
+  // Menu de abas — só uma categoria por vez em vez de 3 listas longas empilhadas, mais
+  // fácil de digerir. visibleCount pagina dentro da aba ativa ("carregar mais" em vez de
+  // despejar tudo de uma vez); volta pro padrão sempre que a aba ou um filtro muda, pra
+  // nunca mostrar "carregar mais" preso numa lista que já trocou de assunto.
+  const [activeTab, setActiveTab] = useState<TabKey>('attention')
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE)
+  const resetPaging = () => setVisibleCount(PAGE_SIZE)
+
+  const [question, setQuestion] = useState('')
+  const [asking, setAsking] = useState(false)
+  const [qaError, setQaError] = useState<string | null>(null)
+  const [qaHistory, setQaHistory] = useState<QaEntry[]>([])
 
   const fetchInsights = useCallback(async () => {
     setLoading(true)
@@ -223,6 +252,39 @@ export default function InsightsPage() {
     }
   }, [fetchInsights])
 
+  // Barra "Pergunte à IA": manda a pergunta pro servidor, que monta o contexto com TODAS
+  // as conversas já analisadas da organização (não só as que estão filtradas na tela) e
+  // devolve uma resposta em texto. Histórico fica só na memória desta sessão (não
+  // persiste) — é uma conveniência pra comparar perguntas seguidas, não um registro.
+  const handleAsk = useCallback(
+    async (e: React.FormEvent) => {
+      e.preventDefault()
+      const q = question.trim()
+      if (!q || asking) return
+      setAsking(true)
+      setQaError(null)
+      try {
+        const response = await fetch('/api/ai/ask-insights', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ question: q }),
+        })
+        const data = (await response.json()) as { answer?: string; consideredCount?: number; error?: string }
+        if (!response.ok || !data.answer) {
+          setQaError(data.error || 'Não foi possível responder agora.')
+          return
+        }
+        setQaHistory((prev) => [{ question: q, answer: data.answer!, consideredCount: data.consideredCount ?? 0 }, ...prev])
+        setQuestion('')
+      } catch {
+        setQaError('Erro de conexão.')
+      } finally {
+        setAsking(false)
+      }
+    },
+    [question, asking]
+  )
+
   useEffect(() => {
     // setTimeout(0): mesmo truque usado em horario-atendimento/page.tsx pra chamar uma
     // função que faz setState logo de cara (aqui, fetchInsights/setLoading) sem cair no
@@ -245,17 +307,20 @@ export default function InsightsPage() {
     const periodMs = period === 'all' ? null : Number(period) * 24 * 60 * 60 * 1000
     return rows.filter((r) => {
       if (seller !== 'all' && r.sellerName !== seller) return false
+      if (statusFilter !== 'all' && r.status !== statusFilter) return false
       if (periodMs !== null) {
         if (!r.lastAnalyzedAt) return false
         if (asOf - new Date(r.lastAnalyzedAt).getTime() > periodMs) return false
       }
       return true
     })
-  }, [rows, seller, period, asOf])
+  }, [rows, seller, statusFilter, period, asOf])
 
   const attention = filtered.filter((r) => r.outcome === 'aberta' && (r.status === 'risco' || r.status === 'atencao'))
   const won = filtered.filter((r) => r.outcome === 'ganha')
   const lost = filtered.filter((r) => r.outcome === 'perdida')
+  const activeList = activeTab === 'attention' ? attention : activeTab === 'won' ? won : lost
+  const visibleRows = activeList.slice(0, visibleCount)
 
   const topLossReasons = useMemo(() => {
     const counts = new Map<string, number>()
@@ -335,10 +400,47 @@ export default function InsightsPage() {
 
       {rows.length > 0 && (
         <>
+          <Card>
+            <CardHeader className="flex items-center gap-2">
+              <Sparkles className="w-4 h-4 text-emerald-400" />
+              <h2 className="text-xs font-bold text-slate-200 uppercase tracking-wider">Pergunte à IA sobre as conversas</h2>
+            </CardHeader>
+            <CardBody className="space-y-3">
+              <form onSubmit={(e) => void handleAsk(e)} className="flex flex-wrap gap-2">
+                <input
+                  type="text"
+                  value={question}
+                  onChange={(e) => setQuestion(e.target.value)}
+                  placeholder="Ex: quantas vendas fechamos essa semana? quais clientes reclamaram do preço?"
+                  className="flex-1 min-w-[200px] px-3.5 py-2.5 bg-slate-900 border border-slate-700/80 rounded-xl text-xs text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
+                />
+                <Button type="submit" size="sm" disabled={asking || !question.trim()}>
+                  {asking ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+                  Perguntar
+                </Button>
+              </form>
+              {qaError && <p className="text-xs text-rose-400">{qaError}</p>}
+              {qaHistory.length > 0 && (
+                <div className="space-y-4 pt-1">
+                  {qaHistory.map((qa, i) => (
+                    <div key={i} className="space-y-1 border-t border-slate-800 pt-3 first:border-t-0 first:pt-0">
+                      <p className="text-xs font-semibold text-slate-200">{qa.question}</p>
+                      <p className="text-xs text-slate-400 leading-relaxed whitespace-pre-wrap">{qa.answer}</p>
+                      <p className="text-[10px] text-slate-600">baseado em {qa.consideredCount} conversa(s) analisada(s)</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardBody>
+          </Card>
+
           <div className="flex flex-wrap gap-3">
             <Select
               value={period}
-              onChange={(e) => setPeriod(e.target.value as PeriodFilter)}
+              onChange={(e) => {
+                setPeriod(e.target.value as PeriodFilter)
+                resetPaging()
+              }}
               className="w-auto"
               options={[
                 { value: 'all', label: 'Todo o período' },
@@ -350,11 +452,27 @@ export default function InsightsPage() {
             {sellers.length > 0 && (
               <Select
                 value={seller}
-                onChange={(e) => setSeller(e.target.value)}
+                onChange={(e) => {
+                  setSeller(e.target.value)
+                  resetPaging()
+                }}
                 className="w-auto"
                 options={[{ value: 'all', label: 'Todas as vendedoras/vendedores' }, ...sellers.map((s) => ({ value: s, label: s }))]}
               />
             )}
+            <Select
+              value={statusFilter}
+              onChange={(e) => {
+                setStatusFilter(e.target.value as StatusFilter)
+                resetPaging()
+              }}
+              className="w-auto"
+              options={[
+                { value: 'all', label: 'Todos os status' },
+                { value: 'atencao', label: 'Só Atenção' },
+                { value: 'risco', label: 'Só Risco' },
+              ]}
+            />
           </div>
 
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
@@ -400,51 +518,58 @@ export default function InsightsPage() {
             </Card>
           )}
 
-          <InsightSection
-            title="Precisam de atenção"
-            icon={<AlertTriangle className="w-4 h-4 text-amber-400" />}
-            rows={attention}
-            emptyText="Nada precisando de atenção agora — segue tudo tranquilo."
-          />
-          <InsightSection
-            title="Fechadas — Ganhas"
-            icon={<TrendingUp className="w-4 h-4 text-emerald-400" />}
-            rows={won}
-            emptyText="Nenhuma negociação ganha analisada ainda."
-          />
-          <InsightSection
-            title="Fechadas — Perdidas"
-            icon={<TrendingDown className="w-4 h-4 text-rose-400" />}
-            rows={lost}
-            emptyText="Nenhuma negociação perdida analisada ainda."
-          />
+          {/* Menu de abas: uma categoria por vez em vez de 3 listas compridas empilhadas —
+              mais fácil de achar o que importa sem rolar a página inteira. */}
+          <div className="flex flex-wrap gap-1 bg-[#0f172a] border border-slate-800 rounded-2xl p-1">
+            {TABS.map((tab) => {
+              const count = tab.key === 'attention' ? attention.length : tab.key === 'won' ? won.length : lost.length
+              const Icon = tab.icon
+              const active = activeTab === tab.key
+              return (
+                <button
+                  key={tab.key}
+                  type="button"
+                  onClick={() => {
+                    setActiveTab(tab.key)
+                    resetPaging()
+                  }}
+                  className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold transition ${
+                    active ? 'bg-slate-800 text-slate-100' : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <Icon className="w-3.5 h-3.5" />
+                  {tab.label} ({count})
+                </button>
+              )
+            })}
+          </div>
+
+          <InsightSection rows={visibleRows} totalCount={activeList.length} emptyText={emptyTextFor(activeTab)} />
+
+          {activeList.length > visibleCount && (
+            <div className="flex justify-center">
+              <Button type="button" variant="secondary" size="sm" onClick={() => setVisibleCount((n) => n + PAGE_SIZE)}>
+                Carregar mais ({activeList.length - visibleCount} restantes)
+              </Button>
+            </div>
+          )}
         </>
       )}
     </div>
   )
 }
 
-function InsightSection({
-  title,
-  icon,
-  rows,
-  emptyText,
-}: {
-  title: string
-  icon: React.ReactNode
-  rows: InsightRow[]
-  emptyText: string
-}) {
+function emptyTextFor(tab: TabKey): string {
+  if (tab === 'attention') return 'Nada precisando de atenção agora — segue tudo tranquilo.'
+  if (tab === 'won') return 'Nenhuma negociação ganha analisada ainda.'
+  return 'Nenhuma negociação perdida analisada ainda.'
+}
+
+function InsightSection({ rows, totalCount, emptyText }: { rows: InsightRow[]; totalCount: number; emptyText: string }) {
   return (
     <Card>
-      <CardHeader className="flex items-center gap-2">
-        {icon}
-        <h2 className="text-xs font-bold text-slate-200 uppercase tracking-wider">
-          {title} ({rows.length})
-        </h2>
-      </CardHeader>
       <CardBody className="p-0 divide-y divide-slate-800/80">
-        {rows.length === 0 ? (
+        {totalCount === 0 ? (
           <p className="p-4 text-xs text-slate-500">{emptyText}</p>
         ) : (
           rows.map((r) => (

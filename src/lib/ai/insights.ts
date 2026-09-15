@@ -1,5 +1,5 @@
 import { AdminClient } from '@/lib/supabase/admin'
-import { analyzeConversation, isAiConfigured } from './client'
+import { analyzeConversation, askQuestion, isAiConfigured } from './client'
 
 // Evita chamar a IA de novo a cada mensagem isolada quando várias chegam em sequência
 // rápida (ex: cliente mandando 5 áudios seguidos, ou a vendedora respondendo linha por
@@ -112,5 +112,101 @@ export async function scheduleConversationAnalysis(admin: AdminClient, params: S
   }
 }
 
+// Teto de quantas conversas entram no contexto da pergunta livre — 400 já cobre o
+// histórico inteiro de uma organização pequena/média; numa maior, prioriza as mais
+// recentes (ver order by last_analyzed_at desc) em vez de estourar tokens/custo à toa.
+const MAX_QA_CONTEXT_ROWS = 400
+
+interface QaInsightRow {
+  conversation_id: string
+  deal_id: string | null
+  status: string
+  outcome: string
+  outcome_reason: string | null
+  summary: string | null
+}
+
+function buildQaContext(
+  rows: QaInsightRow[],
+  contactNameByConversation: Map<string, string>,
+  sellerNameByDeal: Map<string, string>
+): string {
+  return rows
+    .map((r) => {
+      const contact = contactNameByConversation.get(r.conversation_id) || 'desconhecido'
+      const seller = r.deal_id ? sellerNameByDeal.get(r.deal_id) : null
+      const desfecho = r.outcome_reason ? `${r.outcome} (${r.outcome_reason})` : r.outcome
+      return `- Cliente: ${contact} | Vendedor(a): ${seller || '—'} | Status: ${r.status} | Desfecho: ${desfecho} | Resumo: ${r.summary || '—'}`
+    })
+    .join('\n')
+}
+
+/**
+ * Responde uma pergunta livre (ex: "quantas vendas fechamos essa semana?") com base em
+ * todas as conversas já analisadas da organização — não nas mensagens brutas, que
+ * estourariam contexto/custo rápido, mas no resumo compacto que cada análise já produz.
+ * Retorna null em qualquer falha (sem IA configurada, sem conversa analisada ainda, erro
+ * do gateway) — a rota que chama isto decide a mensagem de erro pro usuário.
+ */
+export async function answerQuestionAboutInsights(
+  admin: AdminClient,
+  organizationId: string,
+  question: string
+): Promise<{ answer: string; consideredCount: number } | null> {
+  if (!isAiConfigured()) return null
+
+  const { data: insightRows } = await admin
+    .from('ai_conversation_insights')
+    .select('conversation_id, deal_id, status, outcome, outcome_reason, summary')
+    .eq('organization_id', organizationId)
+    .order('last_analyzed_at', { ascending: false })
+    .limit(MAX_QA_CONTEXT_ROWS)
+
+  const rows = (insightRows || []) as QaInsightRow[]
+  if (rows.length === 0) return null
+
+  const conversationIds = [...new Set(rows.map((r) => r.conversation_id))]
+  const dealIds = [...new Set(rows.map((r) => r.deal_id).filter((id): id is string => !!id))]
+
+  const [{ data: conversationsRaw }, { data: dealsRaw }] = await Promise.all([
+    admin.from('conversations').select('id, contact_id').in('id', conversationIds),
+    dealIds.length > 0
+      ? admin.from('deals').select('id, assigned_to_id').in('id', dealIds)
+      : Promise.resolve({ data: [] as { id: string; assigned_to_id: string | null }[] }),
+  ])
+
+  const conversations = (conversationsRaw || []) as { id: string; contact_id: string }[]
+  const deals = (dealsRaw || []) as { id: string; assigned_to_id: string | null }[]
+
+  const contactIds = [...new Set(conversations.map((c) => c.contact_id))]
+  const sellerIds = [...new Set(deals.map((d) => d.assigned_to_id).filter((id): id is string => !!id))]
+
+  const [{ data: contactsRaw }, { data: profilesRaw }] = await Promise.all([
+    contactIds.length > 0
+      ? admin.from('contacts').select('id, name').in('id', contactIds)
+      : Promise.resolve({ data: [] as { id: string; name: string }[] }),
+    sellerIds.length > 0
+      ? admin.from('profiles').select('id, full_name').in('id', sellerIds)
+      : Promise.resolve({ data: [] as { id: string; full_name: string }[] }),
+  ])
+
+  const contactNameById = new Map(((contactsRaw || []) as { id: string; name: string }[]).map((c) => [c.id, c.name]))
+  const contactIdByConversation = new Map(conversations.map((c) => [c.id, c.contact_id]))
+  const contactNameByConversation = new Map(
+    [...contactIdByConversation.entries()].map(([convId, contactId]) => [convId, contactNameById.get(contactId) || 'desconhecido'])
+  )
+
+  const sellerNameById = new Map(((profilesRaw || []) as { id: string; full_name: string }[]).map((p) => [p.id, p.full_name]))
+  const sellerNameByDeal = new Map(
+    deals.map((d) => [d.id, d.assigned_to_id ? sellerNameById.get(d.assigned_to_id) || '' : ''])
+  )
+
+  const context = buildQaContext(rows, contactNameByConversation, sellerNameByDeal)
+  const answer = await askQuestion({ context, question })
+  if (!answer) return null
+
+  return { answer, consideredCount: rows.length }
+}
+
 // Exportado só pra teste.
-export const __testing = { buildTranscript }
+export const __testing = { buildTranscript, buildQaContext }
