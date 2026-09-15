@@ -10,7 +10,8 @@
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "check": "node src/scripts/run-checks.js"
+    "check": "node src/scripts/run-checks.js",
+    "insights:local": "node scripts/analyze-conversations.js"
   },
   "dependencies": {
     "@ffmpeg/core": "^0.12.10",
