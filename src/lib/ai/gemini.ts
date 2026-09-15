@@ -57,7 +57,15 @@ function buildPrompt(transcript: string, knownOutcome: 'ganha' | 'perdida' | nul
     ? `Esta negociação JÁ FOI marcada como "${knownOutcome === 'ganha' ? 'GANHA (venda fechada)' : 'PERDIDA (o cliente não fechou)'}" pela própria equipe de vendas. Sua única tarefa aqui é explicar, em até 2 frases curtas e objetivas, o que na conversa parece explicar esse resultado. Não contradiga esse resultado — devolva outcome exatamente como "${knownOutcome}".`
     : 'Avalie, só pelo conteúdo da conversa, se ela já tem um desfecho claro (venda fechada ou cliente que desistiu/recusou) ou se ainda está em aberto.'
 
+  // Data/hora atual explícita: sem isso a IA não tem como saber se a última mensagem foi
+  // há 10 minutos ou há 3 meses — crítico pro backfill de conversas antigas (ver
+  // /api/ai/backfill-conversations), onde a "última mensagem" da transcrição pode ser de
+  // muito tempo atrás e isso PRECISA contar como sinal de risco/abandono.
+  const now = new Date().toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+
   return `Você está analisando uma conversa de atendimento via WhatsApp/Instagram de uma empresa do ramo fitness ("Quero Ser Fit"), entre um(a) atendente/vendedor(a) da empresa e um cliente.
+
+Data/hora atual: ${now}. Use isso pra avaliar há quanto tempo a conversa está parada — uma última mensagem de vários dias ou meses atrás, sem resposta da empresa, é um sinal forte de risco/abandono, mesmo que o texto em si pareça neutro.
 
 TRANSCRIÇÃO (da mensagem mais antiga para a mais recente):
 ${transcript}
