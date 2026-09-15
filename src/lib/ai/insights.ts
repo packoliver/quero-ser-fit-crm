@@ -1,5 +1,5 @@
 import { AdminClient } from '@/lib/supabase/admin'
-import { analyzeConversation, isGeminiConfigured } from './gemini'
+import { analyzeConversation, isAiConfigured } from './client'
 
 // Evita chamar a IA de novo a cada mensagem isolada quando várias chegam em sequência
 // rápida (ex: cliente mandando 5 áudios seguidos, ou a vendedora respondendo linha por
@@ -104,7 +104,7 @@ async function runAnalysis(admin: AdminClient, params: ScheduleAnalysisParams): 
  * envio de mensagem nem a sincronização de um pedido que dependeram dela por acidente.
  */
 export async function scheduleConversationAnalysis(admin: AdminClient, params: ScheduleAnalysisParams): Promise<void> {
-  if (!isGeminiConfigured()) return
+  if (!isAiConfigured()) return
   try {
     await runAnalysis(admin, params)
   } catch (err) {

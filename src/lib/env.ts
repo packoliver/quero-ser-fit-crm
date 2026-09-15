@@ -21,12 +21,15 @@ const serverEnvSchema = z.object({
   NEXT_PUBLIC_VAPID_PUBLIC_KEY: z.string().optional(),
   VAPID_PRIVATE_KEY: z.string().optional(),
   VAPID_SUBJECT: z.string().url().optional(),
-  // IA (Insights) — opcional de propósito: sem essa chave, a análise de conversas por IA
-  // só fica desligada (ver src/lib/ai/gemini.ts), o resto do CRM funciona normal. Chave
-  // gerada em https://aistudio.google.com/apikey. GEMINI_MODEL deixa trocar de modelo
-  // (custo/qualidade) sem precisar de deploy — ver default em src/lib/ai/gemini.ts.
-  GEMINI_API_KEY: z.string().optional(),
-  GEMINI_MODEL: z.string().optional(),
+  // IA (Insights) — opcional de propósito: sem OMNIROUTE_BASE_URL, a análise de conversas
+  // por IA só fica desligada (ver src/lib/ai/client.ts), o resto do CRM funciona normal.
+  // Fala o formato compatível com OpenAI (POST {base}/chat/completions) — pensado pra um
+  // gateway tipo OmniRoute (https://www.omniroute.online) auto-hospedado pelo usuário, mas
+  // funciona com qualquer serviço compatível com a mesma API. OMNIROUTE_MODEL deixa trocar
+  // de modelo/rota (custo/qualidade) sem precisar de deploy — ver default em client.ts.
+  OMNIROUTE_BASE_URL: z.string().url('OMNIROUTE_BASE_URL deve ser uma URL válida (ex: https://seu-dominio.com/v1)').optional(),
+  OMNIROUTE_API_KEY: z.string().optional(),
+  OMNIROUTE_MODEL: z.string().optional(),
 })
 
 export type ServerEnv = z.infer<typeof serverEnvSchema>
@@ -66,8 +69,9 @@ export function getServerEnv(): ServerEnv {
     NEXT_PUBLIC_VAPID_PUBLIC_KEY: process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || undefined,
     VAPID_PRIVATE_KEY: process.env.VAPID_PRIVATE_KEY || undefined,
     VAPID_SUBJECT: process.env.VAPID_SUBJECT || undefined,
-    GEMINI_API_KEY: process.env.GEMINI_API_KEY || undefined,
-    GEMINI_MODEL: process.env.GEMINI_MODEL || undefined,
+    OMNIROUTE_BASE_URL: process.env.OMNIROUTE_BASE_URL || undefined,
+    OMNIROUTE_API_KEY: process.env.OMNIROUTE_API_KEY || undefined,
+    OMNIROUTE_MODEL: process.env.OMNIROUTE_MODEL || undefined,
   }
 
   const result = serverEnvSchema.safeParse(rawEnv)

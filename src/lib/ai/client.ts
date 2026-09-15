@@ -1,33 +1,27 @@
-import { GoogleGenAI } from '@google/genai'
 import { getServerEnv } from '@/lib/env'
 
-// gemini-2.5-flash-lite é o modelo mais barato/rápido ainda estável no catálogo do Google
-// (ver https://ai.google.dev/gemini-api/docs/pricing) — importa porque essa análise roda
-// a cada mensagem trocada em toda conversa da organização, não só quando fecha. Trocável
-// sem deploy via a env var GEMINI_MODEL, caso a qualidade não seja suficiente e valha a
-// pena pagar mais por um modelo mais novo.
-const DEFAULT_MODEL = 'gemini-2.5-flash-lite'
+// OmniRoute (auto-hospedado pelo usuário — ver https://www.omniroute.online) expõe uma
+// API compatível com OpenAI (POST {base}/chat/completions) e roteia por trás dela entre
+// vários provedores/modelos. Por isso este cliente fala o formato OpenAI genérico, não
+// nenhum SDK específico de um provedor — funciona com OmniRoute hoje e com qualquer outro
+// gateway/provedor compatível com OpenAI no futuro, só trocando as env vars abaixo.
+//
+// "auto/cheap" pede pro próprio OmniRoute escolher a rota mais barata disponível — importa
+// porque essa análise roda a cada mensagem trocada em toda conversa da organização, não só
+// quando fecha. Trocável sem deploy via OMNIROUTE_MODEL.
+const DEFAULT_MODEL = 'auto/cheap'
 
-// 15s: generoso o bastante pra uma resposta normal da API, mas curto o bastante pra não
-// segurar a tarefa em segundo plano (ver `after()` nos pontos que chamam isso) por muito
-// tempo se o Google estiver lento. Como essa análise nunca bloqueia envio/recebimento de
-// mensagem de verdade (roda depois da resposta ao usuário), um timeout maior não ajudaria
-// ninguém — só atrasaria quando o resultado aparece na tela de Insights.
+// 15s: generoso o bastante pra uma resposta normal, mas curto o bastante pra não segurar a
+// tarefa em segundo plano (ver `after()` nos pontos que chamam isso) por muito tempo se o
+// gateway estiver lento. Como essa análise nunca bloqueia envio/recebimento de mensagem de
+// verdade (roda depois da resposta ao usuário), um timeout maior não ajudaria ninguém — só
+// atrasaria quando o resultado aparece na tela de Insights.
 const TIMEOUT_MS = 15_000
 
-let cachedClient: GoogleGenAI | null | undefined // undefined = ainda não checou; null = sem chave configurada
-
-function getClient(): GoogleGenAI | null {
-  if (cachedClient !== undefined) return cachedClient
-  const { GEMINI_API_KEY } = getServerEnv()
-  cachedClient = GEMINI_API_KEY ? new GoogleGenAI({ apiKey: GEMINI_API_KEY }) : null
-  return cachedClient
-}
-
-/** Sem GEMINI_API_KEY configurada, a feature de Insights fica desligada de propósito —
+/** Sem OMNIROUTE_BASE_URL configurada, a feature de Insights fica desligada de propósito —
  * nada no resto do CRM depende disso pra funcionar (ver src/lib/ai/insights.ts). */
-export function isGeminiConfigured(): boolean {
-  return getClient() !== null
+export function isAiConfigured(): boolean {
+  return !!getServerEnv().OMNIROUTE_BASE_URL
 }
 
 export interface ConversationAnalysis {
@@ -37,20 +31,6 @@ export interface ConversationAnalysis {
   outcome: 'aberta' | 'ganha' | 'perdida'
   outcomeReason: string | null
 }
-
-const RESPONSE_SCHEMA = {
-  type: 'object',
-  properties: {
-    status: { type: 'string', enum: ['ok', 'atencao', 'risco'] },
-    signals: { type: 'array', items: { type: 'string' } },
-    summary: { type: 'string' },
-    outcome: { type: 'string', enum: ['aberta', 'ganha', 'perdida'] },
-    // String vazia em vez de null: schema mais simples de validar no lado do Gemini
-    // (evita depender de suporte a tipo nullable) — vira null de novo ao salvar no banco.
-    outcomeReason: { type: 'string' },
-  },
-  required: ['status', 'signals', 'summary', 'outcome', 'outcomeReason'],
-} as const
 
 function buildPrompt(transcript: string, knownOutcome: 'ganha' | 'perdida' | null): string {
   const outcomeInstruction = knownOutcome
@@ -72,7 +52,15 @@ ${transcript}
 
 ${outcomeInstruction}
 
-Responda SEMPRE em português, preenchendo:
+Responda SEMPRE em português, e responda SOMENTE com um objeto JSON válido (sem markdown, sem texto antes ou depois), com exatamente estes campos:
+
+{
+  "status": "ok" | "atencao" | "risco",
+  "signals": string[],
+  "summary": string,
+  "outcome": "aberta" | "ganha" | "perdida",
+  "outcomeReason": string
+}
 
 - status: "risco" se há um problema real e urgente agora (cliente esperando resposta há muito tempo sem retorno, pergunta direta do cliente que ficou sem resposta, cliente demonstrando insatisfação, frustração ou vontade de desistir); "atencao" se há um sinal de alerta mais leve (demora moderada, objeção de preço ainda sem resposta, uma dúvida em aberto); "ok" se o atendimento está fluindo bem, sem nada pendente preocupante.
 - signals: lista curta (no máximo 5) de sinais concretos observados na conversa, cada um em poucas palavras (ex: "cliente esperando há mais de 1h", "pergunta sobre preço não respondida", "cliente pediu pra cancelar"). Lista vazia se não houver nada digno de nota.
@@ -85,7 +73,7 @@ Baseie-se SOMENTE no conteúdo da transcrição acima. Nunca invente informaçã
 
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('Tempo esgotado ao chamar a API do Gemini.')), ms)
+    const timer = setTimeout(() => reject(new Error('Tempo esgotado ao chamar o gateway de IA.')), ms)
     promise.then(
       (value) => {
         clearTimeout(timer)
@@ -99,10 +87,19 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   })
 }
 
+/** Alguns modelos (principalmente os menores/gratuitos que um roteador como o OmniRoute
+ * costuma incluir) devolvem o JSON dentro de um bloco de código markdown mesmo quando
+ * instruídos a não fazer isso — remove a cerca antes de tentar parsear. */
+function extractJson(raw: string): string {
+  const trimmed = raw.trim()
+  const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i)
+  return fenced ? fenced[1] : trimmed
+}
+
 function parseResponse(raw: string, knownOutcome: 'ganha' | 'perdida' | null): ConversationAnalysis | null {
   let parsed: unknown
   try {
-    parsed = JSON.parse(raw)
+    parsed = JSON.parse(extractJson(raw))
   } catch {
     return null
   }
@@ -128,9 +125,13 @@ function parseResponse(raw: string, knownOutcome: 'ganha' | 'perdida' | null): C
   return { status, signals, summary, outcome, outcomeReason }
 }
 
+interface ChatCompletionsResponse {
+  choices?: { message?: { content?: string } }[]
+}
+
 /**
  * Manda a transcrição pra IA e devolve a análise estruturada — ou null em QUALQUER
- * situação de falha (sem chave configurada, transcrição vazia, erro de rede, resposta
+ * situação de falha (sem gateway configurado, transcrição vazia, erro de rede, resposta
  * malformada, timeout). Nunca lança: quem chama trata null como "não deu pra analisar
  * agora" e segue em frente — essa é uma feature auxiliar, nunca deve derrubar o envio de
  * mensagem nem a sincronização de um pedido.
@@ -142,31 +143,42 @@ export async function analyzeConversation({
   transcript: string
   knownOutcome: 'ganha' | 'perdida' | null
 }): Promise<ConversationAnalysis | null> {
-  const ai = getClient()
-  if (!ai || !transcript.trim()) return null
+  const { OMNIROUTE_BASE_URL, OMNIROUTE_API_KEY, OMNIROUTE_MODEL } = getServerEnv()
+  if (!OMNIROUTE_BASE_URL || !transcript.trim()) return null
 
   try {
-    const model = getServerEnv().GEMINI_MODEL || DEFAULT_MODEL
+    const baseUrl = OMNIROUTE_BASE_URL.replace(/\/+$/, '')
     const response = await withTimeout(
-      ai.models.generateContent({
-        model,
-        contents: buildPrompt(transcript, knownOutcome),
-        config: {
-          responseMimeType: 'application/json',
-          responseJsonSchema: RESPONSE_SCHEMA,
+      fetch(`${baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(OMNIROUTE_API_KEY ? { Authorization: `Bearer ${OMNIROUTE_API_KEY}` } : {}),
         },
+        body: JSON.stringify({
+          model: OMNIROUTE_MODEL || DEFAULT_MODEL,
+          messages: [{ role: 'user', content: buildPrompt(transcript, knownOutcome) }],
+          response_format: { type: 'json_object' },
+          temperature: 0.3,
+        }),
       }),
       TIMEOUT_MS
     )
 
-    const raw = response.text
+    if (!response.ok) {
+      console.error('[ai] Gateway respondeu com erro:', response.status, await response.text().catch(() => ''))
+      return null
+    }
+
+    const data = (await response.json()) as ChatCompletionsResponse
+    const raw = data.choices?.[0]?.message?.content
     if (!raw) return null
     return parseResponse(raw, knownOutcome)
   } catch (err) {
-    console.error('[gemini] Falha ao analisar conversa:', err)
+    console.error('[ai] Falha ao analisar conversa:', err)
     return null
   }
 }
 
 // Exportado só pra teste (validação do parsing sem precisar chamar a API de verdade).
-export const __testing = { parseResponse, buildPrompt }
+export const __testing = { parseResponse, buildPrompt, extractJson }

@@ -27,7 +27,7 @@ type TypedSupabase = {
  * moveDeal em funil/page.tsx) — o cliente não tem acesso ao service-role client nem
  * deveria escrever direto em ai_conversation_insights, então isso passa pelo servidor.
  * Sempre responde rápido (a análise roda em segundo plano via after()); "queued: true"
- * não garante que a IA está configurada — sem GEMINI_API_KEY, scheduleConversationAnalysis
+ * não garante que a IA está configurada — sem OMNIROUTE_BASE_URL, scheduleConversationAnalysis
  * só não faz nada (ver src/lib/ai/insights.ts).
  */
 export async function POST(request: NextRequest) {

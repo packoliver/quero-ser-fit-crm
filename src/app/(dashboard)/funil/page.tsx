@@ -363,7 +363,7 @@ export default function FunilPage() {
 
   // Dispara a análise de IA (Insights) quando um pedido pousa numa etapa Ganha/Perdida —
   // fire-and-forget de propósito: nunca espera a resposta nem trata erro, porque isso não
-  // pode atrasar nem quebrar o fluxo de mover o pedido no Kanban. Sem GEMINI_API_KEY
+  // pode atrasar nem quebrar o fluxo de mover o pedido no Kanban. Sem OMNIROUTE_BASE_URL
   // configurada no servidor, essa chamada só não faz nada (ver /api/ai/analyze-conversation).
   const notifyDealClosedForInsights = (deal: AnyDeal, knownOutcome: 'ganha' | 'perdida') => {
     const conversationId = dealConversationId(deal, contactConversationMap)
