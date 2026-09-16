@@ -51,15 +51,19 @@ export async function POST(request: NextRequest) {
   const admin = createAdminClient()
   const result = await answerQuestionAboutInsights(admin, member.organization_id, parsed.data.question)
 
-  if (!result) {
-    return NextResponse.json(
-      {
-        error:
-          'Não foi possível responder por aqui. Se o seu gateway de IA só roda em localhost (ver npm run insights:local), esta barra não alcança ele — use "npm run insights:ask -- \'sua pergunta\'" no terminal em vez disso. Se o gateway é público, confirme se OMNIROUTE_BASE_URL está configurado na Vercel e se já existe alguma conversa analisada.',
-      },
-      { status: 502 }
-    )
+  if (!result.ok) {
+    // Mensagem diferente por motivo, de propósito — "IA não configurada" e "gateway não
+    // respondeu" pareciam o mesmo erro genérico antes, o que tornava impossível saber, só
+    // olhando a tela, qual dos dois estava realmente acontecendo.
+    const messages: Record<typeof result.reason, string> = {
+      not_configured:
+        'OMNIROUTE_BASE_URL não está configurada neste servidor (Vercel) — confirme se foi salva pro ambiente "Production" e se o valor está correto (com /v1 no final).',
+      no_data: 'Ainda não existe nenhuma conversa analisada — clique em "Analisar conversas antigas" primeiro.',
+      gateway_failed:
+        'A variável está configurada, mas o gateway não respondeu a tempo (15s) ou devolveu um erro. Se o seu gateway só roda em localhost, use "npm run insights:ask -- \'sua pergunta\'" no terminal em vez desta barra — a Vercel não alcança seu localhost diretamente, só através de um túnel público.',
+    }
+    return NextResponse.json({ error: messages[result.reason] }, { status: 502 })
   }
 
-  return NextResponse.json(result)
+  return NextResponse.json({ answer: result.answer, consideredCount: result.consideredCount })
 }
