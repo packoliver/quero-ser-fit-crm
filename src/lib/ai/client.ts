@@ -18,6 +18,14 @@ const DEFAULT_MODEL = 'auto/cheap'
 // atrasaria quando o resultado aparece na tela de Insights.
 const TIMEOUT_MS = 15_000
 
+// A pergunta livre ("Pergunte à IA") manda um contexto bem maior (até 400 conversas
+// resumidas) do que a análise de uma conversa só — o modelo demora mais pra processar isso
+// e responder. 15s se mostrou curto demais na prática (erro "gateway não respondeu" com a
+// variável corretamente configurada e o gateway saudável, confirmado por fora). Aqui a
+// pessoa já está esperando na tela (loading visível), então vale segurar mais antes de
+// desistir — 45s deixa folga sob o maxDuration=60 da rota (ver ask-insights/route.ts).
+const QA_TIMEOUT_MS = 45_000
+
 /** Sem OMNIROUTE_BASE_URL configurada, a feature de Insights fica desligada de propósito —
  * nada no resto do CRM depende disso pra funcionar (ver src/lib/ai/insights.ts). */
 export function isAiConfigured(): boolean {
@@ -221,7 +229,7 @@ export async function askQuestion({ context, question }: { context: string; ques
           temperature: 0.3,
         }),
       }),
-      TIMEOUT_MS
+      QA_TIMEOUT_MS
     )
 
     if (!response.ok) {

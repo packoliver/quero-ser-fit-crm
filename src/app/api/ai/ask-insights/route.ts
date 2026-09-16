@@ -4,6 +4,11 @@ import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { answerQuestionAboutInsights } from '@/lib/ai/insights'
 
+// Padrão da Vercel pode encerrar a função bem antes do timeout de 45s que o cliente de IA
+// usa pra essa pergunta (ver QA_TIMEOUT_MS em client.ts) — sem isso, a Vercel mataria a
+// função na própria conta dela antes do nosso próprio timeout sequer disparar.
+export const maxDuration = 60
+
 const bodySchema = z.object({ question: z.string().trim().min(1, 'Pergunta vazia.').max(500, 'Pergunta muito longa.') })
 
 type TypedSupabase = {
