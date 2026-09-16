@@ -43,21 +43,41 @@ if (!question) {
 
 const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, { auth: { autoRefreshToken: false, persistSession: false } })
 
-function buildQaContext(rows, contactNameByConversation, sellerNameByDeal) {
+// Um .in('id', [...]) com centenas de UUIDs estoura o limite de tamanho de cabeçalho HTTP
+// (16KB) — confirmado na prática com 400 ids (erro silencioso: a busca voltava vazia, sem
+// nome de cliente/vendedor(a) nem data nenhuma no contexto). 100 por lote fica bem abaixo.
+const ID_FILTER_CHUNK_SIZE = 100
+
+async function fetchInChunks(ids, fetchChunk) {
+  const results = []
+  for (let i = 0; i < ids.length; i += ID_FILTER_CHUNK_SIZE) {
+    const chunk = ids.slice(i, i + ID_FILTER_CHUNK_SIZE)
+    const { data } = await fetchChunk(chunk)
+    if (data) results.push(...data)
+  }
+  return results
+}
+
+function buildQaContext(rows, contactNameByConversation, sellerNameByDeal, lastMessageAtByConversation) {
   return rows
     .map((r) => {
       const contact = contactNameByConversation.get(r.conversation_id) || 'desconhecido'
       const seller = r.deal_id ? sellerNameByDeal.get(r.deal_id) : null
       const desfecho = r.outcome_reason ? `${r.outcome} (${r.outcome_reason})` : r.outcome
-      return `- Cliente: ${contact} | Vendedor(a): ${seller || '—'} | Status: ${r.status} | Desfecho: ${desfecho} | Resumo: ${r.summary || '—'}`
+      const lastMessageAt = lastMessageAtByConversation.get(r.conversation_id)
+      const data = lastMessageAt ? new Date(lastMessageAt).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '—'
+      return `- Data: ${data} | Cliente: ${contact} | Vendedor(a): ${seller || '—'} | Status: ${r.status} | Desfecho: ${desfecho} | Resumo: ${r.summary || '—'}`
     })
     .join('\n')
 }
 
 function buildQaPrompt(context, question) {
+  const today = new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' })
   return `Você é um assistente que responde perguntas sobre o desempenho comercial de uma empresa do ramo fitness ("Quero Ser Fit"), com base em análises de IA já feitas sobre conversas de WhatsApp/Instagram.
 
-DADOS (uma linha por conversa analisada — cliente, vendedor(a), status, desfecho e resumo):
+Data de hoje: ${today}. Use isso pra interpretar perguntas de período (ex: "essa semana", "esse mês", "hoje") contra a Data de cada linha abaixo, que é a data da ÚLTIMA MENSAGEM daquela conversa.
+
+DADOS (uma linha por conversa analisada — data, cliente, vendedor(a), status, desfecho e resumo):
 ${context}
 
 PERGUNTA: ${question}
@@ -88,20 +108,18 @@ async function main() {
   const conversationIds = [...new Set(rows.map((r) => r.conversation_id))]
   const dealIds = [...new Set(rows.map((r) => r.deal_id).filter(Boolean))]
 
-  const { data: conversationsRaw } = await supabase.from('conversations').select('id, contact_id').in('id', conversationIds)
-  const conversations = conversationsRaw || []
-  const contactIds = [...new Set(conversations.map((c) => c.contact_id))]
-
-  const [{ data: contactsRaw }, { data: dealsRaw }] = await Promise.all([
-    contactIds.length > 0 ? supabase.from('contacts').select('id, name').in('id', contactIds) : Promise.resolve({ data: [] }),
-    dealIds.length > 0 ? supabase.from('deals').select('id, assigned_to_id').in('id', dealIds) : Promise.resolve({ data: [] }),
+  const [conversations, deals] = await Promise.all([
+    fetchInChunks(conversationIds, (chunk) => supabase.from('conversations').select('id, contact_id, last_message_at').in('id', chunk)),
+    fetchInChunks(dealIds, (chunk) => supabase.from('deals').select('id, assigned_to_id').in('id', chunk)),
   ])
-  const contacts = contactsRaw || []
-  const deals = dealsRaw || []
+  const contactIds = [...new Set(conversations.map((c) => c.contact_id))]
+  const lastMessageAtByConversation = new Map(conversations.map((c) => [c.id, c.last_message_at]))
 
   const sellerIds = [...new Set(deals.map((d) => d.assigned_to_id).filter(Boolean))]
-  const { data: profilesRaw } = sellerIds.length > 0 ? await supabase.from('profiles').select('id, full_name').in('id', sellerIds) : { data: [] }
-  const profiles = profilesRaw || []
+  const [contacts, profiles] = await Promise.all([
+    fetchInChunks(contactIds, (chunk) => supabase.from('contacts').select('id, name').in('id', chunk)),
+    fetchInChunks(sellerIds, (chunk) => supabase.from('profiles').select('id, full_name').in('id', chunk)),
+  ])
 
   const contactNameById = new Map(contacts.map((c) => [c.id, c.name]))
   const contactIdByConversation = new Map(conversations.map((c) => [c.id, c.contact_id]))
@@ -111,7 +129,7 @@ async function main() {
   const sellerNameById = new Map(profiles.map((p) => [p.id, p.full_name]))
   const sellerNameByDeal = new Map(deals.map((d) => [d.id, d.assigned_to_id ? sellerNameById.get(d.assigned_to_id) || '' : '']))
 
-  const context = buildQaContext(rows, contactNameByConversation, sellerNameByDeal)
+  const context = buildQaContext(rows, contactNameByConversation, sellerNameByDeal, lastMessageAtByConversation)
 
   const response = await fetch(`${OMNIROUTE_BASE_URL}/chat/completions`, {
     method: 'POST',

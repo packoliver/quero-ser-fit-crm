@@ -104,9 +104,15 @@ describe('Análise de conversa por IA — construção do prompt', () => {
 
 describe('Pergunte à IA — construção do prompt de pergunta livre', () => {
   it('deve incluir o contexto e a pergunta, e instruir a não inventar resposta', () => {
-    const prompt = buildQaPrompt('- Cliente: Maria | Status: ok | Desfecho: ganha', 'quantas vendas fechamos?')
-    expect(prompt).toContain('- Cliente: Maria | Status: ok | Desfecho: ganha')
+    const prompt = buildQaPrompt('- Data: 10/09/2026 | Cliente: Maria | Status: ok | Desfecho: ganha', 'quantas vendas fechamos?')
+    expect(prompt).toContain('- Data: 10/09/2026 | Cliente: Maria | Status: ok | Desfecho: ganha')
     expect(prompt).toContain('quantas vendas fechamos?')
     expect(prompt).toContain('SOMENTE nos dados acima')
+  })
+
+  it('deve incluir a data de hoje, pra dar pra interpretar pergunta de período (essa semana, esse mês)', () => {
+    const prompt = buildQaPrompt('- Data: 10/09/2026 | Cliente: Maria | Status: ok | Desfecho: ganha', 'o que fechou essa semana?')
+    expect(prompt).toMatch(/Data de hoje: \d{2}\/\d{2}\/\d{4}/)
+    expect(prompt).toContain('período')
   })
 })

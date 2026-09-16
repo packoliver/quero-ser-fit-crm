@@ -181,9 +181,13 @@ export async function analyzeConversation({
 }
 
 function buildQaPrompt(context: string, question: string): string {
+  const today = new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' })
+
   return `Você é um assistente que responde perguntas sobre o desempenho comercial de uma empresa do ramo fitness ("Quero Ser Fit"), com base em análises de IA já feitas sobre conversas de WhatsApp/Instagram.
 
-DADOS (uma linha por conversa analisada — cliente, vendedor(a), status, desfecho e resumo):
+Data de hoje: ${today}. Use isso pra interpretar perguntas de período (ex: "essa semana", "esse mês", "hoje") contra a Data de cada linha abaixo, que é a data da ÚLTIMA MENSAGEM daquela conversa.
+
+DADOS (uma linha por conversa analisada — data, cliente, vendedor(a), status, desfecho e resumo):
 ${context}
 
 PERGUNTA: ${question}
