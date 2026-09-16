@@ -169,19 +169,20 @@ function buildQaContext(
     .join('\n')
 }
 
+export type QaResult =
+  | { ok: true; answer: string; consideredCount: number }
+  | { ok: false; reason: 'not_configured' | 'no_data' | 'gateway_failed' }
+
 /**
  * Responde uma pergunta livre (ex: "quantas vendas fechamos essa semana?") com base em
  * todas as conversas já analisadas da organização — não nas mensagens brutas, que
  * estourariam contexto/custo rápido, mas no resumo compacto que cada análise já produz.
- * Retorna null em qualquer falha (sem IA configurada, sem conversa analisada ainda, erro
- * do gateway) — a rota que chama isto decide a mensagem de erro pro usuário.
+ * `reason` no retorno distingue os 3 jeitos de falhar (ver QaResult) — sem isso, "IA não
+ * configurada" e "gateway não respondeu" pareciam o mesmo erro genérico pra quem via a
+ * mensagem na tela, tornando impossível saber qual dos dois estava acontecendo de verdade.
  */
-export async function answerQuestionAboutInsights(
-  admin: AdminClient,
-  organizationId: string,
-  question: string
-): Promise<{ answer: string; consideredCount: number } | null> {
-  if (!isAiConfigured()) return null
+export async function answerQuestionAboutInsights(admin: AdminClient, organizationId: string, question: string): Promise<QaResult> {
+  if (!isAiConfigured()) return { ok: false, reason: 'not_configured' }
 
   const { data: insightRows } = await admin
     .from('ai_conversation_insights')
@@ -191,7 +192,7 @@ export async function answerQuestionAboutInsights(
     .limit(MAX_QA_CONTEXT_ROWS)
 
   const rows = (insightRows || []) as QaInsightRow[]
-  if (rows.length === 0) return null
+  if (rows.length === 0) return { ok: false, reason: 'no_data' }
 
   const conversationIds = [...new Set(rows.map((r) => r.conversation_id))]
   const dealIds = [...new Set(rows.map((r) => r.deal_id).filter((id): id is string => !!id))]
@@ -232,9 +233,9 @@ export async function answerQuestionAboutInsights(
 
   const context = buildQaContext(rows, contactNameByConversation, sellerNameByDeal, lastMessageAtByConversation)
   const answer = await askQuestion({ context, question })
-  if (!answer) return null
+  if (!answer) return { ok: false, reason: 'gateway_failed' }
 
-  return { answer, consideredCount: rows.length }
+  return { ok: true, answer, consideredCount: rows.length }
 }
 
 // Exportado só pra teste.
