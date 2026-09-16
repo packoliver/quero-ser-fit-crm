@@ -117,6 +117,25 @@ export async function scheduleConversationAnalysis(admin: AdminClient, params: S
 // recentes (ver order by last_analyzed_at desc) em vez de estourar tokens/custo à toa.
 const MAX_QA_CONTEXT_ROWS = 400
 
+// Um .in('id', [...]) com centenas de UUIDs estoura o limite de tamanho de cabeçalho HTTP
+// (16KB) — confirmado na prática com 400 ids (~15.7KB de URL, erro silencioso: o Supabase
+// devolve null/erro e o código seguia como se a busca tivesse voltado vazia, sem nome de
+// cliente/vendedor(a) nem data nenhuma no contexto). 100 por lote fica bem abaixo do teto.
+const ID_FILTER_CHUNK_SIZE = 100
+
+// PromiseLike (não Promise) de propósito: o query builder do Supabase é "thenable"
+// (funciona com await) mas não implementa a interface Promise completa (sem .catch,
+// .finally) — exigir Promise aqui rejeitaria a chamada direta a `admin.from(...).in(...)`.
+async function fetchInChunks<T>(ids: string[], fetchChunk: (chunkIds: string[]) => PromiseLike<{ data: T[] | null }>): Promise<T[]> {
+  const results: T[] = []
+  for (let i = 0; i < ids.length; i += ID_FILTER_CHUNK_SIZE) {
+    const chunk = ids.slice(i, i + ID_FILTER_CHUNK_SIZE)
+    const { data } = await fetchChunk(chunk)
+    if (data) results.push(...data)
+  }
+  return results
+}
+
 interface QaInsightRow {
   conversation_id: string
   deal_id: string | null
@@ -129,14 +148,23 @@ interface QaInsightRow {
 function buildQaContext(
   rows: QaInsightRow[],
   contactNameByConversation: Map<string, string>,
-  sellerNameByDeal: Map<string, string>
+  sellerNameByDeal: Map<string, string>,
+  lastMessageAtByConversation: Map<string, string>
 ): string {
   return rows
     .map((r) => {
       const contact = contactNameByConversation.get(r.conversation_id) || 'desconhecido'
       const seller = r.deal_id ? sellerNameByDeal.get(r.deal_id) : null
       const desfecho = r.outcome_reason ? `${r.outcome} (${r.outcome_reason})` : r.outcome
-      return `- Cliente: ${contact} | Vendedor(a): ${seller || '—'} | Status: ${r.status} | Desfecho: ${desfecho} | Resumo: ${r.summary || '—'}`
+      // Data da ÚLTIMA MENSAGEM da conversa (não de quando a IA analisou) — é o que
+      // permite responder pergunta de período ("essa semana", "esse mês"). Usar a data da
+      // análise em vez disso ficaria errado pra qualquer conversa antiga processada pelo
+      // backfill: todas apareceriam com a mesma data (a do dia em que o backfill rodou).
+      const lastMessageAt = lastMessageAtByConversation.get(r.conversation_id)
+      const data = lastMessageAt
+        ? new Date(lastMessageAt).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' })
+        : '—'
+      return `- Data: ${data} | Cliente: ${contact} | Vendedor(a): ${seller || '—'} | Status: ${r.status} | Desfecho: ${desfecho} | Resumo: ${r.summary || '—'}`
     })
     .join('\n')
 }
@@ -168,40 +196,41 @@ export async function answerQuestionAboutInsights(
   const conversationIds = [...new Set(rows.map((r) => r.conversation_id))]
   const dealIds = [...new Set(rows.map((r) => r.deal_id).filter((id): id is string => !!id))]
 
-  const [{ data: conversationsRaw }, { data: dealsRaw }] = await Promise.all([
-    admin.from('conversations').select('id, contact_id').in('id', conversationIds),
-    dealIds.length > 0
-      ? admin.from('deals').select('id, assigned_to_id').in('id', dealIds)
-      : Promise.resolve({ data: [] as { id: string; assigned_to_id: string | null }[] }),
+  const [conversations, deals] = await Promise.all([
+    fetchInChunks(conversationIds, (chunk) =>
+      admin.from('conversations').select('id, contact_id, last_message_at').in('id', chunk)
+    ) as Promise<{ id: string; contact_id: string; last_message_at: string }[]>,
+    fetchInChunks(dealIds, (chunk) => admin.from('deals').select('id, assigned_to_id').in('id', chunk)) as Promise<
+      { id: string; assigned_to_id: string | null }[]
+    >,
   ])
 
-  const conversations = (conversationsRaw || []) as { id: string; contact_id: string }[]
-  const deals = (dealsRaw || []) as { id: string; assigned_to_id: string | null }[]
+  const lastMessageAtByConversation = new Map(conversations.map((c) => [c.id, c.last_message_at]))
 
   const contactIds = [...new Set(conversations.map((c) => c.contact_id))]
   const sellerIds = [...new Set(deals.map((d) => d.assigned_to_id).filter((id): id is string => !!id))]
 
-  const [{ data: contactsRaw }, { data: profilesRaw }] = await Promise.all([
-    contactIds.length > 0
-      ? admin.from('contacts').select('id, name').in('id', contactIds)
-      : Promise.resolve({ data: [] as { id: string; name: string }[] }),
-    sellerIds.length > 0
-      ? admin.from('profiles').select('id, full_name').in('id', sellerIds)
-      : Promise.resolve({ data: [] as { id: string; full_name: string }[] }),
+  const [contacts, profiles] = await Promise.all([
+    fetchInChunks(contactIds, (chunk) => admin.from('contacts').select('id, name').in('id', chunk)) as Promise<
+      { id: string; name: string }[]
+    >,
+    fetchInChunks(sellerIds, (chunk) => admin.from('profiles').select('id, full_name').in('id', chunk)) as Promise<
+      { id: string; full_name: string }[]
+    >,
   ])
 
-  const contactNameById = new Map(((contactsRaw || []) as { id: string; name: string }[]).map((c) => [c.id, c.name]))
+  const contactNameById = new Map(contacts.map((c) => [c.id, c.name]))
   const contactIdByConversation = new Map(conversations.map((c) => [c.id, c.contact_id]))
   const contactNameByConversation = new Map(
     [...contactIdByConversation.entries()].map(([convId, contactId]) => [convId, contactNameById.get(contactId) || 'desconhecido'])
   )
 
-  const sellerNameById = new Map(((profilesRaw || []) as { id: string; full_name: string }[]).map((p) => [p.id, p.full_name]))
+  const sellerNameById = new Map(profiles.map((p) => [p.id, p.full_name]))
   const sellerNameByDeal = new Map(
     deals.map((d) => [d.id, d.assigned_to_id ? sellerNameById.get(d.assigned_to_id) || '' : ''])
   )
 
-  const context = buildQaContext(rows, contactNameByConversation, sellerNameByDeal)
+  const context = buildQaContext(rows, contactNameByConversation, sellerNameByDeal, lastMessageAtByConversation)
   const answer = await askQuestion({ context, question })
   if (!answer) return null
 
@@ -209,4 +238,4 @@ export async function answerQuestionAboutInsights(
 }
 
 // Exportado só pra teste.
-export const __testing = { buildTranscript, buildQaContext }
+export const __testing = { buildTranscript, buildQaContext, fetchInChunks, ID_FILTER_CHUNK_SIZE }

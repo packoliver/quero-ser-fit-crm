@@ -406,6 +406,15 @@ export default function InsightsPage() {
               <h2 className="text-xs font-bold text-slate-200 uppercase tracking-wider">Pergunte à IA sobre as conversas</h2>
             </CardHeader>
             <CardBody className="space-y-3">
+              {/* Só pra deixar claro o que essa barra é boa (e não é) — a IA lê texto, não
+                  soma planilha: em listas grandes ela pode errar uma conta exata. Pros
+                  números que precisam estar certos, os cards logo abaixo (calculados por
+                  código) são a fonte confiável. */}
+              <p className="text-[11px] text-slate-500 leading-relaxed">
+                Boa pra perguntas que pedem interpretação (ex: <em>&ldquo;quais os principais motivos de perda?&rdquo;</em>,{' '}
+                <em>&ldquo;resuma o que costuma dar errado nas conversas em risco&rdquo;</em>). Pra números exatos, confie nos cards
+                logo abaixo — a IA pode errar contas quando lida com uma lista grande de conversas.
+              </p>
               <form onSubmit={(e) => void handleAsk(e)} className="flex flex-wrap gap-2">
                 <input
                   type="text"

@@ -179,8 +179,16 @@ async function main() {
   }
 
   const conversationIds = pending.map((c) => c.id)
-  const { data: dealsRaw } = await supabase.from('deals').select('id, stage, conversation_id').in('conversation_id', conversationIds)
-  const dealByConversation = new Map((dealsRaw || []).map((d) => [d.conversation_id, d]))
+  // Em lotes de 100: um .in() com centenas de UUIDs estoura o limite de tamanho de
+  // cabeçalho HTTP (16KB) — confirmado na prática com 400 ids (erro silencioso, a busca
+  // voltava vazia). Numa organização grande, pending facilmente passa disso.
+  const dealsRaw = []
+  for (let i = 0; i < conversationIds.length; i += 100) {
+    const chunk = conversationIds.slice(i, i + 100)
+    const { data } = await supabase.from('deals').select('id, stage, conversation_id').in('conversation_id', chunk)
+    if (data) dealsRaw.push(...data)
+  }
+  const dealByConversation = new Map(dealsRaw.map((d) => [d.conversation_id, d]))
 
   const orgIds = [...new Set(pending.map((c) => c.organization_id))]
   const { data: stagesRaw } = await supabase.from('pipeline_stages').select('organization_id, key, is_won, is_lost').in('organization_id', orgIds)
