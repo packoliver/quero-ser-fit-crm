@@ -91,7 +91,7 @@ async function main() {
 
   const { data: insightRows, error: insightsError } = await supabase
     .from('ai_conversation_insights')
-    .select('conversation_id, deal_id, status, outcome, outcome_reason, summary')
+    .select('organization_id, conversation_id, deal_id, status, outcome, outcome_reason, summary')
     .order('last_analyzed_at', { ascending: false })
     .limit(MAX_CONTEXT_ROWS)
   if (insightsError) {
@@ -158,6 +158,17 @@ async function main() {
 
   console.log(`Resposta (baseada em ${rows.length} conversa(s) analisada(s)):\n`)
   console.log(answer.trim())
+
+  // Salva no histórico da tela Insights — asked_by null porque este script roda com a
+  // chave de service role, sem sessão de usuário nenhuma por trás. Não impede o texto da
+  // resposta já mostrado acima; se falhar, só não fica registrado desta vez.
+  const orgId = rows[0] && rows[0].organization_id
+  if (orgId) {
+    const { error: historyError } = await supabase
+      .from('ai_qa_history')
+      .insert({ organization_id: orgId, asked_by: null, question, answer: answer.trim(), considered_count: rows.length })
+    if (historyError) console.error('\n(não foi possível salvar no histórico:', historyError.message, ')')
+  }
 }
 
 main().catch((err) => {

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
-import { Sparkles, RefreshCw, AlertTriangle, TrendingUp, TrendingDown, Lock, History, Loader2, Send } from 'lucide-react'
+import { Sparkles, RefreshCw, AlertTriangle, TrendingUp, TrendingDown, Lock, History, Clock, Loader2, Send } from 'lucide-react'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
@@ -34,9 +34,18 @@ interface QaEntry {
   consideredCount: number
 }
 
+interface QaHistoryRow {
+  id: string
+  question: string
+  answer: string
+  consideredCount: number
+  createdAt: string
+  askedByName: string | null
+}
+
 type PeriodFilter = 'all' | '7' | '30' | '90'
 type StatusFilter = 'all' | 'atencao' | 'risco'
-type TabKey = 'attention' | 'won' | 'lost'
+type TabKey = 'attention' | 'won' | 'lost' | 'history'
 const PAGE_SIZE = 20
 
 const STATUS_BADGE: Record<InsightRow['status'], { variant: 'emerald' | 'amber' | 'rose'; label: string }> = {
@@ -49,6 +58,7 @@ const TABS: { key: TabKey; label: string; icon: typeof AlertTriangle }[] = [
   { key: 'attention', label: 'Precisam de atenção', icon: AlertTriangle },
   { key: 'won', label: 'Ganhas', icon: TrendingUp },
   { key: 'lost', label: 'Perdidas', icon: TrendingDown },
+  { key: 'history', label: 'Histórico', icon: Clock },
 ]
 
 function formatCurrency(value: number | null): string | null {
@@ -97,6 +107,97 @@ export default function InsightsPage() {
   const [asking, setAsking] = useState(false)
   const [qaError, setQaError] = useState<string | null>(null)
   const [qaHistory, setQaHistory] = useState<QaEntry[]>([])
+
+  // Histórico persistido (aba "Histórico") — diferente de qaHistory acima, que é só o
+  // feedback imediato da sessão atual embaixo da barra de pergunta. Carrega sob demanda
+  // (não teria sentido buscar isso toda vez que a tela abre, se a pessoa nem for olhar).
+  const [qaHistoryRows, setQaHistoryRows] = useState<QaHistoryRow[]>([])
+  const [qaHistoryLoaded, setQaHistoryLoaded] = useState(false)
+  const [qaHistoryLoading, setQaHistoryLoading] = useState(false)
+  const [qaHistoryError, setQaHistoryError] = useState<string | null>(null)
+
+  const fetchQaHistoryRows = useCallback(async () => {
+    setQaHistoryLoading(true)
+    setQaHistoryError(null)
+    try {
+      const supabase = createClient()
+      const typed = supabase as unknown as {
+        auth: { getUser: () => Promise<{ data: { user: { id: string } | null } }> }
+        from: (table: string) => {
+          select: (columns: string) => {
+            eq: (
+              column: string,
+              value: string
+            ) => {
+              limit: (n: number) => { maybeSingle: () => Promise<{ data: { organization_id: string } | null }> }
+              order: (column: string, opts: { ascending: boolean }) => {
+                limit: (n: number) => Promise<{ data: unknown[] | null; error: { message: string } | null }>
+              }
+            }
+            in: (column: string, values: string[]) => Promise<{ data: unknown[] | null }>
+          }
+        }
+      }
+
+      const { data: userData } = await typed.auth.getUser()
+      if (!userData.user) {
+        setQaHistoryError('Não autenticado.')
+        return
+      }
+
+      const { data: member } = await typed.from('organization_members').select('organization_id').eq('user_id', userData.user.id).limit(1).maybeSingle()
+      if (!member) {
+        setQaHistoryError('Organização não encontrada.')
+        return
+      }
+
+      const { data: historyRaw, error: historyErr } = await typed
+        .from('ai_qa_history')
+        .select('id, question, answer, considered_count, created_at, asked_by')
+        .eq('organization_id', member.organization_id)
+        .order('created_at', { ascending: false })
+        .limit(200)
+
+      if (historyErr) {
+        setQaHistoryError('Não foi possível carregar o histórico.')
+        return
+      }
+
+      type RawHistoryRow = {
+        id: string
+        question: string
+        answer: string
+        considered_count: number
+        created_at: string
+        asked_by: string | null
+      }
+      const raw = (historyRaw || []) as unknown as RawHistoryRow[]
+
+      const askerIds = [...new Set(raw.map((r) => r.asked_by).filter((id): id is string => !!id))]
+      let nameById: Record<string, string> = {}
+      if (askerIds.length > 0) {
+        const { data: profiles } = await typed.from('profiles').select('id, full_name').in('id', askerIds)
+        const profileRows = (profiles || []) as { id: string; full_name: string }[]
+        nameById = Object.fromEntries(profileRows.map((p) => [p.id, p.full_name]))
+      }
+
+      setQaHistoryRows(
+        raw.map((r) => ({
+          id: r.id,
+          question: r.question,
+          answer: r.answer,
+          consideredCount: r.considered_count,
+          createdAt: r.created_at,
+          askedByName: r.asked_by ? nameById[r.asked_by] ?? null : null,
+        }))
+      )
+      setQaHistoryLoaded(true)
+    } catch {
+      setQaHistoryError('Erro de conexão ao carregar o histórico.')
+    } finally {
+      setQaHistoryLoading(false)
+    }
+  }, [])
 
   const fetchInsights = useCallback(async () => {
     setLoading(true)
@@ -319,7 +420,7 @@ export default function InsightsPage() {
   const attention = filtered.filter((r) => r.outcome === 'aberta' && (r.status === 'risco' || r.status === 'atencao'))
   const won = filtered.filter((r) => r.outcome === 'ganha')
   const lost = filtered.filter((r) => r.outcome === 'perdida')
-  const activeList = activeTab === 'attention' ? attention : activeTab === 'won' ? won : lost
+  const activeList = activeTab === 'attention' ? attention : activeTab === 'won' ? won : activeTab === 'lost' ? lost : []
   const visibleRows = activeList.slice(0, visibleCount)
 
   const topLossReasons = useMemo(() => {
@@ -531,7 +632,14 @@ export default function InsightsPage() {
               mais fácil de achar o que importa sem rolar a página inteira. */}
           <div className="flex flex-wrap gap-1 bg-[#0f172a] border border-slate-800 rounded-2xl p-1">
             {TABS.map((tab) => {
-              const count = tab.key === 'attention' ? attention.length : tab.key === 'won' ? won.length : lost.length
+              const count =
+                tab.key === 'attention'
+                  ? attention.length
+                  : tab.key === 'won'
+                    ? won.length
+                    : tab.key === 'lost'
+                      ? lost.length
+                      : qaHistoryRows.length
               const Icon = tab.icon
               const active = activeTab === tab.key
               return (
@@ -541,26 +649,39 @@ export default function InsightsPage() {
                   onClick={() => {
                     setActiveTab(tab.key)
                     resetPaging()
+                    if (tab.key === 'history' && !qaHistoryLoaded) void fetchQaHistoryRows()
                   }}
                   className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold transition ${
                     active ? 'bg-slate-800 text-slate-100' : 'text-slate-400 hover:text-slate-200'
                   }`}
                 >
                   <Icon className="w-3.5 h-3.5" />
-                  {tab.label} ({count})
+                  {tab.label}
+                  {tab.key !== 'history' || qaHistoryLoaded ? ` (${count})` : ''}
                 </button>
               )
             })}
           </div>
 
-          <InsightSection rows={visibleRows} totalCount={activeList.length} emptyText={emptyTextFor(activeTab)} />
+          {activeTab === 'history' ? (
+            <QaHistorySection
+              rows={qaHistoryRows}
+              loading={qaHistoryLoading}
+              error={qaHistoryError}
+              onRetry={() => void fetchQaHistoryRows()}
+            />
+          ) : (
+            <>
+              <InsightSection rows={visibleRows} totalCount={activeList.length} emptyText={emptyTextFor(activeTab)} />
 
-          {activeList.length > visibleCount && (
-            <div className="flex justify-center">
-              <Button type="button" variant="secondary" size="sm" onClick={() => setVisibleCount((n) => n + PAGE_SIZE)}>
-                Carregar mais ({activeList.length - visibleCount} restantes)
-              </Button>
-            </div>
+              {activeList.length > visibleCount && (
+                <div className="flex justify-center">
+                  <Button type="button" variant="secondary" size="sm" onClick={() => setVisibleCount((n) => n + PAGE_SIZE)}>
+                    Carregar mais ({activeList.length - visibleCount} restantes)
+                  </Button>
+                </div>
+              )}
+            </>
           )}
         </>
       )}
@@ -616,6 +737,80 @@ function InsightSection({ rows, totalCount, emptyText }: { rows: InsightRow[]; t
             </Link>
           ))
         )}
+      </CardBody>
+    </Card>
+  )
+}
+
+function formatDateTime(iso: string): string {
+  return new Date(iso).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+}
+
+/** Aba "Histórico" — toda pergunta feita à IA (pela barra do site ou pelo `npm run
+ * insights:ask` no terminal) fica salva aqui pra sempre, sobrevivendo a recarregar a
+ * página — diferente da lista logo abaixo da barra de pergunta, que é só o feedback
+ * imediato da sessão atual e some ao sair da tela. */
+function QaHistorySection({
+  rows,
+  loading,
+  error,
+  onRetry,
+}: {
+  rows: QaHistoryRow[]
+  loading: boolean
+  error: string | null
+  onRetry: () => void
+}) {
+  if (loading && rows.length === 0) {
+    return (
+      <Card>
+        <CardBody className="flex items-center gap-2 text-xs text-slate-400 py-8 justify-center">
+          <Loader2 className="w-4 h-4 animate-spin" />
+          Carregando histórico…
+        </CardBody>
+      </Card>
+    )
+  }
+
+  if (error) {
+    return (
+      <Card>
+        <CardBody className="space-y-3 text-center py-8">
+          <p className="text-xs text-rose-400">{error}</p>
+          <Button type="button" variant="secondary" size="sm" onClick={onRetry}>
+            Tentar de novo
+          </Button>
+        </CardBody>
+      </Card>
+    )
+  }
+
+  if (rows.length === 0) {
+    return (
+      <Card>
+        <CardBody className="py-8 text-center">
+          <p className="text-xs text-slate-500">Nenhuma pergunta feita à IA ainda — use a barra &ldquo;Pergunte à IA&rdquo; acima.</p>
+        </CardBody>
+      </Card>
+    )
+  }
+
+  return (
+    <Card>
+      <CardBody className="p-0 divide-y divide-slate-800/80">
+        {rows.map((r) => (
+          <div key={r.id} className="p-4">
+            <div className="flex items-start justify-between gap-3">
+              <p className="text-sm font-semibold text-slate-200">{r.question}</p>
+              <span className="text-[10px] text-slate-500 shrink-0 whitespace-nowrap">{formatDateTime(r.createdAt)}</span>
+            </div>
+            <p className="text-xs text-slate-400 mt-2 leading-relaxed whitespace-pre-wrap">{r.answer}</p>
+            <p className="text-[10px] text-slate-600 mt-2">
+              {r.askedByName ? `${r.askedByName} · ` : 'via terminal · '}
+              baseado em {r.consideredCount} conversa(s) analisada(s)
+            </p>
+          </div>
+        ))}
       </CardBody>
     </Card>
   )

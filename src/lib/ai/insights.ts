@@ -238,5 +238,29 @@ export async function answerQuestionAboutInsights(admin: AdminClient, organizati
   return { ok: true, answer, consideredCount: rows.length }
 }
 
+/**
+ * Salva uma pergunta+resposta no histórico persistido (tabela ai_qa_history) — chamado
+ * tanto pela rota web (/api/ai/ask-insights) quanto pelo script local
+ * (scripts/ask-insights.js), os dois únicos lugares que geram uma resposta pra guardar.
+ * Nunca lança: um histórico que falhou ao salvar não deve fazer a pessoa perder a resposta
+ * que já recebeu na tela — só fica de fora do histórico dessa vez.
+ */
+export async function saveQaHistory(
+  admin: AdminClient,
+  params: { organizationId: string; askedBy: string | null; question: string; answer: string; consideredCount: number }
+): Promise<void> {
+  try {
+    await admin.from('ai_qa_history').insert({
+      organization_id: params.organizationId,
+      asked_by: params.askedBy,
+      question: params.question,
+      answer: params.answer,
+      considered_count: params.consideredCount,
+    })
+  } catch (err) {
+    console.error('[insights] Falha ao salvar histórico de pergunta (ignorada):', err)
+  }
+}
+
 // Exportado só pra teste.
 export const __testing = { buildTranscript, buildQaContext, fetchInChunks, ID_FILTER_CHUNK_SIZE }

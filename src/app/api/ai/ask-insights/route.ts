@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
-import { answerQuestionAboutInsights } from '@/lib/ai/insights'
+import { answerQuestionAboutInsights, saveQaHistory } from '@/lib/ai/insights'
 
 // Padrão da Vercel pode encerrar a função bem antes do timeout de 45s que o cliente de IA
 // usa pra essa pergunta (ver QA_TIMEOUT_MS em client.ts) — sem isso, a Vercel mataria a
@@ -65,10 +65,18 @@ export async function POST(request: NextRequest) {
         'OMNIROUTE_BASE_URL não está configurada neste servidor (Vercel) — confirme se foi salva pro ambiente "Production" e se o valor está correto (com /v1 no final).',
       no_data: 'Ainda não existe nenhuma conversa analisada — clique em "Analisar conversas antigas" primeiro.',
       gateway_failed:
-        'A variável está configurada, mas o gateway não respondeu a tempo (15s) ou devolveu um erro. Se o seu gateway só roda em localhost, use "npm run insights:ask -- \'sua pergunta\'" no terminal em vez desta barra — a Vercel não alcança seu localhost diretamente, só através de um túnel público.',
+        'A variável está configurada, mas o gateway não respondeu a tempo (45s) ou devolveu um erro. Se o seu gateway só roda em localhost, use "npm run insights:ask -- \'sua pergunta\'" no terminal em vez desta barra — a Vercel não alcança seu localhost diretamente, só através de um túnel público.',
     }
     return NextResponse.json({ error: messages[result.reason] }, { status: 502 })
   }
+
+  await saveQaHistory(admin, {
+    organizationId: member.organization_id,
+    askedBy: user.id,
+    question: parsed.data.question,
+    answer: result.answer,
+    consideredCount: result.consideredCount,
+  })
 
   return NextResponse.json({ answer: result.answer, consideredCount: result.consideredCount })
 }
