@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { Sparkles, RefreshCw, AlertTriangle, TrendingUp, TrendingDown, Lock, History, Clock, Loader2, Send } from 'lucide-react'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
@@ -107,6 +107,17 @@ export default function InsightsPage() {
   const [asking, setAsking] = useState(false)
   const [qaError, setQaError] = useState<string | null>(null)
   const [qaHistory, setQaHistory] = useState<QaEntry[]>([])
+
+  // Cresce junto com o texto (até um teto) — perguntas mais elaboradas ("analise todas as
+  // conversas e identifique X, Y, Z...") ficam difíceis de digitar/revisar num campo de
+  // uma linha só. Mesmo padrão do composer do Inbox.
+  const questionTextareaRef = useRef<HTMLTextAreaElement>(null)
+  useEffect(() => {
+    const el = questionTextareaRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${Math.min(el.scrollHeight, 160)}px`
+  }, [question])
 
   // Histórico persistido (aba "Histórico") — diferente de qaHistory acima, que é só o
   // feedback imediato da sessão atual embaixo da barra de pergunta. Carrega sob demanda
@@ -357,8 +368,10 @@ export default function InsightsPage() {
   // as conversas já analisadas da organização (não só as que estão filtradas na tela) e
   // devolve uma resposta em texto. Histórico fica só na memória desta sessão (não
   // persiste) — é uma conveniência pra comparar perguntas seguidas, não um registro.
+  // Tipo genérico (aceita tanto o submit do <form> quanto o keydown do Enter no textarea)
+  // porque só usa e.preventDefault() daqui — mesmo padrão do composer do Inbox.
   const handleAsk = useCallback(
-    async (e: React.FormEvent) => {
+    async (e: { preventDefault: () => void }) => {
       e.preventDefault()
       const q = question.trim()
       if (!q || asking) return
@@ -517,12 +530,22 @@ export default function InsightsPage() {
                 logo abaixo — a IA pode errar contas quando lida com uma lista grande de conversas.
               </p>
               <form onSubmit={(e) => void handleAsk(e)} className="flex flex-wrap gap-2">
-                <input
-                  type="text"
+                <textarea
+                  ref={questionTextareaRef}
                   value={question}
                   onChange={(e) => setQuestion(e.target.value)}
+                  onKeyDown={(e) => {
+                    // Enter puro envia (igual o resto do app); Shift+Enter pula linha —
+                    // importa pra pergunta mais longa, tipo um pedido de relatório com
+                    // vários pontos, um por linha.
+                    if (e.nativeEvent.isComposing) return
+                    if (e.key !== 'Enter' || e.shiftKey) return
+                    e.preventDefault()
+                    void handleAsk(e)
+                  }}
+                  rows={1}
                   placeholder="Ex: quantas vendas fechamos essa semana? quais clientes reclamaram do preço?"
-                  className="flex-1 min-w-[200px] px-3.5 py-2.5 bg-slate-900 border border-slate-700/80 rounded-xl text-xs text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
+                  className="flex-1 min-w-[200px] px-3.5 py-2.5 bg-slate-900 border border-slate-700/80 rounded-xl text-xs text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 resize-none leading-normal max-h-[160px] overflow-y-auto"
                 />
                 <Button type="submit" size="sm" disabled={asking || !question.trim()}>
                   {asking ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
