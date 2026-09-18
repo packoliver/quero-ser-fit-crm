@@ -28,7 +28,9 @@ const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
 const OMNIROUTE_BASE_URL = (process.env.OMNIROUTE_BASE_URL || 'http://localhost:20128/v1').replace(/\/+$/, '')
 const OMNIROUTE_API_KEY = process.env.OMNIROUTE_API_KEY || ''
 const OMNIROUTE_MODEL = process.env.OMNIROUTE_MODEL || 'auto/cheap'
-const MAX_CONTEXT_ROWS = 400
+// 2000: folga generosa pro ritmo atual (~700 conversas no primeiro mês) cobrir uns 3
+// meses de histórico sem cortar nada.
+const MAX_CONTEXT_ROWS = 2000
 
 const question = process.argv.slice(2).join(' ').trim()
 
@@ -91,31 +93,39 @@ async function main() {
   console.log(`Gateway de IA: ${OMNIROUTE_BASE_URL} (modelo: ${OMNIROUTE_MODEL})`)
   console.log(`Pergunta: ${question}\n`)
 
-  const { data: insightRows, error: insightsError } = await supabase
-    .from('ai_conversation_insights')
-    .select('organization_id, conversation_id, deal_id, status, outcome, outcome_reason, summary')
-    .order('last_analyzed_at', { ascending: false })
+  // Ordena por ATIVIDADE DA CONVERSA (last_message_at), não por quando a IA analisou —
+  // logo depois de um backfill os dois divergem bastante (o backfill processa em lotes ao
+  // longo de vários dias, sem relação com a data de cada conversa em si), e ordenar pelo
+  // campo errado deixava de fora, sem avisar, um trecho inteiro do meio do histórico.
+  const { data: recentConversations, error: convError } = await supabase
+    .from('conversations')
+    .select('id, organization_id, contact_id, last_message_at')
+    .order('last_message_at', { ascending: false })
     .limit(MAX_CONTEXT_ROWS)
-  if (insightsError) {
-    console.error('Erro ao buscar análises salvas:', insightsError.message)
+  if (convError) {
+    console.error('Erro ao buscar conversas:', convError.message)
     process.exit(1)
   }
 
-  const rows = insightRows || []
+  const conversations = recentConversations || []
+  if (conversations.length === 0) {
+    console.log('Nenhuma conversa encontrada.')
+    return
+  }
+  const conversationIds = conversations.map((c) => c.id)
+  const contactIds = [...new Set(conversations.map((c) => c.contact_id))]
+  const lastMessageAtByConversation = new Map(conversations.map((c) => [c.id, c.last_message_at]))
+
+  const rows = await fetchInChunks(conversationIds, (chunk) =>
+    supabase.from('ai_conversation_insights').select('organization_id, conversation_id, deal_id, status, outcome, outcome_reason, summary').in('conversation_id', chunk)
+  )
   if (rows.length === 0) {
     console.log('Nenhuma conversa analisada ainda — rode "npm run insights:local" primeiro.')
     return
   }
 
-  const conversationIds = [...new Set(rows.map((r) => r.conversation_id))]
   const dealIds = [...new Set(rows.map((r) => r.deal_id).filter(Boolean))]
-
-  const [conversations, deals] = await Promise.all([
-    fetchInChunks(conversationIds, (chunk) => supabase.from('conversations').select('id, contact_id, last_message_at').in('id', chunk)),
-    fetchInChunks(dealIds, (chunk) => supabase.from('deals').select('id, assigned_to_id').in('id', chunk)),
-  ])
-  const contactIds = [...new Set(conversations.map((c) => c.contact_id))]
-  const lastMessageAtByConversation = new Map(conversations.map((c) => [c.id, c.last_message_at]))
+  const deals = await fetchInChunks(dealIds, (chunk) => supabase.from('deals').select('id, assigned_to_id').in('id', chunk))
 
   const sellerIds = [...new Set(deals.map((d) => d.assigned_to_id).filter(Boolean))]
   const [contacts, profiles] = await Promise.all([
