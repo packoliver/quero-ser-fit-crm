@@ -82,7 +82,9 @@ ${context}
 
 PERGUNTA: ${question}
 
-Responda em português, de forma direta e objetiva, citando números quando fizer sentido (quantidades, percentuais). Baseie-se SOMENTE nos dados acima — se a pergunta não puder ser respondida com eles, diga isso claramente em vez de inventar uma resposta.`
+Responda em português, de forma direta e objetiva, citando números quando fizer sentido (quantidades, percentuais). Baseie-se SOMENTE nos dados acima — se a pergunta não puder ser respondida com eles, diga isso claramente em vez de inventar uma resposta.
+
+Responda em TEXTO SIMPLES, sem nenhum símbolo de markdown — nada de **negrito**, # títulos, \`código\` ou listas com * ou -. Quem lê essa resposta está numa tela que mostra texto puro, então esses símbolos apareceriam literalmente e ficariam feios. Se precisar organizar em itens, numere com "1.", "2." etc, cada um em uma linha nova, sem nenhuma outra formatação.`
 }
 
 async function main() {

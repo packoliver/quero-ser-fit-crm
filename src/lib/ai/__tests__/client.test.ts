@@ -115,4 +115,10 @@ describe('Pergunte à IA — construção do prompt de pergunta livre', () => {
     expect(prompt).toMatch(/Data de hoje: \d{2}\/\d{2}\/\d{4}/)
     expect(prompt).toContain('período')
   })
+
+  it('deve instruir a IA a responder sem markdown — a tela mostra a resposta como texto puro', () => {
+    const prompt = buildQaPrompt('- Data: 10/09/2026 | Cliente: Maria | Status: ok | Desfecho: ganha', 'quantas vendas fechamos?')
+    expect(prompt).toContain('TEXTO SIMPLES')
+    expect(prompt).toContain('sem nenhum símbolo de markdown')
+  })
 })
