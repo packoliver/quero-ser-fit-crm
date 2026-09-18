@@ -9,7 +9,11 @@ import { answerQuestionAboutInsights, saveQaHistory } from '@/lib/ai/insights'
 // função na própria conta dela antes do nosso próprio timeout sequer disparar.
 export const maxDuration = 60
 
-const bodySchema = z.object({ question: z.string().trim().min(1, 'Pergunta vazia.').max(500, 'Pergunta muito longa.') })
+// 500 chars era curto demais pra um pedido de relatório detalhado (ex: "analise todas as
+// conversas do período e identifique X, Y, Z... quero um relatório objetivo com...") — o
+// contexto que já vai no prompt (até 2000 conversas resumidas) é MUITO maior que isso, uma
+// pergunta de algumas frases não pesa nada perto disso.
+const bodySchema = z.object({ question: z.string().trim().min(1, 'Pergunta vazia.').max(4000, 'Pergunta muito longa (máximo 4000 caracteres).') })
 
 type TypedSupabase = {
   from: (table: string) => {
