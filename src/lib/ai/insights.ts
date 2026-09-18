@@ -112,10 +112,13 @@ export async function scheduleConversationAnalysis(admin: AdminClient, params: S
   }
 }
 
-// Teto de quantas conversas entram no contexto da pergunta livre — 400 já cobre o
-// histórico inteiro de uma organização pequena/média; numa maior, prioriza as mais
-// recentes (ver order by last_analyzed_at desc) em vez de estourar tokens/custo à toa.
-const MAX_QA_CONTEXT_ROWS = 400
+// Teto de quantas conversas (as mais recentes, por atividade real — ver order by
+// last_message_at abaixo) entram no contexto da pergunta livre, pra não estourar
+// tokens/tempo à toa numa organização enorme. 2000 dá folga generosa pro ritmo atual desta
+// organização (~700 conversas no primeiro mês) cobrir uns 3 meses de histórico sem cortar
+// nada — se crescer muito além disso, é hora de repensar o teto (ou resumir em vez de
+// listar linha a linha), mas não antes.
+const MAX_QA_CONTEXT_ROWS = 2000
 
 // Um .in('id', [...]) com centenas de UUIDs estoura o limite de tamanho de cabeçalho HTTP
 // (16KB) — confirmado na prática com 400 ids (~15.7KB de URL, erro silencioso: o Supabase
@@ -184,27 +187,39 @@ export type QaResult =
 export async function answerQuestionAboutInsights(admin: AdminClient, organizationId: string, question: string): Promise<QaResult> {
   if (!isAiConfigured()) return { ok: false, reason: 'not_configured' }
 
-  const { data: insightRows } = await admin
-    .from('ai_conversation_insights')
-    .select('conversation_id, deal_id, status, outcome, outcome_reason, summary')
+  // Ordena por ATIVIDADE DA CONVERSA (last_message_at), não por quando a IA analisou
+  // (last_analyzed_at) — os dois divergem bastante logo depois de um backfill, porque ele
+  // processa em lotes ao longo de vários dias/execuções sem relação nenhuma com a data de
+  // cada conversa em si. Ordenar pelo campo errado já deixou de fora, sem avisar, um trecho
+  // inteiro do meio do histórico (perguntas por período, tipo "últimos 30 dias", vinham
+  // com um recorte de datas menor e errado).
+  const { data: recentConversations } = await admin
+    .from('conversations')
+    .select('id, contact_id, last_message_at')
     .eq('organization_id', organizationId)
-    .order('last_analyzed_at', { ascending: false })
+    .order('last_message_at', { ascending: false })
     .limit(MAX_QA_CONTEXT_ROWS)
 
-  const rows = (insightRows || []) as QaInsightRow[]
+  const conversations = (recentConversations || []) as { id: string; contact_id: string; last_message_at: string }[]
+  if (conversations.length === 0) return { ok: false, reason: 'no_data' }
+
+  const conversationIds = conversations.map((c) => c.id)
+
+  const insightRowsRaw = await fetchInChunks(conversationIds, (chunk) =>
+    admin
+      .from('ai_conversation_insights')
+      .select('conversation_id, deal_id, status, outcome, outcome_reason, summary')
+      .in('conversation_id', chunk)
+  )
+  const rows = insightRowsRaw as QaInsightRow[]
   if (rows.length === 0) return { ok: false, reason: 'no_data' }
 
-  const conversationIds = [...new Set(rows.map((r) => r.conversation_id))]
   const dealIds = [...new Set(rows.map((r) => r.deal_id).filter((id): id is string => !!id))]
 
-  const [conversations, deals] = await Promise.all([
-    fetchInChunks(conversationIds, (chunk) =>
-      admin.from('conversations').select('id, contact_id, last_message_at').in('id', chunk)
-    ) as Promise<{ id: string; contact_id: string; last_message_at: string }[]>,
-    fetchInChunks(dealIds, (chunk) => admin.from('deals').select('id, assigned_to_id').in('id', chunk)) as Promise<
-      { id: string; assigned_to_id: string | null }[]
-    >,
-  ])
+  const deals = (await fetchInChunks(dealIds, (chunk) => admin.from('deals').select('id, assigned_to_id').in('id', chunk))) as {
+    id: string
+    assigned_to_id: string | null
+  }[]
 
   const lastMessageAtByConversation = new Map(conversations.map((c) => [c.id, c.last_message_at]))
 
