@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { scheduleConversationAnalysis } from '@/lib/ai/insights'
+import { withRateLimit } from '@/lib/security/rate-limit-middleware'
 
 // Poucas conversas por chamada, de propósito: cada uma pode levar até TIMEOUT_MS (ver
 // src/lib/ai/client.ts) pra responder, e isto roda DENTRO do tempo de resposta da rota
@@ -31,7 +32,7 @@ type TypedSupabase = {
  * novo (ex.: a pessoa fechou a aba no meio) simplesmente continua de onde parou, sem
  * reprocessar nem duplicar chamada à IA.
  */
-export async function POST(request: NextRequest) {
+export const POST = withRateLimit('ai', async (request: NextRequest) => {
   const supabase = await createClient()
   const {
     data: { user },
@@ -110,9 +111,9 @@ export async function POST(request: NextRequest) {
 
   const lastExamined = conversations[conversations.length - 1]
   return NextResponse.json({
-    done: conversations.length < BATCH_SIZE,
-    examined: conversations.length,
-    analyzed,
-    nextCursor: lastExamined.last_message_at,
+      done: conversations.length < BATCH_SIZE,
+      examined: conversations.length,
+      analyzed,
+      nextCursor: lastExamined.last_message_at,
+    })
   })
-}

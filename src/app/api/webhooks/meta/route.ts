@@ -9,6 +9,7 @@ import { getServerEnv } from '@/lib/env'
 import { timingSafeEqualString, verifyMetaHmacSignature } from '@/lib/security/webhook'
 import { z } from 'zod'
 import { ICRMIntegrationProvider, IncomingWebhookEvent } from '@/lib/integrations/types'
+import { withRateLimit } from '@/lib/security/rate-limit-middleware'
 
 const whatsappProvider = new MetaWhatsAppProvider()
 const instagramProvider = new MetaInstagramProvider()
@@ -99,7 +100,7 @@ const genericPayloadSchema = z.object({
 /**
  * GET Handler para verificação de Webhook da Meta (hub.challenge / hub.verify_token)
  */
-export async function GET(request: NextRequest) {
+export const GET = withRateLimit('webhook', async (request: NextRequest) => {
   const searchParams = request.nextUrl.searchParams
   const mode = searchParams.get('hub.mode')
   const token = searchParams.get('hub.verify_token')
@@ -125,7 +126,7 @@ export async function GET(request: NextRequest) {
     { error: 'Falha na verificação de autenticidade da requisição.' },
     { status: 403 }
   )
-}
+})
 
 /**
  * POST Handler para recepção de eventos de Webhook da Meta.
@@ -135,7 +136,7 @@ export async function GET(request: NextRequest) {
  * regular client this request has the Postgres `anon` role, which (correctly) has no
  * write access to these tables.
  */
-export async function POST(request: NextRequest) {
+export const POST = withRateLimit('webhook', async (request: NextRequest) => {
   console.log('[Meta Webhook] POST recebido em', new Date().toISOString())
   try {
     const env = getServerEnv()
@@ -256,4 +257,4 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     )
   }
-}
+})

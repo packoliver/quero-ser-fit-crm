@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { scheduleConversationAnalysis } from '@/lib/ai/insights'
+import { withRateLimit } from '@/lib/security/rate-limit-middleware'
 
 const bodySchema = z.object({
   conversationId: z.string().uuid(),
@@ -30,7 +31,7 @@ type TypedSupabase = {
  * não garante que a IA está configurada — sem OMNIROUTE_BASE_URL, scheduleConversationAnalysis
  * só não faz nada (ver src/lib/ai/insights.ts).
  */
-export async function POST(request: NextRequest) {
+export const POST = withRateLimit('ai', async (request: NextRequest) => {
   const supabase = await createClient()
   const {
     data: { user },
@@ -69,4 +70,4 @@ export async function POST(request: NextRequest) {
   )
 
   return NextResponse.json({ queued: true })
-}
+  })

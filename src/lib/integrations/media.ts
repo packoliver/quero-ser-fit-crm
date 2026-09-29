@@ -1,7 +1,95 @@
 import { createAdminClient } from '@/lib/supabase/admin'
 import { randomUUID } from 'crypto'
+import { lookup } from 'dns/promises'
+import { isIP } from 'net'
 
 const BUCKET = 'chat-media'
+
+// Proteção contra SSRF: valida protocolo, resolve DNS e bloqueia IPs privados/loopback
+// antes de fazer o fetch. URLs de provedores (Meta/uazapi) são legítimas, mas se um
+// atacante conseguir injetar uma URL via payload ou metadata, isso impede acesso a
+// recursos internos. Retorna null (seguro) em qualquer falha de validação.
+async function validateUrlForFetch(urlString: string): Promise<URL | null> {
+  let parsed: URL
+  try {
+    parsed = new URL(urlString)
+  } catch {
+    console.warn('[media] URL inválida rejeitada:', urlString)
+    return null
+  }
+
+  // Apenas HTTP/HTTPS — bloqueia file://, gopher://, ftp:// etc.
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    console.warn('[media] Protocolo não permitido rejeitado:', parsed.protocol)
+    return null
+  }
+
+  const hostname = parsed.hostname
+  if (!hostname) {
+    console.warn('[media] Hostname vazio rejeitado')
+    return null
+  }
+
+  // Se já for IP literal, valida diretamente sem resolver DNS
+  if (isIP(hostname)) {
+    if (isPrivateOrReservedIp(hostname)) {
+      console.warn('[media] IP privado/reservado rejeitado:', hostname)
+      return null
+    }
+    return parsed
+  }
+
+  // Resolve DNS e verifica todos os endereços retornados
+  try {
+    const addresses = await lookup(hostname, { all: true })
+    for (const addr of addresses) {
+      if (isPrivateOrReservedIp(addr.address)) {
+        console.warn('[media] DNS resolveu para IP privado/reservado:', hostname, '->', addr.address)
+        return null
+      }
+    }
+  } catch (err) {
+    console.warn('[media] Falha ao resolver DNS para', hostname, ':', err instanceof Error ? err.message : String(err))
+    return null
+  }
+
+  return parsed
+}
+
+// Verifica se um IP é privado, loopback, link-local, multicast ou reservado
+function isPrivateOrReservedIp(ip: string): boolean {
+  // IPv4
+  const parts = ip.split('.').map(Number)
+  if (parts.length === 4 && parts.every((p) => Number.isInteger(p) && p >= 0 && p <= 255)) {
+    // 127.x.x.x — loopback
+    if (parts[0] === 127) return true
+    // 10.x.x.x — private
+    if (parts[0] === 10) return true
+    // 172.16-31.x.x — private
+    if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true
+    // 192.168.x.x — private
+    if (parts[0] === 192 && parts[1] === 168) return true
+    // 169.254.x.x — link-local
+    if (parts[0] === 169 && parts[1] === 254) return true
+    // 0.x.x.x — current network
+    if (parts[0] === 0) return true
+    // 224+ — multicast/reserved
+    if (parts[0] >= 224) return true
+    return false
+  }
+
+  // IPv6 — verifica padrões conhecidos
+  const lower = ip.toLowerCase()
+  if (lower === '::1' || lower === '::') return true
+  if (lower.startsWith('fc') || lower.startsWith('fd')) return true // unique local
+  if (lower.startsWith('fe80')) return true // link-local
+  if (lower.startsWith('ff')) return true // multicast
+  // IPv4-mapped IPv6 (::ffff:x.x.x.x)
+  const mappedMatch = lower.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/)
+  if (mappedMatch) return isPrivateOrReservedIp(mappedMatch[1])
+
+  return false
+}
 // Um pouco abaixo do file_size_limit real do bucket (25MB) de propósito — o upload em si
 // carrega algum overhead além do tamanho puro do arquivo, então cortar exatamente em 25MB
 // aqui podia deixar passar um arquivo que ainda assim estoura o limite no upload real pro
@@ -46,7 +134,14 @@ export async function mirrorMediaToStorage(params: {
   mimetypeHint?: string
 }): Promise<string | null> {
   try {
-    const res = await fetch(params.sourceUrl, {
+    // SSRF protection: validate URL before fetching
+    const validatedUrl = await validateUrlForFetch(params.sourceUrl)
+    if (!validatedUrl) {
+      console.error('mirrorMediaToStorage: URL rejeitada pela proteção SSRF')
+      return null
+    }
+
+    const res = await fetch(validatedUrl.toString(), {
       headers: params.authHeader ? { Authorization: params.authHeader } : undefined,
     })
     if (!res.ok) {

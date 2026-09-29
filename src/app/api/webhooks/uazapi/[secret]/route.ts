@@ -4,6 +4,7 @@ import { processInboundEvents, applyStatusUpdates } from '@/lib/integrations/per
 import { mirrorMediaToStorage } from '@/lib/integrations/media'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { decryptToken } from '@/lib/security/encryption'
+import { withRateLimit } from '@/lib/security/rate-limit-middleware'
 
 const uazapiProvider = new UazapiWhatsAppProvider()
 
@@ -17,9 +18,9 @@ const uazapiProvider = new UazapiWhatsAppProvider()
  * without that secret gets a 404 — the lookup below only proceeds when a connection
  * with a matching webhook_secret actually exists.
  */
-export async function POST(request: NextRequest, context: { params: Promise<{ secret: string }> }) {
+export const POST = withRateLimit('webhook', async (request: NextRequest, context?: unknown) => {
   try {
-    const { secret } = await context.params
+    const { secret } = await (context as { params: Promise<{ secret: string }> }).params
     if (!secret) {
       return NextResponse.json({ error: 'Segredo do webhook ausente.' }, { status: 401 })
     }
@@ -230,6 +231,6 @@ export async function POST(request: NextRequest, context: { params: Promise<{ se
 
     return NextResponse.json({ status: 'success', processed: processedCount, statusUpdates: statusUpdateCount }, { status: 200 })
   } catch {
-    return NextResponse.json({ error: 'Erro interno no processamento do evento.' }, { status: 500 })
-  }
-}
+      return NextResponse.json({ error: 'Erro interno no processamento do evento.' }, { status: 500 })
+    }
+  })

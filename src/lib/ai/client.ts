@@ -1,4 +1,22 @@
+import { z } from 'zod'
 import { getServerEnv } from '@/lib/env'
+
+// Schema Zod para validação rigorosa da resposta da IA — garante que apenas payloads
+// conformes cheguem ao banco. Respostas fora do contrato são descartadas (null) em vez
+// de persistir dados malformados ou alucinações estruturais. O preprocess em signals
+// filtra valores não-string (null, number, etc.) que modelos menores às vezes devolvem,
+// evitando rejeição total do payload por itens inválidos num campo opcional. O limite
+// de 5 sinais é aplicado no pós-processamento para permitir truncamento seguro.
+const conversationAnalysisSchema = z.object({
+  status: z.enum(['ok', 'atencao', 'risco']),
+  signals: z.preprocess(
+    (val) => (Array.isArray(val) ? val.filter((v): v is string => typeof v === 'string') : []),
+    z.array(z.string()).default([])
+  ),
+  summary: z.string().max(1000).default(''),
+  outcome: z.enum(['aberta', 'ganha', 'perdida']).default('aberta'),
+  outcomeReason: z.string().max(500).nullable().optional(),
+})
 
 // OmniRoute (auto-hospedado pelo usuário — ver https://www.omniroute.online) expõe uma
 // API compatível com OpenAI (POST {base}/chat/completions) e roteia por trás dela entre
@@ -109,28 +127,41 @@ function parseResponse(raw: string, knownOutcome: 'ganha' | 'perdida' | null): C
   try {
     parsed = JSON.parse(extractJson(raw))
   } catch {
+    console.warn('[ai] Resposta da IA não é JSON válido — descartada.')
     return null
   }
-  if (!parsed || typeof parsed !== 'object') return null
-  const p = parsed as Record<string, unknown>
 
-  const status = p.status === 'ok' || p.status === 'atencao' || p.status === 'risco' ? p.status : null
-  if (!status) return null
+  const validation = conversationAnalysisSchema.safeParse(parsed)
+  if (!validation.success) {
+    console.warn('[ai] Resposta da IA falhou na validação Zod — descartada.', {
+      issues: validation.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
+    })
+    return null
+  }
+
+  const { status, signals, summary, outcome: rawOutcome, outcomeReason: rawReason } = validation.data
 
   // Quando o desfecho já é conhecido (finalize=true), ele é a verdade — não a resposta da
   // IA, que só está aqui pra explicar o "porquê", não pra decidir o "o quê".
-  const outcome = knownOutcome ?? (p.outcome === 'ganha' || p.outcome === 'perdida' || p.outcome === 'aberta' ? p.outcome : 'aberta')
+  const outcome = knownOutcome ?? rawOutcome
 
-  const signals = Array.isArray(p.signals)
-    ? p.signals.filter((s): s is string => typeof s === 'string' && s.trim().length > 0).slice(0, 5)
-    : []
+  // Filtra sinais vazios que podem ter passado pelo schema (strings só com espaço) e
+  // garante o limite de 5 mesmo se o default do Zod tiver sido aplicado sobre array maior.
+  const cleanedSignals = signals
+    .filter((s) => s.trim().length > 0)
+    .slice(0, 5)
 
-  const summary = typeof p.summary === 'string' ? p.summary.trim().slice(0, 1000) : ''
+  const outcomeReason = outcome !== 'aberta' && rawReason && rawReason.trim().length > 0
+    ? rawReason.trim().slice(0, 500)
+    : null
 
-  const outcomeReasonRaw = typeof p.outcomeReason === 'string' ? p.outcomeReason.trim() : ''
-  const outcomeReason = outcome !== 'aberta' && outcomeReasonRaw ? outcomeReasonRaw.slice(0, 500) : null
-
-  return { status, signals, summary, outcome, outcomeReason }
+  return {
+    status,
+    signals: cleanedSignals,
+    summary: summary.trim(),
+    outcome,
+    outcomeReason,
+  }
 }
 
 interface ChatCompletionsResponse {

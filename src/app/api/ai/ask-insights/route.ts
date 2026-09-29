@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { answerQuestionAboutInsights, saveQaHistory } from '@/lib/ai/insights'
+import { withRateLimit } from '@/lib/security/rate-limit-middleware'
 
 // Padrão da Vercel pode encerrar a função bem antes do timeout de 45s que o cliente de IA
 // usa pra essa pergunta (ver QA_TIMEOUT_MS em client.ts) — sem isso, a Vercel mataria a
@@ -31,7 +32,7 @@ type TypedSupabase = {
  * Mesma gate de admin/gerente das outras rotas de IA: essa pergunta pode revelar
  * desempenho por vendedor(a), dado sensível demais pra qualquer atendente disparar.
  */
-export async function POST(request: NextRequest) {
+export const POST = withRateLimit('ai', async (request: NextRequest) => {
   const supabase = await createClient()
   const {
     data: { user },
@@ -83,4 +84,4 @@ export async function POST(request: NextRequest) {
   })
 
   return NextResponse.json({ answer: result.answer, consideredCount: result.consideredCount })
-}
+  })
