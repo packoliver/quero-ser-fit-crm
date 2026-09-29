@@ -63,7 +63,7 @@ export function BottomSheet({ isOpen, onClose, title, description, children }: B
         aria-labelledby="bottom-sheet-title"
         // Clique dentro do painel não pode fechar junto com o clique no fundo.
         onClick={(e) => e.stopPropagation()}
-        className="w-full sm:max-w-md bg-[#111c30] border-t sm:border border-slate-800 rounded-t-2xl sm:rounded-2xl shadow-2xl max-h-[85dvh] flex flex-col outline-none animate-in slide-in-from-bottom-4 sm:zoom-in-95 duration-150 pb-[var(--safe-bottom)] sm:pb-0"
+        className="w-full sm:max-w-md bg-[#111c30] border-t sm:border border-slate-800 rounded-t-2xl sm:rounded-2xl shadow-2xl max-h-[85dvh] flex flex-col outline-none animate-slide-in-bottom pb-[var(--safe-bottom)] sm:pb-0"
       >
         {/* Alça: só sinaliza "isso aqui é um painel que fecha", padrão que a pessoa já
             reconhece de outros apps. Decorativa — quem fecha de fato é o fundo, o Esc ou

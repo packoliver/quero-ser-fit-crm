@@ -29,7 +29,7 @@ export function Toast({ message, icon }: ToastProps) {
       // não está olhando pra tela.
       role="status"
       aria-live="polite"
-      className="fixed z-50 bottom-[calc(var(--bottom-nav-h)+0.75rem)] left-1/2 -translate-x-1/2 w-[calc(100%-2rem)] max-w-sm lg:bottom-auto lg:left-auto lg:translate-x-0 lg:top-6 lg:right-6 lg:w-auto bg-emerald-600 text-white px-4 py-3 rounded-xl shadow-2xl border border-emerald-400/30 flex items-center gap-2.5 text-xs font-semibold animate-in fade-in slide-in-from-bottom-2 lg:slide-in-from-top-2 duration-200"
+      className="fixed z-50 bottom-[calc(var(--bottom-nav-h)+0.75rem)] left-1/2 -translate-x-1/2 w-[calc(100%-2rem)] max-w-sm lg:bottom-auto lg:left-auto lg:translate-x-0 lg:top-6 lg:right-6 lg:w-auto bg-emerald-600 text-white px-4 py-3 rounded-xl shadow-2xl border border-emerald-400/30 flex items-center gap-2.5 text-xs font-semibold animate-fade-in-up"
     >
       <span className="shrink-0 text-emerald-100">{icon ?? <CheckCircle2 className="w-4 h-4" />}</span>
       <span className="min-w-0">{message}</span>

@@ -104,3 +104,42 @@ body {
 .animate-pulse-subtle {
   animation: pulse-subtle 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }
+
+/* Valores financeiros e contadores: força Geist Mono + tabular-nums + tracking ajustado
+   pra garantir alinhamento vertical perfeito em tabelas/listas, mesmo quando o fallback
+   do font-sans varia entre navegadores. Aplicar em qualquer elemento que renderize R$,
+   totais, KPIs ou métricas numéricas densas. */
+.num-mono {
+  font-family: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+
+/* Animações de entrada pra overlays (Modal, BottomSheet, Toast). CSS-only, sem JS,
+   ~60fps em mobile. Usar como classe utilitária nos componentes de overlay. */
+@keyframes fade-in-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slide-in-bottom {
+  from { transform: translateY(100%); }
+  to   { transform: translateY(0); }
+}
+
+@keyframes scale-in {
+  from { opacity: 0; transform: scale(0.95); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+.animate-fade-in-up {
+  animation: fade-in-up 0.2s ease-out both;
+}
+
+.animate-slide-in-bottom {
+  animation: slide-in-bottom 0.25s cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+
+.animate-scale-in {
+  animation: scale-in 0.15s ease-out both;
+}

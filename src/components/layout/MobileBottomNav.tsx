@@ -56,10 +56,16 @@ export function MobileBottomNav({ userRole = 'admin' }: MobileBottomNavProps) {
               aria-current={isActive ? 'page' : undefined}
               // min-h-[44px] é o alvo mínimo de toque recomendado — antes cada item ficava
               // com o tamanho que sobrasse depois de dividir a largura por 13.
-              className={`flex-1 min-w-0 min-h-[44px] flex flex-col items-center justify-center gap-0.5 py-1 rounded-lg text-[11px] font-medium transition-colors active:scale-95 ${
-                isActive ? 'text-emerald-400' : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
+              className={`flex-1 min-w-0 min-h-[44px] flex flex-col items-center justify-center gap-0.5 py-1 rounded-lg text-[11px] font-medium transition-colors active:scale-95 relative ${
+                              isActive ? 'text-emerald-400 bg-emerald-500/10' : 'text-slate-400 hover:text-slate-200'
+                            }`}
+                          >
+                            {/* Indicador físico de ativo: barra superior sutil além da cor/fundo,
+                                visível mesmo em telas com brilho alto ou ângulo oblíquo onde a
+                                diferença de cor sozinha pode ser insuficiente. */}
+                            {isActive && (
+                              <span className="absolute top-0 left-1/2 -translate-x-1/2 w-8 h-0.5 bg-emerald-400 rounded-b-full" />
+                            )}
               <span className="relative shrink-0">
                 <Icon className="w-5 h-5" />
                 {/* Bolinha de não lidas, só em Conversas. Fica na quina do ícone (e não ao
