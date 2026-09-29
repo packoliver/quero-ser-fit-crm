@@ -4,6 +4,7 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { hasPermission } from '@/lib/security/permissions'
 import { generateApiKey } from '@/lib/security/api-keys'
 import { logAuditEvent } from '@/lib/security/audit'
+import { withRateLimit } from '@/lib/security/rate-limit-middleware'
 import { UserRole, CustomPermissions } from '@/types/database'
 
 interface Membership {
@@ -12,7 +13,9 @@ interface Membership {
   permissions: CustomPermissions | null
 }
 
-async function requireIntegrationsManager(supabase: Awaited<ReturnType<typeof createClient>>) {
+async function requireIntegrationsManager(
+  supabase: Awaited<ReturnType<typeof createClient>>
+): Promise<{ error: NextResponse } | { user: { id: string; email?: string }; membership: Membership }> {
   const {
     data: { user },
     error: authError,
@@ -64,7 +67,7 @@ export async function GET() {
 
 // Cria uma chave nova. O valor em texto puro só existe nesta resposta — o front precisa
 // mostrar e avisar o usuário que não dá pra ver de novo depois.
-export async function POST(request: NextRequest) {
+export const POST = withRateLimit('api', async (request: NextRequest) => {
   const supabase = await createClient()
   const auth = await requireIntegrationsManager(supabase)
   if ('error' in auth) return auth.error
@@ -130,4 +133,4 @@ export async function POST(request: NextRequest) {
     prefix,
     createdAt: inserted.created_at,
   })
-}
+})

@@ -8,6 +8,7 @@ import { MetaWhatsAppProvider } from '@/lib/integrations/whatsapp-meta'
 import { MetaInstagramProvider } from '@/lib/integrations/instagram-meta'
 import { UazapiWhatsAppProvider } from '@/lib/integrations/uazapi-whatsapp'
 import { scheduleConversationAnalysis } from '@/lib/ai/insights'
+import { withRateLimit } from '@/lib/security/rate-limit-middleware'
 
 const whatsappProvider = new MetaWhatsAppProvider()
 const instagramProvider = new MetaInstagramProvider()
@@ -59,7 +60,7 @@ type TypedSupabase = {
   }
 }
 
-export async function POST(request: NextRequest) {
+export const POST = withRateLimit('api', async (request: NextRequest) => {
   try {
     return await handlePost(request)
   } catch {
@@ -68,7 +69,7 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     )
   }
-}
+})
 
 async function handlePost(request: NextRequest) {
   let body: unknown

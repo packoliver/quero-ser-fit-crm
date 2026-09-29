@@ -5,6 +5,7 @@ import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { hasPermission } from '@/lib/security/permissions'
 import { scheduleConversationAnalysis } from '@/lib/ai/insights'
+import { withRateLimit } from '@/lib/security/rate-limit-middleware'
 import type { CustomPermissions, UserRole } from '@/types/database'
 
 const idempotencySchema = z.string().uuid()
@@ -46,7 +47,7 @@ function uuid(value: unknown): string | null {
   return typeof value === 'string' && z.string().uuid().safeParse(value).success ? value : null
 }
 
-export async function POST(request: NextRequest) {
+export const POST = withRateLimit('api', async (request: NextRequest) => {
   const context = await getContext()
   if (!context) return NextResponse.json({ error: 'Não autenticado.' }, { status: 401 })
 
@@ -217,4 +218,4 @@ export async function POST(request: NextRequest) {
 
   await admin.from('sync_mutations').insert({ organization_id: context.organizationId, user_id: context.userId, idempotency_key: idempotencyKey.data, operation, request_hash: requestHash, status, result: result || (errorMessage ? { error: errorMessage } : null) })
   return NextResponse.json({ status, result, ...(errorMessage ? { error: errorMessage } : {}) }, { status: status === 'applied' ? 200 : status === 'conflict' ? 409 : 422 })
-}
+  })

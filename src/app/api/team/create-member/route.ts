@@ -3,6 +3,7 @@ import { memberCreateSchema } from '@/lib/validations'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { logAuditEvent } from '@/lib/security/audit'
+import { withRateLimit } from '@/lib/security/rate-limit-middleware'
 
 /**
  * POST /api/team/create-member
@@ -12,14 +13,14 @@ import { logAuditEvent } from '@/lib/security/audit'
  * member can log in immediately with that password and change it later from their
  * account menu if they want to.
  */
-export async function POST(request: NextRequest) {
+export const POST = withRateLimit('auth', async (request: NextRequest) => {
   try {
     return await handlePost(request)
   } catch (err) {
     console.error('[create-member] Erro inesperado:', err)
     return NextResponse.json({ error: 'Erro inesperado ao cadastrar membro.' }, { status: 500 })
   }
-}
+})
 
 async function handlePost(request: NextRequest) {
   let body: unknown
