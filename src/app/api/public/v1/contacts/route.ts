@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { authenticateApiKey } from '@/lib/security/api-keys'
+import { withRateLimit } from '@/lib/security/rate-limit-middleware'
 
 const MAX_LIMIT = 200
 const DEFAULT_LIMIT = 50
@@ -14,7 +15,7 @@ const DEFAULT_LIMIT = 50
  * Paginação por offset (?limit=50&offset=0) — simples de usar em qualquer ferramenta
  * no-code, suficiente pro volume de uma única organização deste CRM.
  */
-export async function GET(request: NextRequest) {
+export const GET = withRateLimit('public', async (request: NextRequest) => {
   let admin
   try {
     admin = createAdminClient()
@@ -27,7 +28,7 @@ export async function GET(request: NextRequest) {
 
   const auth = await authenticateApiKey(request, admin)
   if (!auth) {
-    return NextResponse.json({ error: 'Chave de API ausente ou inválida. Use "Authorization: Bearer <sua_chave>".' }, { status: 401 })
+    return NextResponse.json({ error: 'Chave de API ausente ou inválida. Use "Authorization: Bearer ***".' }, { status: 401 })
   }
 
   const { searchParams } = new URL(request.url)
@@ -58,4 +59,4 @@ export async function GET(request: NextRequest) {
   }
 
   return NextResponse.json({ data: data || [], limit, offset })
-}
+})

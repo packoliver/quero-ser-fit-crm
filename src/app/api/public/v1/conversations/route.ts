@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { authenticateApiKey } from '@/lib/security/api-keys'
+import { withRateLimit } from '@/lib/security/rate-limit-middleware'
 
 const MAX_LIMIT = 200
 const DEFAULT_LIMIT = 50
@@ -8,7 +9,7 @@ const DEFAULT_LIMIT = 50
 /** GET /api/public/v1/conversations — conversas + status + contato + nota de avaliação
  * (CSAT) — ver /api/public/v1/contacts pro padrão geral de autenticação e paginação,
  * idêntico aqui. */
-export async function GET(request: NextRequest) {
+export const GET = withRateLimit('public', async (request: NextRequest) => {
   let admin
   try {
     admin = createAdminClient()
@@ -52,4 +53,4 @@ export async function GET(request: NextRequest) {
   }
 
   return NextResponse.json({ data: data || [], limit, offset })
-}
+})
