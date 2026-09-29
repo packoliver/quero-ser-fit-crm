@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { decryptToken } from '@/lib/security/encryption'
 import { hasPermission } from '@/lib/security/permissions'
+import { withRateLimit } from '@/lib/security/rate-limit-middleware'
 import { UserRole, CustomPermissions } from '@/types/database'
 import { MetaWhatsAppProvider } from '@/lib/integrations/whatsapp-meta'
 import { MetaInstagramProvider } from '@/lib/integrations/instagram-meta'
@@ -38,7 +39,7 @@ interface ConnectionRow {
  * conversa já avaliada, etc.) — não é um erro do ponto de vista do Inbox, que só quer
  * "melhor esforço" aqui, nunca bloquear o fechamento da conversa por causa disso.
  */
-export async function POST(request: NextRequest, context: { params: Promise<{ id: string }> }) {
+export const POST = withRateLimit('api', async (request: NextRequest, context: { params: Promise<{ id: string }> }) => {
   try {
     const { id: conversationId } = await context.params
 
@@ -183,5 +184,5 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
   } catch (err) {
     console.error('[request-csat] Erro inesperado:', err)
     return NextResponse.json({ error: 'Erro inesperado ao pedir avaliação.' }, { status: 500 })
-  }
-}
+      }
+    })

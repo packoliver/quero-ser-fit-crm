@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createClient } from '@/lib/supabase/server'
+import { withRateLimit } from '@/lib/security/rate-limit-middleware'
 
 const endpointSchema = z.string().url().refine((value) => value.startsWith('https://'), 'Endpoint deve usar HTTPS.').max(2048)
 const schema = z.object({ endpoint: endpointSchema, keys: z.object({ p256dh: z.string().min(1).max(512), auth: z.string().min(1).max(512) }), userAgent: z.string().max(1024).optional() })
@@ -13,7 +14,7 @@ async function getContext(supabase: Awaited<ReturnType<typeof createClient>>) {
   return membership ? { user, organizationId: membership.organization_id } : null
 }
 
-export async function POST(request: NextRequest) {
+export const POST = withRateLimit('api', async (request: NextRequest) => {
   const supabase = await createClient()
   const context = await getContext(supabase)
   if (!context) return NextResponse.json({ error: 'Não autenticado.' }, { status: 401 })
@@ -27,9 +28,9 @@ export async function POST(request: NextRequest) {
   const { error } = await db.from('push_subscriptions').upsert({ organization_id: context.organizationId, user_id: context.user.id, endpoint: parsed.data.endpoint, p256dh: parsed.data.keys.p256dh, auth: parsed.data.keys.auth, user_agent: parsed.data.userAgent || request.headers.get('user-agent') }, { onConflict: 'user_id,endpoint' })
   if (error) return NextResponse.json({ error: 'Não foi possível salvar a subscription.' }, { status: 500 })
   return NextResponse.json({ ok: true })
-}
+})
 
-export async function DELETE(request: NextRequest) {
+export const DELETE = withRateLimit('api', async (request: NextRequest) => {
   const supabase = await createClient()
   const context = await getContext(supabase)
   if (!context) return NextResponse.json({ error: 'Não autenticado.' }, { status: 401 })
@@ -42,4 +43,4 @@ export async function DELETE(request: NextRequest) {
   const { error } = await db.from('push_subscriptions').delete().eq('user_id', context.user.id).eq('endpoint', endpoint)
   if (error) return NextResponse.json({ error: 'Não foi possível remover a subscription.' }, { status: 500 })
   return NextResponse.json({ ok: true })
-}
+})

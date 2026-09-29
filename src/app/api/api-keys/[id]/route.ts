@@ -2,12 +2,13 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { hasPermission } from '@/lib/security/permissions'
+import { withRateLimit } from '@/lib/security/rate-limit-middleware'
 import { logAuditEvent } from '@/lib/security/audit'
 import { UserRole, CustomPermissions } from '@/types/database'
 
 // Revoga (soft-delete) uma chave de API — nunca apaga a linha, pra manter o rastro de
 // auditoria de quando cada chave existiu e foi usada pela última vez.
-export async function DELETE(request: NextRequest, context: { params: Promise<{ id: string }> }) {
+export const DELETE = withRateLimit('api', async (request: NextRequest, context: { params: Promise<{ id: string }> }) => {
   const { id } = await context.params
 
   const supabase = await createClient()
@@ -74,4 +75,4 @@ export async function DELETE(request: NextRequest, context: { params: Promise<{ 
   })
 
   return NextResponse.json({ success: true })
-}
+})

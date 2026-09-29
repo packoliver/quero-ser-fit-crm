@@ -1,6 +1,7 @@
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { cookies } from 'next/headers'
 import { getAuthenticatedUserContext } from '@/lib/auth'
+import { withRateLimit } from '@/lib/security/rate-limit-middleware'
 import {
   buildMetaInstagramOAuthUrl,
   createMetaOAuthState,
@@ -8,7 +9,7 @@ import {
   META_OAUTH_STATE_TTL_SECONDS,
 } from '@/lib/integrations/meta-oauth'
 
-export async function GET(request: Request) {
+export const GET = withRateLimit('auth', async (request: NextRequest) => {
   const auth = await getAuthenticatedUserContext()
   if (!auth.authenticated || !auth.userId || !auth.organizationId) {
     return NextResponse.json({ error: auth.error || 'Não autenticado.' }, { status: 401 })
@@ -31,4 +32,4 @@ export async function GET(request: Request) {
   } catch (error) {
     return NextResponse.redirect(new URL(`/configuracoes/integracoes?meta_error=${encodeURIComponent(error instanceof Error ? error.message : 'Configuração OAuth incompleta.')}`, request.url))
   }
-}
+})

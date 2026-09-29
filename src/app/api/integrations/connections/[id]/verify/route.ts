@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { decryptToken } from '@/lib/security/encryption'
 import { verifyCloudApiConnection, verifyUazapiConnection } from '@/lib/integrations/verify-connection'
+import { withRateLimit } from '@/lib/security/rate-limit-middleware'
 import { subscribeInstagramWebhooks } from '@/lib/integrations/meta-oauth'
 
 interface ConnectionRow {
@@ -30,7 +31,7 @@ const SAFE_SELECT = 'id, provider, label, connection_method, external_identifier
  * wasn't connected yet (e.g. the QR Code hadn't been scanned): it stays 'error'
  * forever otherwise, with no way to recover short of deleting and recreating it.
  */
-export async function POST(request: NextRequest, context: { params: Promise<{ id: string }> }) {
+export const POST = withRateLimit('api', async (request: NextRequest, context: { params: Promise<{ id: string }> }) => {
   try {
     const { id } = await context.params
 
@@ -176,5 +177,5 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
   } catch (err) {
     console.error('[connections/[id]/verify] Erro inesperado:', err)
     return NextResponse.json({ error: 'Erro inesperado ao reverificar conexão.' }, { status: 500 })
-  }
-}
+      }
+    })

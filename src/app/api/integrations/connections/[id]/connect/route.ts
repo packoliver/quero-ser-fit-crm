@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { decryptToken } from '@/lib/security/encryption'
+import { withRateLimit } from '@/lib/security/rate-limit-middleware'
 import { registerUazapiWebhook } from '@/lib/integrations/verify-connection'
 
 interface ConnectionRow {
@@ -104,7 +105,7 @@ async function loadUazapiConnection(id: string) {
  * POST /instance/connect. The frontend then polls GET on this same route to fetch
  * refreshed QR codes and detect when the device connects.
  */
-export async function POST(_request: NextRequest, context: { params: Promise<{ id: string }> }) {
+export const POST = withRateLimit('api', async (_request: NextRequest, context: { params: Promise<{ id: string }> }) => {
   try {
     const { id } = await context.params
     const result = await loadUazapiConnection(id)
@@ -130,8 +131,8 @@ export async function POST(_request: NextRequest, context: { params: Promise<{ i
   } catch (err) {
     console.error('[connections/[id]/connect] Erro inesperado ao iniciar:', err)
     return NextResponse.json({ error: 'Erro inesperado ao iniciar conexão.' }, { status: 500 })
-  }
-}
+      }
+    })
 
 /**
  * GET /api/integrations/connections/[id]/connect
@@ -141,7 +142,7 @@ export async function POST(_request: NextRequest, context: { params: Promise<{ i
  * to 'active' the moment it detects a successful connection, so the UI doesn't need a
  * separate "confirm" step.
  */
-export async function GET(request: NextRequest, context: { params: Promise<{ id: string }> }) {
+export const GET = withRateLimit('api', async (request: NextRequest, context: { params: Promise<{ id: string }> }) => {
   try {
     const { id } = await context.params
     const result = await loadUazapiConnection(id)
@@ -180,5 +181,5 @@ export async function GET(request: NextRequest, context: { params: Promise<{ id:
   } catch (err) {
     console.error('[connections/[id]/connect] Erro inesperado ao consultar status:', err)
     return NextResponse.json({ error: 'Erro inesperado ao consultar status.' }, { status: 500 })
-  }
-}
+      }
+    })

@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
+import { withRateLimit } from '@/lib/security/rate-limit-middleware'
 import { logAuditEvent } from '@/lib/security/audit'
 
-export async function DELETE(request: NextRequest, context: { params: Promise<{ id: string }> }) {
+export const DELETE = withRateLimit('api', async (request: NextRequest, context: { params: Promise<{ id: string }> }) => {
   try {
     const { id } = await context.params
 
@@ -95,5 +96,5 @@ export async function DELETE(request: NextRequest, context: { params: Promise<{ 
   } catch (err) {
     console.error('[integrations/connections/[id]] Erro inesperado:', err)
     return NextResponse.json({ error: 'Erro inesperado ao remover conexão.' }, { status: 500 })
-  }
-}
+      }
+    })

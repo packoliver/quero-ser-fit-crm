@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { logAuditEvent } from '@/lib/security/audit'
 import { hasPermission } from '@/lib/security/permissions'
+import { withRateLimit } from '@/lib/security/rate-limit-middleware'
 import { UserRole, CustomPermissions } from '@/types/database'
 
 interface MembershipRow {
@@ -28,7 +29,7 @@ interface MessageRow {
  * por tenant), então usamos o client normal (respeitando a sessão do usuário) em vez do
  * admin — igual ao padrão usado em /api/messages/send.
  */
-export async function DELETE(request: NextRequest, context: { params: Promise<{ id: string }> }) {
+export const DELETE = withRateLimit('api', async (request: NextRequest, context: { params: Promise<{ id: string }> }) => {
   try {
     const { id } = await context.params
 
@@ -117,5 +118,5 @@ export async function DELETE(request: NextRequest, context: { params: Promise<{ 
   } catch (err) {
     console.error('[messages/[id]] Erro inesperado:', err)
     return NextResponse.json({ error: 'Erro inesperado ao excluir mensagem.' }, { status: 500 })
-  }
-}
+      }
+    })

@@ -12,12 +12,13 @@ import { checkRateLimit, getClientIdentifier, RATE_LIMITS, type RateLimitConfig 
  * Ou com chave customizada por org/usuário:
  *   export const POST = withRateLimit('ai', handler, { keyPrefix: 'org:123' })
  */
-export function withRateLimit(
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function withRateLimit<TContext = any>(
   category: keyof typeof RATE_LIMITS,
-  handler: (request: NextRequest, context?: unknown) => Promise<NextResponse>,
+  handler: (request: NextRequest, context: TContext) => Promise<NextResponse | undefined | void>,
   options?: { keyPrefix?: string; getKey?: (request: NextRequest) => string }
 ) {
-  return async (request: NextRequest, context?: unknown): Promise<NextResponse> => {
+  return async (request: NextRequest, context: TContext): Promise<NextResponse> => {
     let key: string
     if (options?.getKey) {
       key = options.getKey(request)
@@ -55,6 +56,16 @@ export function withRateLimit(
     }
 
     const response = await handler(request, context)
+
+    // Handler nunca deve retornar undefined/void — se acontecer, é bug no handler.
+    // Retorna 500 em vez de quebrar o tipo ou deixar a resposta sem headers de rate limit.
+    if (!response) {
+      console.error('[rate-limit] Handler retornou undefined/vazio para', config.key)
+      return NextResponse.json(
+        { error: 'Erro interno ao processar a requisição.' },
+        { status: 500 }
+      )
+    }
 
     // Adiciona headers de rate limit na resposta bem-sucedida também
     response.headers.set('X-RateLimit-Limit', String(config.limit))

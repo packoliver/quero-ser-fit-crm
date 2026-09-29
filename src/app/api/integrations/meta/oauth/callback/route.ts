@@ -1,8 +1,9 @@
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { cookies } from 'next/headers'
 import { getAuthenticatedUserContext } from '@/lib/auth'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { encryptToken } from '@/lib/security/encryption'
+import { withRateLimit } from '@/lib/security/rate-limit-middleware'
 import {
   exchangeForLongLivedInstagramToken,
   exchangeMetaInstagramCode,
@@ -19,7 +20,7 @@ function redirect(request: Request, key: 'meta_success' | 'meta_error', value: s
   return NextResponse.redirect(url)
 }
 
-export async function GET(request: Request) {
+export const GET = withRateLimit('auth', async (request: NextRequest) => {
   const requestUrl = new URL(request.url)
   const cookieStore = await cookies()
   const state = requestUrl.searchParams.get('state')
@@ -120,4 +121,4 @@ export async function GET(request: Request) {
   } catch (error) {
     return redirect(request, 'meta_error', error instanceof Error ? error.message : 'Falha ao conectar o Instagram.')
   }
-}
+})

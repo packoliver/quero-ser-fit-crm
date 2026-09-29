@@ -5,6 +5,7 @@ import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { encryptToken } from '@/lib/security/encryption'
 import { verifyCloudApiConnection, verifyUazapiConnection } from '@/lib/integrations/verify-connection'
+import { withRateLimit } from '@/lib/security/rate-limit-middleware'
 import { logAuditEvent } from '@/lib/security/audit'
 
 interface ConnectionRow {
@@ -81,7 +82,7 @@ function isDuplicateError(error: { message?: string; code?: string } | null | un
   return error.code === '23505' || !!error.message?.toLowerCase().includes('duplicate')
 }
 
-export async function GET() {
+export const GET = withRateLimit('api', async () => {
   try {
     const supabase = await createClient()
     const result = await getCallerOrganizationId(supabase)
@@ -113,10 +114,10 @@ export async function GET() {
     // técnico (às vezes em inglês) vai só pro console do servidor.
     console.error('[integrations/connections] Erro inesperado:', err)
     return NextResponse.json({ error: 'Erro inesperado ao carregar conexões.' }, { status: 500 })
-  }
-}
+      }
+    })
 
-export async function POST(request: NextRequest) {
+export const POST = withRateLimit('api', async (request: NextRequest) => {
   try {
     let body: unknown
     try {
@@ -274,5 +275,5 @@ export async function POST(request: NextRequest) {
   } catch (err) {
     console.error('[integrations/connections] Erro inesperado ao criar:', err)
     return NextResponse.json({ error: 'Erro inesperado ao criar conexão.' }, { status: 500 })
-  }
-}
+      }
+    })
