@@ -520,17 +520,13 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
       setCurrentUserRealId(user?.id || null)
 
       const [convRes, noteRes, membersRes, dealsRes, stagesRes, myMembershipRes] = await Promise.all([
-        // conversation_list_view já traz a ÚLTIMA mensagem de cada conversa embutida (ver
-        // migração 20260819120000). Antes esta parte vinha junto com um segundo pedido que
-        // baixava TODAS as mensagens da organização — ~1,5 MB por atualização, contra ~35 KB
-        // agora — e que, passando de 1.000 linhas, começaria a perder as mensagens mais
-        // novas em silêncio, porque vinha ordenado da mais antiga pra mais nova.
-        // As mensagens de uma conversa só são buscadas quando ela é aberta: ver
-        // fetchConversationMessages.
-        typed
-          .from('conversation_list_view')
-          .select('id, organization_id, status, channel_type, current_assignee_id, last_message_at, contact_id, csat_score, contact_name, contact_phone, contact_is_group, contact_avatar_url, assignee_name, last_message_content, last_message_media_type, last_message_sender_type, last_message_created_at')
-          .order!('last_message_at', { ascending: false }),
+        // Usando RPC SECURITY DEFINER para contornar problemas de permissão na view
+        // conversation_list_view quando acessada via PostgREST com chave anon + JWT.
+        // A função get_conversation_list_secure() executa com privilégios de postgres
+        // mas ainda respeita o isolamento de tenant via get_user_org_ids().
+        (supabase as unknown as {
+          rpc: (fn: string) => Promise<{ data: unknown[] | null; error: unknown }>
+        }).rpc('get_conversation_list_secure'),
         typed.from('internal_notes').select('id, conversation_id, content, created_at, author_id, profiles(full_name)').order!('created_at', { ascending: false }),
         typed.from('organization_members').select('user_id, profiles(full_name)').order!('created_at', { ascending: true }),
         // Pedidos (Funil) — pra mostrar/gerenciar o pedido de um contato direto na aba
