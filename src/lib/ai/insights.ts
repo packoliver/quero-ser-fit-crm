@@ -104,7 +104,7 @@ async function runAnalysis(admin: AdminClient, params: ScheduleAnalysisParams): 
  * envio de mensagem nem a sincronização de um pedido que dependeram dela por acidente.
  */
 export async function scheduleConversationAnalysis(admin: AdminClient, params: ScheduleAnalysisParams): Promise<void> {
-  if (!isAiConfigured()) return
+  if (!(await isAiConfigured())) return
   try {
     await runAnalysis(admin, params)
   } catch (err) {
@@ -185,7 +185,7 @@ export type QaResult =
  * mensagem na tela, tornando impossível saber qual dos dois estava acontecendo de verdade.
  */
 export async function answerQuestionAboutInsights(admin: AdminClient, organizationId: string, question: string): Promise<QaResult> {
-  if (!isAiConfigured()) return { ok: false, reason: 'not_configured' }
+  if (!(await isAiConfigured())) return { ok: false, reason: 'not_configured' }
 
   // Ordena por ATIVIDADE DA CONVERSA (last_message_at), não por quando a IA analisou
   // (last_analyzed_at) — os dois divergem bastante logo depois de um backfill, porque ele

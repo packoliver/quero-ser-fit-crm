@@ -1,5 +1,75 @@
 import { z } from 'zod'
 import { getServerEnv } from '@/lib/env'
+import { createClient } from '@supabase/supabase-js'
+import { decryptToken } from '@/lib/security/encryption'
+
+// Cache simples pra evitar buscar a config da org em toda chamada de análise
+// (a análise roda a cada mensagem trocada). TTL curto (5 min) garante que
+// mudanças no painel admin sejam refletidas rapidamente sem sobrecarregar o banco.
+let orgAiConfigCache: { url: string | null; key: string | null; model: string | null; ts: number } | null = null
+const ORG_AI_CACHE_TTL_MS = 5 * 60 * 1000
+
+/**
+ * Lê as configurações de IA da organização diretamente do banco, com fallback
+ * para as env vars globais (OMNIROUTE_*). Prioridade: org > env var > null.
+ * A API key é descriptografada aqui (server-side only) — nunca trafega pro browser.
+ */
+async function getOrgAiConfig(): Promise<{ baseUrl: string | null; apiKey: string | null; model: string | null }> {
+  const env = getServerEnv()
+  const fallback = {
+    baseUrl: env.OMNIROUTE_BASE_URL || null,
+    apiKey: env.OMNIROUTE_API_KEY || null,
+    model: env.OMNIROUTE_MODEL || null,
+  }
+
+  // Se não tem Supabase configurado, usa só env vars
+  if (!env.NEXT_PUBLIC_SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) return fallback
+
+  // Cache hit
+  if (orgAiConfigCache && Date.now() - orgAiConfigCache.ts < ORG_AI_CACHE_TTL_MS) {
+    return {
+      baseUrl: orgAiConfigCache.url ?? fallback.baseUrl,
+      apiKey: orgAiConfigCache.key ?? fallback.apiKey,
+      model: orgAiConfigCache.model ?? fallback.model,
+    }
+  }
+
+  try {
+    const supabase = createClient(env.NEXT_PUBLIC_SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY)
+    const { data, error } = await supabase
+      .from('organizations')
+      .select('ai_gateway_url, ai_gateway_api_key_encrypted, ai_gateway_model')
+      .limit(1)
+      .maybeSingle()
+
+    if (error || !data) return fallback
+
+    let decryptedKey: string | null = null
+    if (data.ai_gateway_api_key_encrypted) {
+      try {
+        decryptedKey = decryptToken(data.ai_gateway_api_key_encrypted)
+      } catch {
+        console.warn('[ai] Falha ao descriptografar API key da org — usando fallback.')
+      }
+    }
+
+    orgAiConfigCache = {
+      url: data.ai_gateway_url,
+      key: decryptedKey,
+      model: data.ai_gateway_model,
+      ts: Date.now(),
+    }
+
+    return {
+      baseUrl: data.ai_gateway_url ?? fallback.baseUrl,
+      apiKey: decryptedKey ?? fallback.apiKey,
+      model: data.ai_gateway_model ?? fallback.model,
+    }
+  } catch (err) {
+    console.warn('[ai] Erro ao buscar config de IA da org:', err)
+    return fallback
+  }
+}
 
 // Schema Zod para validação rigorosa da resposta da IA — garante que apenas payloads
 // conformes cheguem ao banco. Respostas fora do contrato são descartadas (null) em vez
@@ -44,10 +114,12 @@ const TIMEOUT_MS = 15_000
 // desistir — 45s deixa folga sob o maxDuration=60 da rota (ver ask-insights/route.ts).
 const QA_TIMEOUT_MS = 45_000
 
-/** Sem OMNIROUTE_BASE_URL configurada, a feature de Insights fica desligada de propósito —
- * nada no resto do CRM depende disso pra funcionar (ver src/lib/ai/insights.ts). */
-export function isAiConfigured(): boolean {
-  return !!getServerEnv().OMNIROUTE_BASE_URL
+/** Sem gateway configurado (nem na org nem nas env vars), a feature de Insights fica
+ * desligada de propósito — nada no resto do CRM depende disso pra funcionar
+ * (ver src/lib/ai/insights.ts). Assíncrona porque lê config da org do banco. */
+export async function isAiConfigured(): Promise<boolean> {
+  const cfg = await getOrgAiConfig()
+  return !!cfg.baseUrl
 }
 
 export interface ConversationAnalysis {
@@ -182,20 +254,20 @@ export async function analyzeConversation({
   transcript: string
   knownOutcome: 'ganha' | 'perdida' | null
 }): Promise<ConversationAnalysis | null> {
-  const { OMNIROUTE_BASE_URL, OMNIROUTE_API_KEY, OMNIROUTE_MODEL } = getServerEnv()
-  if (!OMNIROUTE_BASE_URL || !transcript.trim()) return null
+  const cfg = await getOrgAiConfig()
+  if (!cfg.baseUrl || !transcript.trim()) return null
 
   try {
-    const baseUrl = OMNIROUTE_BASE_URL.replace(/\/+$/, '')
+    const baseUrl = cfg.baseUrl.replace(/\/+$/, '')
     const response = await withTimeout(
       fetch(`${baseUrl}/chat/completions`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(OMNIROUTE_API_KEY ? { Authorization: `Bearer ${OMNIROUTE_API_KEY}` } : {}),
+          ...(cfg.apiKey ? { Authorization: `Bearer ${cfg.apiKey}` } : {}),
         },
         body: JSON.stringify({
-          model: OMNIROUTE_MODEL || DEFAULT_MODEL,
+          model: cfg.model || DEFAULT_MODEL,
           messages: [{ role: 'user', content: buildPrompt(transcript, knownOutcome) }],
           response_format: { type: 'json_object' },
           temperature: 0.3,
@@ -244,20 +316,20 @@ Responda em TEXTO SIMPLES, sem nenhum símbolo de markdown — nada de **negrito
  * qualquer problema, nunca lança.
  */
 export async function askQuestion({ context, question }: { context: string; question: string }): Promise<string | null> {
-  const { OMNIROUTE_BASE_URL, OMNIROUTE_API_KEY, OMNIROUTE_MODEL } = getServerEnv()
-  if (!OMNIROUTE_BASE_URL || !question.trim() || !context.trim()) return null
+  const cfg = await getOrgAiConfig()
+  if (!cfg.baseUrl || !question.trim() || !context.trim()) return null
 
   try {
-    const baseUrl = OMNIROUTE_BASE_URL.replace(/\/+$/, '')
+    const baseUrl = cfg.baseUrl.replace(/\/+$/, '')
     const response = await withTimeout(
       fetch(`${baseUrl}/chat/completions`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(OMNIROUTE_API_KEY ? { Authorization: `Bearer ${OMNIROUTE_API_KEY}` } : {}),
+          ...(cfg.apiKey ? { Authorization: `Bearer ${cfg.apiKey}` } : {}),
         },
         body: JSON.stringify({
-          model: OMNIROUTE_MODEL || DEFAULT_MODEL,
+          model: cfg.model || DEFAULT_MODEL,
           messages: [{ role: 'user', content: buildQaPrompt(context, question) }],
           temperature: 0.3,
         }),

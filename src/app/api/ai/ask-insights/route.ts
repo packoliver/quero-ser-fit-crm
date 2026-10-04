@@ -67,7 +67,7 @@ export const POST = withRateLimit('ai', async (request: NextRequest) => {
     // olhando a tela, qual dos dois estava realmente acontecendo.
     const messages: Record<typeof result.reason, string> = {
       not_configured:
-        'OMNIROUTE_BASE_URL não está configurada neste servidor (Vercel) — confirme se foi salva pro ambiente "Production" e se o valor está correto (com /v1 no final).',
+        'Gateway de IA não configurado — acesse Configurações → IA (Insights) no painel admin para configurar a URL e chave do gateway.',
       no_data: 'Ainda não existe nenhuma conversa analisada — clique em "Analisar conversas antigas" primeiro.',
       gateway_failed:
         'A variável está configurada, mas o gateway não respondeu a tempo (45s) ou devolveu um erro. Se o seu gateway só roda em localhost, use "npm run insights:ask -- \'sua pergunta\'" no terminal em vez desta barra — a Vercel não alcança seu localhost diretamente, só através de um túnel público.',

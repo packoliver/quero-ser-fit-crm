@@ -53,6 +53,7 @@ export const allNavItems: NavItem[] = [
   { href: '/configuracoes/equipe', label: 'Equipe', icon: UserCheck, adminOnly: true },
   { href: '/configuracoes/integracoes', label: 'Integrações', icon: Share2, adminOnly: true },
   { href: '/configuracoes/api', label: 'API Pública', icon: Code2, adminOnly: true },
+  { href: '/configuracoes/ia', label: 'IA (Insights)', icon: Sparkles, adminOnly: true },
   { href: '/configuracoes/auditoria', label: 'Auditoria', icon: History, adminOnly: true },
 ]
 
