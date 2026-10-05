@@ -188,3 +188,36 @@ export async function enqueueConversationAnalysis(params: {
     priority: params.priority ?? 100,
   })
 }
+
+/**
+ * Health check da fila — retorna contagens por status e idade da tarefa pendente mais antiga.
+ * Usado pelo GET /api/internal/dispatch para monitoramento e alertas.
+ */
+export async function getQueueHealth(): Promise<{
+  queued: number
+  running: number
+  failed: number
+  completed_last_24h: number
+  oldest_pending_age_seconds: number | null
+}> {
+  try {
+    const admin = getAdminClient()
+    const { data, error } = await admin.rpc('get_agent_tasks_health')
+    if (error) {
+      console.error('[task-queue] Erro ao obter health:', error)
+      return { queued: -1, running: -1, failed: -1, completed_last_24h: -1, oldest_pending_age_seconds: null }
+    }
+    // A RPC retorna um único objeto com as contagens
+    const row = Array.isArray(data) ? data[0] : data
+    return {
+      queued: row?.queued ?? 0,
+      running: row?.running ?? 0,
+      failed: row?.failed ?? 0,
+      completed_last_24h: row?.completed_last_24h ?? 0,
+      oldest_pending_age_seconds: row?.oldest_pending_age_seconds ?? null,
+    }
+  } catch (err) {
+    console.error('[task-queue] Erro inesperado ao obter health:', err)
+    return { queued: -1, running: -1, failed: -1, completed_last_24h: -1, oldest_pending_age_seconds: null }
+  }
+}
