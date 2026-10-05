@@ -105,6 +105,7 @@ export async function claimAgentTasks(limit = 5, leaseDurationSeconds = 300) {
       priority: number
       attempts: number
       max_attempts: number
+      lease_token: string | null
     }>
   } catch (err) {
     console.error('[task-queue] Erro inesperado ao reivindicar:', err)
@@ -121,7 +122,8 @@ export async function settleAgentTask(
   taskId: string,
   status: 'completed' | 'failed',
   result?: Record<string, unknown>,
-  errorMessage?: string
+  errorMessage?: string,
+  leaseToken?: string | null
 ): Promise<boolean> {
   try {
     const admin = getAdminClient()
@@ -130,6 +132,7 @@ export async function settleAgentTask(
       p_status: status,
       p_result: result ?? null,
       p_error_message: errorMessage ?? null,
+      p_lease_token: leaseToken ?? null,
     })
 
     if (error) {

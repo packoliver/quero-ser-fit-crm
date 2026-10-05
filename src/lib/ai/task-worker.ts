@@ -26,15 +26,17 @@ export async function processAgentTaskBatch(batchSize = 5): Promise<{
   for (const task of tasks) {
     try {
       const result = await executeTask(task.kind, task.payload)
-      const settled = await settleAgentTask(task.id, 'completed', result)
+      // Fencing: passa lease_token para impedir que stale workers finalizem tarefas readquiridas
+      const settled = await settleAgentTask(task.id, 'completed', result, undefined, task.lease_token)
       if (settled) completed++
       else failed++
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err)
       console.error(`[task-worker] Falha na tarefa ${task.id} (${task.kind}):`, errorMessage)
-      const settled = await settleAgentTask(task.id, 'failed', undefined, errorMessage)
+      // Fencing: passa lease_token para impedir que stale workers finalizem tarefas readquiridas
+      const settled = await settleAgentTask(task.id, 'failed', undefined, errorMessage, task.lease_token)
       if (!settled) {
-        console.error(`[task-worker] Não conseguiu finalizar tarefa ${task.id} como failed`)
+        console.error(`[task-worker] Não conseguiu finalizar tarefa ${task.id} como failed (possível stale worker)`)
       }
       failed++
     }
