@@ -28,8 +28,9 @@ type TypedSupabase = {
  * moveDeal em funil/page.tsx) — o cliente não tem acesso ao service-role client nem
  * deveria escrever direto em ai_conversation_insights, então isso passa pelo servidor.
  * Sempre responde rápido (a análise roda em segundo plano via after()); "queued: true"
- * não garante que a IA está configurada — sem OMNIROUTE_BASE_URL, scheduleConversationAnalysis
- * só não faz nada (ver src/lib/ai/insights.ts).
+ * não garante que a IA está configurada — sem gateway (org ou env var), scheduleConversationAnalysis
+ * só não faz nada (ver src/lib/ai/insights.ts). A análise agora é enfileirada na tabela agent_tasks
+ * e processada pelo worker via /api/internal/dispatch.
  */
 export const POST = withRateLimit('ai', async (request: NextRequest) => {
   const supabase = await createClient()

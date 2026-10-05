@@ -1,5 +1,6 @@
 import { AdminClient } from '@/lib/supabase/admin'
 import { analyzeConversation, askQuestion, isAiConfigured } from './client'
+import { enqueueConversationAnalysis } from './task-queue'
 
 // Evita chamar a IA de novo a cada mensagem isolada quando várias chegam em sequência
 // rápida (ex: cliente mandando 5 áudios seguidos, ou a vendedora respondendo linha por
@@ -102,13 +103,35 @@ async function runAnalysis(admin: AdminClient, params: ScheduleAnalysisParams): 
  * lança: qualquer falha (sem chave configurada, rede, resposta malformada da IA, erro de
  * banco) é engolida e logada — esta é sempre uma feature auxiliar, nunca pode derrubar o
  * envio de mensagem nem a sincronização de um pedido que dependeram dela por acidente.
+ *
+ * Agora usa a fila durável de tarefas (agent_tasks) em vez de chamada direta fire-and-forget.
+ * A análise real será processada pelo worker via /api/internal/dispatch.
  */
 export async function scheduleConversationAnalysis(admin: AdminClient, params: ScheduleAnalysisParams): Promise<void> {
   if (!(await isAiConfigured())) return
   try {
-    await runAnalysis(admin, params)
+    // Busca mensagens recentes para construir o transcript inicial da tarefa
+    const { data: messages } = await admin
+      .from('messages')
+      .select('sender_type, content')
+      .eq('conversation_id', params.conversationId)
+      .order('created_at', { ascending: false })
+      .limit(MAX_TRANSCRIPT_MESSAGES)
+
+    const rows = ((messages || []) as Pick<MessageRow, 'sender_type' | 'content'>[]).slice().reverse()
+    if (rows.length === 0) return
+
+    const transcript = buildTranscript(rows as MessageRow[])
+
+    await enqueueConversationAnalysis({
+      organizationId: params.organizationId,
+      conversationId: params.conversationId,
+      transcript,
+      knownOutcome: params.finalize ? (params.knownOutcome ?? null) : null,
+      priority: params.finalize ? 50 : 100, // Finalizações são mais urgentes
+    })
   } catch (err) {
-    console.error('[insights] Falha ao analisar conversa (ignorada, feature auxiliar):', err)
+    console.error('[insights] Falha ao enfileirar análise de conversa:', err)
   }
 }
 
