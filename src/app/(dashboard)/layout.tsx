@@ -147,7 +147,7 @@ function DashboardShell({
       — e com o teclado aberto o 100vh nem encolhia, escondendo o campo de digitar. `dvh`
       acompanha a altura realmente visível.
     */
-    <div className="h-dvh bg-[#0b1320] text-slate-100 flex flex-row w-full overflow-hidden">
+    <div className="h-dvh bg-[var(--background)] text-[var(--foreground)] flex flex-row w-full overflow-hidden transition-colors duration-200">
       <NetworkStatus />
       {/* Desktop Navigation (Filtered by currentRole) */}
       <DesktopSidebar userRole={currentRole} />

@@ -27,18 +27,18 @@ export function DesktopSidebar({ userRole = 'admin' }: DesktopSidebarProps) {
   return (
     <aside
       aria-label="Navegação Principal Desktop"
-      className="hidden lg:flex flex-col w-64 border-r border-slate-800 bg-[#0f172a] h-screen sticky top-0 shrink-0 select-none"
+      className="hidden lg:flex flex-col w-64 border-r sidebar-border sidebar-bg h-screen sticky top-0 shrink-0 select-none transition-colors duration-200"
     >
       {/* Brand Header */}
-      <div className="p-5 flex items-center gap-3 border-b border-slate-800">
-        <div className="w-10 h-10 rounded-xl bg-emerald-500 flex items-center justify-center text-slate-950 shadow-lg shadow-emerald-900/30">
+      <div className="p-5 flex items-center gap-3 border-b sidebar-border transition-colors duration-200">
+        <div className="w-10 h-10 rounded-xl accent-bg flex items-center justify-center text-white shadow-lg shadow-emerald-900/20">
           <Dumbbell className="w-5 h-5" />
         </div>
         <div>
-          <h1 className="font-bold text-slate-100 text-sm tracking-wide">
+          <h1 className="font-bold text-[var(--foreground)] text-sm tracking-wide transition-colors duration-200">
             Quero Ser Fit
           </h1>
-          <span className="text-xs text-emerald-400 font-medium bg-emerald-950/60 px-2 py-0.5 rounded-full border border-emerald-800/40">
+          <span className="text-xs accent-text font-medium bg-[var(--surface-hover)] px-2 py-0.5 rounded-full border surface-border transition-colors duration-200">
             CRM Oficial
           </span>
         </div>
@@ -46,7 +46,7 @@ export function DesktopSidebar({ userRole = 'admin' }: DesktopSidebarProps) {
 
       {/* Navigation Links */}
       <nav className="flex-1 p-4 space-y-1.5 overflow-y-auto">
-        <div className="px-3 py-2 text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
+        <div className="px-3 py-2 text-[11px] font-semibold sidebar-text uppercase tracking-wider opacity-70 transition-colors duration-200">
           Menu ({userRole === 'admin' ? 'Administrador' : userRole === 'manager' ? 'Gerente' : 'Atendente'})
         </div>
         {navItems.map((item) => {
@@ -58,18 +58,18 @@ export function DesktopSidebar({ userRole = 'admin' }: DesktopSidebarProps) {
               key={item.href}
               href={item.href}
               aria-current={isActive ? 'page' : undefined}
-              className={`flex items-center gap-3 px-3.5 py-2.5 rounded-lg text-sm font-medium transition-all focus:outline-none focus:ring-2 focus:ring-emerald-500 ${
+              className={`flex items-center gap-3 px-3.5 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-[var(--primary)] ${
                 isActive
-                  ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-semibold shadow-sm'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+                  ? 'sidebar-item-active accent-text font-semibold shadow-sm border surface-border'
+                  : 'sidebar-text sidebar-item-hover'
               }`}
             >
-              <Icon className={`w-4 h-4 ${isActive ? 'text-emerald-400' : 'text-slate-400'}`} />
+              <Icon className={`w-4 h-4 transition-colors duration-200 ${isActive ? 'accent-text' : 'sidebar-text'}`} />
               <span className="flex-1">{item.label}</span>
               {/* Mesma contagem da barra do celular (ver UnreadProvider) — aqui cabe ao
                   lado do rótulo, então não precisa ficar por cima do ícone. */}
               {item.href === '/inbox' && unreadTotal > 0 && (
-                <span className="min-w-[20px] h-5 px-1.5 rounded-full bg-emerald-500 text-slate-950 text-[10px] font-bold flex items-center justify-center tabular-nums shrink-0">
+                <span className="min-w-[20px] h-5 px-1.5 rounded-full unread-badge-bg text-white text-[10px] font-bold flex items-center justify-center tabular-nums shrink-0">
                   {formatUnreadBadge(unreadTotal)}
                   <span className="sr-only"> mensagens não lidas</span>
                 </span>
@@ -80,9 +80,9 @@ export function DesktopSidebar({ userRole = 'admin' }: DesktopSidebarProps) {
       </nav>
 
       {/* Footer Info */}
-      <div className="p-4 border-t border-slate-800 text-xs text-slate-500 flex justify-between items-center">
+      <div className="p-4 border-t sidebar-border text-xs sidebar-text flex justify-between items-center transition-colors duration-200">
         <span>Quero Ser Fit</span>
-        <span className="text-[10px] bg-slate-800 px-1.5 py-0.5 rounded text-slate-400">v1.1</span>
+        <span className="text-[10px] bg-[var(--surface-hover)] px-1.5 py-0.5 rounded sidebar-text border surface-border transition-colors duration-200">v1.1</span>
       </div>
     </aside>
   )

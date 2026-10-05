@@ -1658,12 +1658,12 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
     viewMode !== 'real' || hasPermission(currentUserRole || 'attendant', currentUserPermissions, 'transfer_conversations')
 
   return (
-    <div className="flex flex-col h-full min-h-0 bg-[#0b1320] text-slate-100 overflow-hidden relative">
+    <div className="flex flex-col h-full min-h-0 bg-[var(--background)] text-[var(--foreground)] overflow-hidden relative transition-colors duration-200">
       {/* Header Banner & Mode Selector — some no celular: dizia "Conversas Conectadas ao
           Supabase", que é informação de quem monta o sistema, não de quem atende, e comia
           uma faixa inteira da tela. O que era útil aqui (ligar/desligar notificação) foi
           pro cabeçalho da própria lista, ver abaixo. */}
-      <div className="hidden lg:flex bg-gradient-to-r from-emerald-950 via-teal-950 to-slate-900 border-b border-emerald-800/40 px-4 py-2 items-center justify-between text-xs shrink-0">
+      <div className="hidden lg:flex chat-header-bg border-b sidebar-border px-4 py-2 items-center justify-between text-xs shrink-0 transition-colors duration-200">
         <div className="flex items-center gap-2">
           {viewMode === 'demo' ? (
             <>
@@ -1671,17 +1671,17 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
               <span className="font-semibold text-amber-200 uppercase tracking-wide">
                 Modo Demonstração Integrado
               </span>
-              <span className="hidden md:inline text-slate-400">
+              <span className="hidden md:inline sidebar-text">
                 • Simulação de mensagens e atendimento ativo
               </span>
             </>
           ) : (
             <>
-              <Database className="w-4 h-4 text-emerald-400" />
-              <span className="font-semibold text-emerald-200 uppercase tracking-wide">
+              <Database className="w-4 h-4 accent-text" />
+              <span className="font-semibold text-[var(--foreground)] uppercase tracking-wide">
                 Conversas Conectadas ao Supabase
               </span>
-              {loadingReal && <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-400" />}
+              {loadingReal && <Loader2 className="w-3.5 h-3.5 animate-spin accent-text" />}
             </>
           )}
         </div>
@@ -1693,8 +1693,8 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
               title={notificationsEnabled ? 'Notificações ativadas — clique pra desativar' : 'Ativar som e notificação de novas mensagens'}
               className={`p-1.5 rounded-lg border transition flex items-center gap-1.5 ${
                 notificationsEnabled
-                  ? 'bg-emerald-950/60 border-emerald-800 text-emerald-400'
-                  : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
+                  ? 'bg-[var(--accent-green)]/15 border-[var(--accent-green)]/40 accent-text font-semibold'
+                  : 'surface-bg border surface-border sidebar-text hover:text-[var(--foreground)]'
               }`}
             >
               {notificationsEnabled ? <Bell className="w-3.5 h-3.5" /> : <BellOff className="w-3.5 h-3.5" />}
@@ -1706,7 +1706,7 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
               <button
                 onClick={() => setViewMode('real')}
                 className={`px-2.5 py-1 rounded-lg transition ${
-                  viewMode === 'real' ? 'bg-emerald-600 text-white font-semibold' : 'text-slate-400'
+                  viewMode === 'real' ? 'accent-bg text-white font-semibold' : 'sidebar-text'
                 }`}
               >
                 Supabase Real
@@ -1714,7 +1714,7 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
               <button
                 onClick={() => setViewMode('demo')}
                 className={`px-2.5 py-1 rounded-lg transition ${
-                  viewMode === 'demo' ? 'bg-amber-600 text-white font-semibold' : 'text-slate-400'
+                  viewMode === 'demo' ? 'bg-[var(--warning)] text-white font-semibold' : 'sidebar-text'
                 }`}
               >
                 Modo Demo
@@ -1736,22 +1736,22 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
       {/* 3-Column Layout */}
       <div className="flex-1 flex min-h-0 overflow-hidden">
         {/* Col 1: Conversations List & Queue Filters */}
-        <div className={`w-full md:w-80 lg:w-96 border-r border-slate-800 flex flex-col bg-[#0f172a] shrink-0 ${
+        <div className={`w-full md:w-80 lg:w-96 border-r sidebar-border flex flex-col chat-sidebar-bg shrink-0 transition-colors duration-200 ${
           showMobileList ? 'flex' : 'hidden lg:flex'
         }`}>
-          <div className="p-3 border-b border-slate-800 space-y-2.5">
+          <div className="p-3 border-b sidebar-border space-y-2.5">
             {/* Título + notificações, só no celular: aqui o cabeçalho global mostra a marca,
                 não onde a pessoa está. No desktop a barra lateral já responde isso. */}
             <div className="lg:hidden flex items-center justify-between gap-2">
-              <h1 className="text-lg font-bold text-slate-100">Conversas</h1>
+              <h1 className="text-lg font-bold text-[var(--foreground)]">Conversas</h1>
               {viewMode === 'real' && (
                 <button
                   onClick={toggleNotifications}
                   aria-label={notificationsEnabled ? 'Desativar notificações de novas mensagens' : 'Ativar notificações de novas mensagens'}
                   className={`p-2 rounded-xl border transition ${
                     notificationsEnabled
-                      ? 'bg-emerald-950/60 border-emerald-800 text-emerald-400'
-                      : 'bg-slate-900 border-slate-800 text-slate-400'
+                      ? 'bg-[var(--accent-green)]/15 border-[var(--accent-green)]/40 accent-text font-semibold'
+                      : 'surface-bg border surface-border sidebar-text hover:text-[var(--foreground)]'
                   }`}
                 >
                   {notificationsEnabled ? <Bell className="w-4 h-4" /> : <BellOff className="w-4 h-4" />}
@@ -1794,15 +1794,15 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                   suppressHydrationWarning
                   className={`shrink-0 px-3 py-1.5 rounded-full font-medium border transition whitespace-nowrap ${
                     filterQueue === chip.key
-                      ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40 font-semibold'
-                      : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200'
+                      ? 'bg-[var(--accent-green)]/15 accent-text border-[var(--accent-green)]/40 font-semibold'
+                      : 'surface-bg sidebar-text surface-border hover:text-[var(--foreground)]'
                   }`}
                 >
                   {chip.label} <span className="tabular-nums opacity-70">{chip.count}</span>
                 </button>
               ))}
 
-              <span className="shrink-0 w-px h-5 bg-slate-800 mx-0.5" aria-hidden="true" />
+              <span className="shrink-0 w-px h-5 sidebar-border mx-0.5" aria-hidden="true" />
 
               {([
                 { key: 'whatsapp', label: 'WhatsApp', Icon: Phone },
@@ -1818,8 +1818,8 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                     aria-pressed={active}
                     className={`shrink-0 px-3 py-1.5 rounded-full font-medium border transition whitespace-nowrap flex items-center gap-1.5 ${
                       active
-                        ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40 font-semibold'
-                        : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200'
+                        ? 'bg-[var(--accent-green)]/15 accent-text border-[var(--accent-green)]/40 font-semibold'
+                        : 'surface-bg sidebar-text surface-border hover:text-[var(--foreground)]'
                     }`}
                   >
                     <Icon className="w-3 h-3" />
@@ -1905,8 +1905,8 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                 return (
                   <Fragment key={conv.id}>
                   {showDateHeader && (
-                    <div className="px-3.5 pt-3 pb-1.5 bg-[#0f172a] sticky top-0 z-10">
-                      <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">{dateLabel}</span>
+                    <div className="px-3.5 pt-3 pb-1.5 chat-sidebar-bg sticky top-0 z-10">
+                      <span className="text-[10px] font-semibold sidebar-text uppercase tracking-wider transition-colors duration-200">{dateLabel}</span>
                     </div>
                   )}
                   {/* Linha no formato que a vendedora já lê sem pensar: foto, nome, o que a
@@ -1923,7 +1923,7 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                       markRead(conv.id, conv.lastMessageAtIso)
                     }}
                     className={`px-3.5 py-3 cursor-pointer transition flex items-center gap-3 ${
-                      isSelected ? 'bg-slate-800/90 lg:border-l-4 lg:border-l-emerald-400' : 'hover:bg-slate-800/40 active:bg-slate-800/60'
+                      isSelected ? 'chat-selected lg:border-l-4 lg:border-l-[var(--primary)]' : 'chat-hover active:opacity-80'
                     }`}
                   >
                     <div className="relative shrink-0">
@@ -1947,7 +1947,7 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                         </h3>
                         <span
                           className={`text-[10px] shrink-0 tabular-nums ${
-                            unreadCount > 0 ? 'text-emerald-400 font-semibold' : 'text-slate-500'
+                            unreadCount > 0 ? 'accent-text font-semibold' : 'sidebar-text'
                           }`}
                         >
                           {conv.lastMessageTime}
@@ -1956,7 +1956,7 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                       <div className="flex items-center gap-2 mt-0.5">
                         <p
                           className={`text-xs truncate flex-1 ${
-                            unreadCount > 0 ? 'text-slate-200 font-medium' : 'text-slate-400'
+                            unreadCount > 0 ? 'text-[var(--foreground)] font-medium' : 'sidebar-text'
                           }`}
                         >
                           {conv.lastMessage}
@@ -1966,7 +1966,7 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                             depender só da bolinha deixaria a distinção invisível pra quem
                             não enxerga bem a diferença entre verde e cinza. */}
                         {unreadCount > 0 && (
-                          <span className="shrink-0 min-w-[20px] h-5 px-1.5 rounded-full bg-emerald-500 text-slate-950 text-[10px] font-bold flex items-center justify-center tabular-nums">
+                          <span className="shrink-0 min-w-[20px] h-5 px-1.5 rounded-full unread-badge-bg text-white text-[10px] font-bold flex items-center justify-center tabular-nums transition-colors duration-200">
                             {formatUnreadBadge(unreadCount)}
                             <span className="sr-only"> não lidas</span>
                           </span>
@@ -2014,11 +2014,11 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                 app declara statusBarStyle 'black-translucent' + viewport-fit=cover, sem esse
                 recuo ele sobe pra debaixo da barra de status do iPhone — e o botão de voltar
                 fica embaixo do relógio do sistema, onde o toque não chega nele. */}
-            <div className="px-2 pb-2 pt-[calc(0.5rem+var(--safe-top))] lg:px-3.5 lg:pb-3 lg:pt-3 border-b border-slate-800 bg-[#0f172a]/90 flex items-center gap-1.5 shrink-0">
+            <div className="px-2 pb-2 pt-[calc(0.5rem+var(--safe-top))] lg:px-3.5 lg:pb-3 lg:pt-3 border-b sidebar-border chat-header-bg flex items-center gap-1.5 shrink-0 transition-colors duration-200">
               <button
                 type="button"
                 onClick={() => setMobilePane('list')}
-                className="lg:hidden p-2 -mr-0.5 rounded-lg text-slate-300 hover:text-slate-100 hover:bg-slate-800 transition shrink-0"
+                className="lg:hidden p-2 -mr-0.5 rounded-lg sidebar-text surface-hover transition shrink-0"
                 aria-label="Voltar para a lista de conversas"
               >
                 <ArrowLeft className="w-5 h-5" />
@@ -2034,7 +2034,7 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                     setActiveTabRight('info')
                     setMobilePane('details')
                   }}
-                  className="shrink-0 rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+                  className="shrink-0 rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--primary)]"
                   aria-label={`Ver ficha de ${selectedConversation.contactName}`}
                 >
                   <Avatar name={selectedConversation.contactName} src={selectedConversation.contactAvatarUrl} size="md" />
@@ -2198,17 +2198,12 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                       )}
                     </div>
                     <div
-                      className={`p-3 rounded-2xl text-xs leading-relaxed ${
+                      className={`p-3 rounded-2xl text-xs leading-relaxed transition-colors duration-200 ${
                         isFailed
-                          ? 'bg-rose-950/50 text-rose-100 border border-rose-800/70 rounded-tr-none'
+                          ? 'bg-[var(--danger)]/10 text-[var(--danger)] border border-[var(--danger)]/30 rounded-tr-none'
                           : isMe
-                          // Verde escuro chapado, não degradê. Dois motivos: degradê de duas
-                          // cores é a marca registrada de maquete gerada por IA (foi o que
-                          // você pediu pra tirar do resto do app), e o texto tem 12px — sobre
-                          // emerald-600 o branco fica em ~3,5:1 de contraste, abaixo do
-                          // mínimo legível. Sobre emerald-800 passa de 7:1.
-                          ? 'bg-emerald-800 text-white rounded-tr-none shadow-sm'
-                          : 'bg-[#131f37] text-slate-200 border border-slate-700/80 rounded-tl-none'
+                          ? 'msg-out rounded-tr-none shadow-sm'
+                          : 'msg-in border surface-border rounded-tl-none'
                       }`}
                     >
                       {msg.mediaUrl && (
@@ -2510,7 +2505,7 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                   // enterKeyHint troca o ícone do teclado virtual (celular) pra combinar com
                   // o modo: "Enviar" quando Enter envia, seta de nova linha quando não envia.
                   enterKeyHint={enterToSend ? 'send' : 'enter'}
-                  className="flex-1 min-w-0 px-4 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-base lg:text-xs text-slate-100 focus:outline-none focus:border-emerald-500 resize-none leading-normal max-h-[120px] overflow-y-auto"
+                  className="flex-1 min-w-0 px-4 py-2.5 composer-input rounded-xl text-base lg:text-xs text-[var(--foreground)] focus:outline-none focus:border-[var(--primary)] resize-none leading-normal max-h-[120px] overflow-y-auto transition-colors duration-200"
                 />
                 {/* Igual ao WhatsApp: com o campo vazio o botão é o microfone; assim que
                     há texto, vira enviar. Economiza espaço numa barra que já tem clipe,
@@ -2704,7 +2699,7 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                         Pedidos deste cliente
                       </h3>
                       {realDeals.filter((d) => d.contact_id === selectedConversation.contactId).length === 0 ? (
-                        <p className="text-slate-500 text-xs bg-slate-900/80 border border-slate-800 rounded-xl p-3">
+                        <p className="sidebar-text text-xs surface-bg border surface-border rounded-xl p-3 transition-colors duration-200">
                           Nenhum pedido ainda. Se essa conversa virou venda, separa aqui embaixo — sem precisar ir até o Funil.
                         </p>
                       ) : (
@@ -2916,7 +2911,7 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
           />
         ))}
         {!selectedContactDeal && (
-          <p className="px-3 pt-2 text-[11px] text-slate-500 leading-relaxed">
+          <p className="px-3 pt-2 text-[11px] sidebar-text leading-relaxed transition-colors duration-200">
             Isso cria o pedido já nessa etapa, usando o nome do cliente como título. Dá pra
             ajustar título e valor depois, na aba Pedido ou no Funil.
           </p>

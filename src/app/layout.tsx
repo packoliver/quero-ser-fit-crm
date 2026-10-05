@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from 'next'
 import { Geist, Geist_Mono } from 'next/font/google'
 import './globals.css'
 import { ServiceWorkerRegistration } from '@/components/pwa/ServiceWorkerRegistration'
+import { ThemeProvider } from '@/components/layout/ThemeProvider'
 
 // Fonte self-hosted via next/font (sem custo de rede em runtime, otimizada no build) —
 // troca a stack de fontes do sistema por algo com mais identidade visual. font-sans e
@@ -51,9 +52,11 @@ export default function RootLayout({
   children: React.ReactNode
 }) {
   return (
-    <html lang="pt-BR" className="h-full antialiased dark">
-      <body className={`${geistSans.variable} ${geistMono.variable} min-h-full bg-[#0b1320] text-slate-100 font-sans antialiased`}>
-        {children}
+    <html lang="pt-BR" className="h-full antialiased" suppressHydrationWarning>
+      <body className={`${geistSans.variable} ${geistMono.variable} min-h-full bg-[var(--background)] text-[var(--foreground)] font-sans antialiased transition-colors duration-200`}>
+        <ThemeProvider>
+          {children}
+        </ThemeProvider>
         <ServiceWorkerRegistration />
       </body>
     </html>
