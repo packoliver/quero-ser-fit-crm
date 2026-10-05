@@ -520,10 +520,9 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
       setCurrentUserRealId(user?.id || null)
 
       const [convRes, noteRes, membersRes, dealsRes, stagesRes, myMembershipRes] = await Promise.all([
-        // Usando RPC SECURITY DEFINER para contornar problemas de permissão na view
-        // conversation_list_view quando acessada via PostgREST com chave anon + JWT.
-        // A função get_conversation_list_secure() executa com privilégios de postgres
-        // mas ainda respeita o isolamento de tenant via get_user_org_ids().
+        // RPC SECURITY INVOKER: auth.uid() resolve do JWT do caller, garantindo
+        // isolamento multi-tenant correto. A versão anterior (SECURITY DEFINER)
+        // retornava NULL para auth.uid(), causando Inbox vazio.
         (supabase as unknown as {
           rpc: (fn: string) => Promise<{ data: unknown[] | null; error: unknown }>
         }).rpc('get_conversation_list_secure'),
