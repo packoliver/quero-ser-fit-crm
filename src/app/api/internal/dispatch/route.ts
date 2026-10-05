@@ -1,51 +1,50 @@
 import { NextResponse } from 'next/server'
 import { processAgentTaskBatch } from '@/lib/ai/task-worker'
-import { getQueueHealth } from '@/lib/ai/task-queue'
 
 /**
- * POST /api/internal/dispatch — dispara o worker da fila de tarefas de IA.
- * Chamado por Vercel Cron (a cada 5 min) ou on-demand após eventos críticos.
- *
- * Autenticação: Vercel Cron envia `Authorization: Bearer <CRON_SECRET>`.
- * Também aceita x-internal-secret para chamadas manuais/on-demand.
+ * Autenticação compartilhada entre GET (Vercel Cron) e POST (manual).
+ * Vercel Cron envia `Authorization: Bearer <CRON_SECRET>`.
+ * Chamadas manuais podem usar `x-internal-secret` com INTERNAL_DISPATCH_SECRET.
+ * Em produção, se nenhum secret estiver configurado, rejeita sempre (fail-closed).
  */
-export async function POST(request: Request) {
+function authorizeRequest(request: Request): boolean {
+  const authHeader = request.headers.get('authorization')
+  const internalSecret = request.headers.get('x-internal-secret')
+  const cronSecret = process.env.CRON_SECRET
+  const dispatchSecret = process.env.INTERNAL_DISPATCH_SECRET
+
+  // Vercel Cron: Authorization: Bearer <CRON_SECRET>
+  if (cronSecret && authHeader === `Bearer ${cronSecret}`) return true
+
+  // Manual/on-demand: x-internal-secret header
+  if (dispatchSecret && internalSecret === dispatchSecret) return true
+
+  // Dev-only fail-open: apenas quando NENHUM secret está configurado E é development
+  if (!cronSecret && !dispatchSecret && process.env.NODE_ENV === 'development') return true
+
+  return false
+}
+
+/**
+ * GET /api/internal/dispatch — endpoint chamado pelo Vercel Cron.
+ * Processa um batch da fila de tarefas de IA e retorna o resumo.
+ * Autenticação obrigatória via CRON_SECRET em produção.
+ */
+export async function GET(request: Request) {
   const startTime = Date.now()
 
+  if (!authorizeRequest(request)) {
+    console.warn('[dispatch] Unauthorized GET access attempt')
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
   try {
-    // Autenticação: CRON_SECRET (Vercel) ou INTERNAL_DISPATCH_SECRET (manual)
-    const authHeader = request.headers.get('authorization')
-    const internalSecret = request.headers.get('x-internal-secret')
-    const cronSecret = process.env.CRON_SECRET
-    const dispatchSecret = process.env.INTERNAL_DISPATCH_SECRET
-
-    let authorized = false
-
-    // Vercel Cron: Authorization: Bearer <CRON_SECRET>
-    if (cronSecret && authHeader === `Bearer ${cronSecret}`) {
-      authorized = true
-    }
-    // Fallback manual: x-internal-secret header
-    if (!authorized && dispatchSecret && internalSecret === dispatchSecret) {
-      authorized = true
-    }
-    // Em desenvolvimento sem secrets configurados, permite acesso local
-    if (!authorized && !cronSecret && !dispatchSecret && process.env.NODE_ENV === 'development') {
-      authorized = true
-    }
-
-    if (!authorized) {
-      console.warn('[dispatch] Unauthorized access attempt')
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
-
     const result = await processAgentTaskBatch(5)
     const durationMs = Date.now() - startTime
 
-    // Logging estruturado para observabilidade
     if (result.processed > 0) {
       console.log(
-        `[dispatch] processed=${result.processed} completed=${result.completed} failed=${result.failed} duration_ms=${durationMs}`
+        `[dispatch:cron] processed=${result.processed} completed=${result.completed} failed=${result.failed} duration_ms=${durationMs}`
       )
     }
 
@@ -57,7 +56,7 @@ export async function POST(request: Request) {
     })
   } catch (err) {
     const durationMs = Date.now() - startTime
-    console.error(`[dispatch] Worker error after ${durationMs}ms:`, err)
+    console.error(`[dispatch:cron] Worker error after ${durationMs}ms:`, err)
     return NextResponse.json(
       { error: err instanceof Error ? err.message : 'Erro interno' },
       { status: 500 }
@@ -66,31 +65,40 @@ export async function POST(request: Request) {
 }
 
 /**
- * GET /api/internal/dispatch — health check da fila de tarefas.
- * Retorna contagens por status e idade da tarefa pendente mais antiga.
- * Útil para monitoramento e alertas.
+ * POST /api/internal/dispatch — dispatch manual/on-demand.
+ * Mesma lógica de processamento do GET, autenticação independente.
+ * Útil para disparar processamento imediato após eventos críticos.
  */
-export async function GET(request: Request) {
+export async function POST(request: Request) {
+  const startTime = Date.now()
+
+  if (!authorizeRequest(request)) {
+    console.warn('[dispatch] Unauthorized POST access attempt')
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
   try {
-    // Mesma autenticação do POST
-    const authHeader = request.headers.get('authorization')
-    const internalSecret = request.headers.get('x-internal-secret')
-    const cronSecret = process.env.CRON_SECRET
-    const dispatchSecret = process.env.INTERNAL_DISPATCH_SECRET
+    const result = await processAgentTaskBatch(5)
+    const durationMs = Date.now() - startTime
 
-    let authorized = false
-    if (cronSecret && authHeader === `Bearer ${cronSecret}`) authorized = true
-    if (!authorized && dispatchSecret && internalSecret === dispatchSecret) authorized = true
-    if (!authorized && !cronSecret && !dispatchSecret && process.env.NODE_ENV === 'development') authorized = true
-
-    if (!authorized) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    if (result.processed > 0) {
+      console.log(
+        `[dispatch:manual] processed=${result.processed} completed=${result.completed} failed=${result.failed} duration_ms=${durationMs}`
+      )
     }
 
-    const health = await getQueueHealth()
-    return NextResponse.json(health)
+    return NextResponse.json({
+      success: true,
+      ...result,
+      duration_ms: durationMs,
+      timestamp: new Date().toISOString(),
+    })
   } catch (err) {
-    console.error('[dispatch-health] Error:', err)
-    return NextResponse.json({ error: 'Failed to get queue health' }, { status: 500 })
+    const durationMs = Date.now() - startTime
+    console.error(`[dispatch:manual] Worker error after ${durationMs}ms:`, err)
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : 'Erro interno' },
+      { status: 500 }
+    )
   }
 }
