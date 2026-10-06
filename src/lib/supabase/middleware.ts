@@ -17,6 +17,9 @@ function comCookiesRotacionados(response: NextResponse, supabaseResponse: NextRe
 }
 
 export async function updateSession(request: NextRequest) {
+  // Estes handlers exigem a credencial de serviço; o executor da VPS não tem cookies de navegador.
+  if (['/api/internal/full-audit', '/api/internal/full-audit/control'].includes(request.nextUrl.pathname))
+    return NextResponse.next({ request })
   let supabaseResponse = NextResponse.next({
     request,
   })

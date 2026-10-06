@@ -691,6 +691,139 @@ export interface Database {
           updated_at?: string
         }
       }
+      commercial_signals: {
+        Row: {
+          id: string
+          organization_id: string
+          conversation_id: string
+          message_id: string | null
+          deal_id: string | null
+          signal_type: CommercialSignalType
+          signal_value: string | null
+          metadata: Json
+          confidence: number
+          source: 'ai_analysis' | 'manual' | 'rule'
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          organization_id: string
+          conversation_id: string
+          message_id?: string | null
+          deal_id?: string | null
+          signal_type: CommercialSignalType
+          signal_value?: string | null
+          metadata?: Json
+          confidence?: number
+          source?: 'ai_analysis' | 'manual' | 'rule'
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          organization_id?: string
+          conversation_id?: string
+          message_id?: string | null
+          deal_id?: string | null
+          signal_type?: CommercialSignalType
+          signal_value?: string | null
+          metadata?: Json
+          confidence?: number
+          source?: 'ai_analysis' | 'manual' | 'rule'
+          created_at?: string
+        }
+      }
+      ai_conversation_insights: {
+        Row: {
+          id: string
+          organization_id: string
+          conversation_id: string
+          deal_id: string | null
+          status: 'ok' | 'atencao' | 'risco'
+          signals: Json
+          summary: string | null
+          outcome: 'aberta' | 'ganha' | 'perdida'
+          outcome_reason: string | null
+          last_analyzed_message_id: string | null
+          last_analyzed_at: string | null
+          commercial_state: Json
+          lead_score: number | null
+          next_best_action: string | null
+          signals_extracted_at: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          organization_id: string
+          conversation_id: string
+          deal_id?: string | null
+          status?: 'ok' | 'atencao' | 'risco'
+          signals?: Json
+          summary?: string | null
+          outcome?: 'aberta' | 'ganha' | 'perdida'
+          outcome_reason?: string | null
+          last_analyzed_message_id?: string | null
+          last_analyzed_at?: string | null
+          commercial_state?: Json
+          lead_score?: number | null
+          next_best_action?: string | null
+          signals_extracted_at?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          organization_id?: string
+          conversation_id?: string
+          deal_id?: string | null
+          status?: 'ok' | 'atencao' | 'risco'
+          signals?: Json
+          summary?: string | null
+          outcome?: 'aberta' | 'ganha' | 'perdida'
+          outcome_reason?: string | null
+          last_analyzed_message_id?: string | null
+          last_analyzed_at?: string | null
+          commercial_state?: Json
+          lead_score?: number | null
+          next_best_action?: string | null
+          signals_extracted_at?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+      }
     }
   }
 }
+
+export type CommercialSignalType =
+  | 'PRODUCT_INTEREST'
+  | 'PRICE_ASKED'
+  | 'SIZE_SELECTED'
+  | 'COLOR_SELECTED'
+  | 'AVAILABILITY_ASKED'
+  | 'SHIPPING_ASKED'
+  | 'DELIVERY_DEADLINE_ASKED'
+  | 'ADDRESS_PROVIDED'
+  | 'DISCOUNT_ASKED'
+  | 'OBJECTION_PRICE'
+  | 'OBJECTION_SHIPPING'
+  | 'OBJECTION_DEADLINE'
+  | 'OBJECTION_PRODUCT'
+  | 'PIX_REQUESTED'
+  | 'PIX_KEY_SENT'
+  | 'PAYMENT_EVIDENCE_RECEIVED'
+  | 'PAYMENT_CONFIRMED'
+  | 'PAYMENT_ON_DELIVERY'
+  | 'MOTOBOY_CONFIRMED'
+  | 'PICKUP_CONFIRMED'
+  | 'CANCELLATION_REQUESTED'
+  | 'REFUND_REQUESTED'
+  | 'URGENCY_EXPRESSED'
+  | 'BUDGET_STATED'
+  | 'COMPETITOR_MENTIONED'
+  | 'TESTIMONIAL_SHARED'
+  | 'FOLLOW_UP_SCHEDULED'
+  | 'WAITING_CUSTOMER_REPLY'
+  | 'WAITING_ATTENDANT_REPLY'
+  | 'ESCALATION_NEEDED'
+  | 'NO_REAL_PURCHASE_INTENT'

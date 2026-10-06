@@ -53,7 +53,8 @@ export default function AiConfigPage() {
   }, [])
 
   useEffect(() => {
-    void fetchConfig()
+    const timer = setTimeout(() => void fetchConfig(), 0)
+    return () => clearTimeout(timer)
   }, [fetchConfig])
 
   const handleSave = async () => {

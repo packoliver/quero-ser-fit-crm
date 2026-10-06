@@ -10,6 +10,8 @@ import { Select } from '@/components/ui/Select'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { createClient } from '@/lib/supabase/client'
 import { useCurrentUser } from '@/components/layout/CurrentUserProvider'
+import { AuditPanel } from '@/components/insights/AuditPanel'
+import { groupLossReasons, isInInsightPeriod } from '@/lib/ai/insight-view'
 
 interface InsightRow {
   id: string
@@ -21,6 +23,8 @@ interface InsightRow {
   outcome: 'aberta' | 'ganha' | 'perdida'
   outcomeReason: string | null
   lastAnalyzedAt: string | null
+  lastMessageAt: string | null
+  channelType: string
   contactName: string
   contactPhone: string | null
   dealTitle: string | null
@@ -43,7 +47,7 @@ interface QaHistoryRow {
   askedByName: string | null
 }
 
-type PeriodFilter = 'all' | '7' | '30' | '90'
+type PeriodFilter = 'all' | `${number}`
 type StatusFilter = 'all' | 'atencao' | 'risco'
 type TabKey = 'attention' | 'won' | 'lost' | 'history'
 const PAGE_SIZE = 20
@@ -210,122 +214,20 @@ export default function InsightsPage() {
     }
   }, [])
 
-  const fetchInsights = useCallback(async () => {
-    setLoading(true)
+  const fetchInsights = useCallback(async (quiet = false) => {
+    if (!quiet) setLoading(true)
     setError(null)
     try {
-      const supabase = createClient()
-      const typed = supabase as unknown as {
-        auth: { getUser: () => Promise<{ data: { user: { id: string } | null } }> }
-        from: (table: string) => {
-          select: (columns: string) => {
-            eq: (
-              column: string,
-              value: string
-            ) => {
-              limit: (n: number) => { maybeSingle: () => Promise<{ data: { organization_id: string } | null }> }
-              order: (column: string, opts: { ascending: boolean }) => Promise<{ data: unknown[] | null; error: { message: string } | null }>
-            }
-            in: (column: string, values: string[]) => Promise<{ data: unknown[] | null }>
-          }
-        }
-      }
-
-      const { data: userData } = await typed.auth.getUser()
-      if (!userData.user) {
-        setError('Não autenticado.')
-        setLoading(false)
-        return
-      }
-
-      const { data: member } = await typed
-        .from('organization_members')
-        .select('organization_id')
-        .eq('user_id', userData.user.id)
-        .limit(1)
-        .maybeSingle()
-
-      if (!member) {
-        setError('Organização não encontrada.')
-        setLoading(false)
-        return
-      }
-
-      const { data: insightRows, error: insightError } = await typed
-        .from('ai_conversation_insights')
-        .select(
-          'id, conversation_id, deal_id, status, signals, summary, outcome, outcome_reason, last_analyzed_at, conversations!inner(contact_id, contacts!inner(name, phone))'
-        )
-        .eq('organization_id', member.organization_id)
-        .order('last_analyzed_at', { ascending: false })
-
-      if (insightError) {
-        setError('Não foi possível carregar os insights.')
-        setLoading(false)
-        return
-      }
-
-      type RawInsightRow = {
-        id: string
-        conversation_id: string
-        deal_id: string | null
-        status: InsightRow['status']
-        signals: unknown
-        summary: string | null
-        outcome: InsightRow['outcome']
-        outcome_reason: string | null
-        last_analyzed_at: string | null
-        conversations: { contact_id: string; contacts: { name: string; phone: string | null } } | null
-      }
-      const raw = (insightRows || []) as unknown as RawInsightRow[]
-
-      const dealIds = [...new Set(raw.map((r) => r.deal_id).filter((id): id is string => !!id))]
-      let dealsById: Record<string, { title: string; value: number | null; assigned_to_id: string | null }> = {}
-      let sellerNameById: Record<string, string> = {}
-
-      if (dealIds.length > 0) {
-        const { data: deals } = await typed.from('deals').select('id, title, value, assigned_to_id').in('id', dealIds)
-        const dealRows = (deals || []) as { id: string; title: string; value: number | null; assigned_to_id: string | null }[]
-        dealsById = Object.fromEntries(dealRows.map((d) => [d.id, d]))
-
-        const sellerIds = [...new Set(dealRows.map((d) => d.assigned_to_id).filter((id): id is string => !!id))]
-        if (sellerIds.length > 0) {
-          const { data: profiles } = await typed.from('profiles').select('id, full_name').in('id', sellerIds)
-          const profileRows = (profiles || []) as { id: string; full_name: string }[]
-          sellerNameById = Object.fromEntries(profileRows.map((p) => [p.id, p.full_name]))
-        }
-      }
-
-      const mapped: InsightRow[] = raw
-        .filter((r) => r.conversations?.contacts)
-        .map((r) => {
-          const deal = r.deal_id ? dealsById[r.deal_id] : undefined
-          return {
-            id: r.id,
-            conversationId: r.conversation_id,
-            dealId: r.deal_id,
-            status: r.status,
-            signals: Array.isArray(r.signals) ? (r.signals as string[]) : [],
-            summary: r.summary,
-            outcome: r.outcome,
-            outcomeReason: r.outcome_reason,
-            lastAnalyzedAt: r.last_analyzed_at,
-            contactName: r.conversations!.contacts.name,
-            contactPhone: r.conversations!.contacts.phone,
-            dealTitle: deal?.title ?? null,
-            dealValue: deal?.value ?? null,
-            sellerName: deal?.assigned_to_id ? sellerNameById[deal.assigned_to_id] ?? null : null,
-          }
-        })
-
-      setRows(mapped)
+      const response = await fetch('/api/ai/insights', { cache: 'no-store' })
+      const data = await response.json() as { rows?: InsightRow[]; error?: string }
+      if (!response.ok || !data.rows) throw new Error(data.error || 'Não foi possível carregar os indicadores.')
+      setRows(data.rows)
       setAsOf(Date.now())
     } catch {
-      setError('Erro de conexão ao carregar insights.')
-    } finally {
-      setLoading(false)
-    }
+      setError('Não foi possível atualizar os indicadores. Tente novamente.')
+    } finally { if (!quiet) setLoading(false) }
   }, [])
+  const refreshAuditInsights = useCallback(() => { void fetchInsights(true) }, [fetchInsights])
 
   // Analisa o histórico: conversas que já existiam antes desta feature entrar no ar nunca
   // passam pela IA sozinhas (o monitoramento normal só reage a mensagem NOVA a partir de
@@ -381,22 +283,25 @@ export default function InsightsPage() {
         const response = await fetch('/api/ai/ask-insights', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ question: q }),
+          body: JSON.stringify({ question: q, periodDays: period === 'all' ? null : Number(period) }),
         })
-        const data = (await response.json()) as { answer?: string; consideredCount?: number; error?: string }
+        const data = (await response.json()) as { answer?: string; consideredCount?: number; periodDays?: number | null; error?: string }
         if (!response.ok || !data.answer) {
           setQaError(data.error || 'Não foi possível responder agora.')
           return
         }
         setQaHistory((prev) => [{ question: q, answer: data.answer!, consideredCount: data.consideredCount ?? 0 }, ...prev])
         setQuestion('')
+        setPeriod(data.periodDays ? `${data.periodDays}` : 'all')
+        setSeller('all'); setStatusFilter('all'); setVisibleCount(PAGE_SIZE)
+        await fetchInsights(true)
       } catch {
         setQaError('Erro de conexão.')
       } finally {
         setAsking(false)
       }
     },
-    [question, asking]
+    [question, asking, period, fetchInsights]
   )
 
   useEffect(() => {
@@ -418,14 +323,11 @@ export default function InsightsPage() {
     // input tem que dar o mesmo resultado. asOf é fixado no momento da busca (ver
     // setAsOf junto de setRows lá em cima) — filtrar por período não precisa de um
     // relógio batendo em tempo real, só de um instante de referência estável.
-    const periodMs = period === 'all' ? null : Number(period) * 24 * 60 * 60 * 1000
+    const periodDays = period === 'all' ? null : Number(period)
     return rows.filter((r) => {
       if (seller !== 'all' && r.sellerName !== seller) return false
       if (statusFilter !== 'all' && r.status !== statusFilter) return false
-      if (periodMs !== null) {
-        if (!r.lastAnalyzedAt) return false
-        if (asOf - new Date(r.lastAnalyzedAt).getTime() > periodMs) return false
-      }
+      if (!isInInsightPeriod(r.lastMessageAt, periodDays, asOf)) return false
       return true
     })
   }, [rows, seller, statusFilter, period, asOf])
@@ -436,14 +338,7 @@ export default function InsightsPage() {
   const activeList = activeTab === 'attention' ? attention : activeTab === 'won' ? won : activeTab === 'lost' ? lost : []
   const visibleRows = activeList.slice(0, visibleCount)
 
-  const topLossReasons = useMemo(() => {
-    const counts = new Map<string, number>()
-    for (const r of lost) {
-      if (!r.outcomeReason) continue
-      counts.set(r.outcomeReason, (counts.get(r.outcomeReason) || 0) + 1)
-    }
-    return [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5)
-  }, [lost])
+  const topLossReasons = useMemo(() => groupLossReasons(lost), [lost])
 
   if (!allowed) {
     return (
@@ -481,11 +376,14 @@ export default function InsightsPage() {
         </div>
       </div>
 
+      {allowed && <AuditPanel rows={rows} onProgress={refreshAuditInsights} />}
+      {allowed && <p className="text-xs text-slate-400">Os indicadores abaixo usam as análises já salvas no CRM e podem incluir análises anteriores enquanto a auditoria avança. Para os cinco desfechos e a cobertura verificada, consulte o placar forense no relatório acima.</p>}
+
       {backfilling && backfillProgress && (
         <div className="p-3 rounded-xl bg-emerald-950/30 border border-emerald-800/40 text-emerald-300 text-xs flex items-center gap-3">
           <Loader2 className="w-4 h-4 shrink-0 animate-spin" />
           <span>
-            Analisando o histórico… {backfillProgress.examined} conversas examinadas, {backfillProgress.analyzed} analisadas pela IA até
+            Analisando o histórico… {backfillProgress.examined} conversas examinadas, {backfillProgress.analyzed} enviadas para análise até
             agora. Pode deixar a tela aberta ou navegar — se fechar no meio, um novo clique continua de onde parou.
           </span>
         </div>
@@ -517,7 +415,7 @@ export default function InsightsPage() {
           <Card>
             <CardHeader className="flex items-center gap-2">
               <Sparkles className="w-4 h-4 text-emerald-400" />
-              <h2 className="text-xs font-bold text-slate-200 uppercase tracking-wider">Pergunte à IA sobre as conversas</h2>
+              <h2 className="text-xs font-bold text-slate-200 uppercase tracking-wider">Pergunte sobre os indicadores salvos</h2>
             </CardHeader>
             <CardBody className="space-y-3">
               {/* Só pra deixar claro o que essa barra é boa (e não é) — a IA lê texto, não
@@ -552,6 +450,7 @@ export default function InsightsPage() {
                   Perguntar
                 </Button>
               </form>
+              {asking && <p className="text-xs text-slate-400" role="status">Analisando as conversas. Relatórios maiores podem levar até 2 minutos.</p>}
               {qaError && <p className="text-xs text-rose-400">{qaError}</p>}
               {qaHistory.length > 0 && (
                 <div className="space-y-4 pt-1">
@@ -559,7 +458,7 @@ export default function InsightsPage() {
                     <div key={i} className="space-y-1 border-t border-slate-800 pt-3 first:border-t-0 first:pt-0">
                       <p className="text-xs font-semibold text-slate-200">{qa.question}</p>
                       <p className="text-xs text-slate-400 leading-relaxed whitespace-pre-wrap">{qa.answer}</p>
-                      <p className="text-[10px] text-slate-600">baseado em {qa.consideredCount} conversa(s) analisada(s)</p>
+                      <p className="text-[10px] text-slate-600">baseado em {qa.consideredCount} análise(s) salva(s) no CRM</p>
                     </div>
                   ))}
                 </div>
@@ -580,6 +479,7 @@ export default function InsightsPage() {
                 { value: '7', label: 'Últimos 7 dias' },
                 { value: '30', label: 'Últimos 30 dias' },
                 { value: '90', label: 'Últimos 90 dias' },
+                ...(!['all', '7', '30', '90'].includes(period) ? [{ value: period, label: `Últimos ${period} dias` }] : []),
               ]}
             />
             {sellers.length > 0 && (
@@ -629,7 +529,7 @@ export default function InsightsPage() {
             </Card>
             <Card>
               <CardBody className="space-y-1">
-                <p className="text-[11px] text-slate-400 uppercase tracking-wide">Analisadas</p>
+                <p className="text-[11px] text-slate-400 uppercase tracking-wide">Análises salvas</p>
                 <p className="text-2xl font-bold text-slate-200">{filtered.length}</p>
               </CardBody>
             </Card>
@@ -830,7 +730,7 @@ function QaHistorySection({
             <p className="text-xs text-slate-400 mt-2 leading-relaxed whitespace-pre-wrap">{r.answer}</p>
             <p className="text-[10px] text-slate-600 mt-2">
               {r.askedByName ? `${r.askedByName} · ` : 'via terminal · '}
-              baseado em {r.consideredCount} conversa(s) analisada(s)
+              baseado em {r.consideredCount} análise(s) salva(s) no CRM
             </p>
           </div>
         ))}

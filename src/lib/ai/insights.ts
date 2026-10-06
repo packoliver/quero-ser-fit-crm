@@ -72,6 +72,7 @@ async function runAnalysis(admin: AdminClient, params: ScheduleAnalysisParams): 
   if (rows.length === 0) return
 
   const result = await analyzeConversation({
+    organizationId,
     transcript: buildTranscript(rows),
     knownOutcome: finalize ? knownOutcome ?? null : null,
   })
@@ -108,7 +109,7 @@ async function runAnalysis(admin: AdminClient, params: ScheduleAnalysisParams): 
  * A análise real será processada pelo worker via /api/internal/dispatch.
  */
 export async function scheduleConversationAnalysis(admin: AdminClient, params: ScheduleAnalysisParams): Promise<void> {
-  if (!(await isAiConfigured())) return
+  if (!(await isAiConfigured(params.organizationId))) return
   try {
     // Busca mensagens recentes para construir o transcript inicial da tarefa
     const { data: messages } = await admin
@@ -196,8 +197,17 @@ function buildQaContext(
 }
 
 export type QaResult =
-  | { ok: true; answer: string; consideredCount: number }
+  | { ok: true; answer: string; consideredCount: number; periodDays: number | null }
   | { ok: false; reason: 'not_configured' | 'no_data' | 'gateway_failed' }
+
+function resolveQaDateWindow(question: string, now = Date.now()): { from: string; to: string; days: number } | null {
+  const normalized = question.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+  const match = normalized.match(/\bultimos?\s+(\d{1,3})\s+dias?\b/)
+  if (!match) return null
+  const days = Number(match[1])
+  if (days < 1 || days > 365) return null
+  return { from: new Date(now - days * 86_400_000).toISOString(), to: new Date(now).toISOString(), days }
+}
 
 /**
  * Responde uma pergunta livre (ex: "quantas vendas fechamos essa semana?") com base em
@@ -207,8 +217,8 @@ export type QaResult =
  * configurada" e "gateway não respondeu" pareciam o mesmo erro genérico pra quem via a
  * mensagem na tela, tornando impossível saber qual dos dois estava acontecendo de verdade.
  */
-export async function answerQuestionAboutInsights(admin: AdminClient, organizationId: string, question: string): Promise<QaResult> {
-  if (!(await isAiConfigured())) return { ok: false, reason: 'not_configured' }
+export async function answerQuestionAboutInsights(admin: AdminClient, organizationId: string, question: string, selectedDays: number | null = null): Promise<QaResult> {
+  if (!(await isAiConfigured(organizationId))) return { ok: false, reason: 'not_configured' }
 
   // Ordena por ATIVIDADE DA CONVERSA (last_message_at), não por quando a IA analisou
   // (last_analyzed_at) — os dois divergem bastante logo depois de um backfill, porque ele
@@ -216,10 +226,19 @@ export async function answerQuestionAboutInsights(admin: AdminClient, organizati
   // cada conversa em si. Ordenar pelo campo errado já deixou de fora, sem avisar, um trecho
   // inteiro do meio do histórico (perguntas por período, tipo "últimos 30 dias", vinham
   // com um recorte de datas menor e errado).
-  const { data: recentConversations } = await admin
+  const window = resolveQaDateWindow(question) ?? (selectedDays && selectedDays >= 1 && selectedDays <= 365 ? {
+    from: new Date(Date.now() - selectedDays * 86_400_000).toISOString(), to: new Date().toISOString(), days: selectedDays,
+  } : null)
+  let conversationQuery = admin
     .from('conversations')
     .select('id, contact_id, last_message_at')
     .eq('organization_id', organizationId)
+
+  if (window) {
+    conversationQuery = conversationQuery.gte('last_message_at', window.from).lte('last_message_at', window.to)
+  }
+
+  const { data: recentConversations } = await conversationQuery
     .order('last_message_at', { ascending: false })
     .limit(MAX_QA_CONTEXT_ROWS)
 
@@ -269,11 +288,22 @@ export async function answerQuestionAboutInsights(admin: AdminClient, organizati
     deals.map((d) => [d.id, d.assigned_to_id ? sellerNameById.get(d.assigned_to_id) || '' : ''])
   )
 
-  const context = buildQaContext(rows, contactNameByConversation, sellerNameByDeal, lastMessageAtByConversation)
-  const answer = await askQuestion({ context, question })
+  const totals = {
+    ganhas: rows.filter((row) => row.outcome === 'ganha').length,
+    perdidas: rows.filter((row) => row.outcome === 'perdida').length,
+    abertas: rows.filter((row) => row.outcome === 'aberta').length,
+    atencao: rows.filter((row) => row.status === 'atencao').length,
+    risco: rows.filter((row) => row.status === 'risco').length,
+    precisamDeAtencao: rows.filter((row) => row.outcome === 'aberta' && ['atencao', 'risco'].includes(row.status)).length,
+  }
+  const scope = window
+    ? `Período: últimos ${window.days} dias, de ${window.from} até ${window.to}, pela última mensagem da conversa.`
+    : 'Período: conversas mais recentes disponíveis, pela última mensagem.'
+  const context = `${scope}\nTotais calculados das ${rows.length} conversas já analisadas incluídas: ${JSON.stringify(totals)}.\n${buildQaContext(rows, contactNameByConversation, sellerNameByDeal, lastMessageAtByConversation)}`
+  const answer = await askQuestion({ organizationId, context, question })
   if (!answer) return { ok: false, reason: 'gateway_failed' }
 
-  return { ok: true, answer, consideredCount: rows.length }
+  return { ok: true, answer, consideredCount: rows.length, periodDays: window?.days ?? null }
 }
 
 /**
@@ -301,4 +331,4 @@ export async function saveQaHistory(
 }
 
 // Exportado só pra teste.
-export const __testing = { buildTranscript, buildQaContext, fetchInChunks, ID_FILTER_CHUNK_SIZE }
+export const __testing = { buildTranscript, buildQaContext, fetchInChunks, ID_FILTER_CHUNK_SIZE, resolveQaDateWindow }

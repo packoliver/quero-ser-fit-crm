@@ -1,6 +1,6 @@
 'use client'
 
-import { createContext, useContext, useEffect, useState, useCallback } from 'react'
+import { createContext, useContext, useEffect, useState, useCallback, useSyncExternalStore } from 'react'
 
 type Theme = 'light' | 'dark' | 'system'
 
@@ -20,45 +20,33 @@ function getSystemTheme(): 'light' | 'dark' {
   return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
 }
 
+function subscribeToSystemTheme(onChange: () => void) {
+  const mq = window.matchMedia('(prefers-color-scheme: dark)')
+  mq.addEventListener('change', onChange)
+  return () => mq.removeEventListener('change', onChange)
+}
+
+const getServerTheme = () => 'dark' as const
+
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [theme, setThemeState] = useState<Theme>(() => {
     if (typeof window === 'undefined') return 'dark'
     return (localStorage.getItem(STORAGE_KEY) as Theme) || 'dark'
   })
-  const [resolvedTheme, setResolvedTheme] = useState<'light' | 'dark'>('dark')
+  const systemTheme = useSyncExternalStore(subscribeToSystemTheme, getSystemTheme, getServerTheme)
+  const resolvedTheme = theme === 'system' ? systemTheme : theme
 
   // Resolve and apply theme to <html> element
   useEffect(() => {
-    const resolved = theme === 'system' ? getSystemTheme() : theme
-    setResolvedTheme(resolved)
-
     const root = document.documentElement
-    if (resolved === 'dark') {
+    if (resolvedTheme === 'dark') {
       root.classList.add('dark')
     } else {
       root.classList.remove('dark')
     }
 
     localStorage.setItem(STORAGE_KEY, theme)
-  }, [theme])
-
-  // Listen for system theme changes when in 'system' mode
-  useEffect(() => {
-    if (theme !== 'system') return
-    const mq = window.matchMedia('(prefers-color-scheme: dark)')
-    const handler = () => {
-      const resolved = getSystemTheme()
-      setResolvedTheme(resolved)
-      const root = document.documentElement
-      if (resolved === 'dark') {
-        root.classList.add('dark')
-      } else {
-        root.classList.remove('dark')
-      }
-    }
-    mq.addEventListener('change', handler)
-    return () => mq.removeEventListener('change', handler)
-  }, [theme])
+  }, [theme, resolvedTheme])
 
   const setTheme = useCallback((t: Theme) => setThemeState(t), [])
   const toggleTheme = useCallback(() => {

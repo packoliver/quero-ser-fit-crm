@@ -8,9 +8,9 @@ import {
 import { UserRole } from '@/types/database'
 
 describe('Navegação e Permissões de Menu por Perfil (Fase 2)', () => {
-  it('deve retornar todas as 15 opções de menu para o perfil Administrador', () => {
+  it('deve retornar todas as 16 opções de menu para o perfil Administrador', () => {
     const adminNav = getNavItemsForRole('admin')
-    expect(adminNav.length).toBe(15)
+    expect(adminNav.length).toBe(16)
 
     const labels = adminNav.map((n) => n.label)
     expect(labels).toContain('Conversas')
@@ -22,6 +22,7 @@ describe('Navegação e Permissões de Menu por Perfil (Fase 2)', () => {
     expect(labels).toContain('Respostas Rápidas')
     expect(labels).toContain('Preferências')
     expect(labels).toContain('Insights')
+    expect(labels).toContain('IA (Insights)')
     expect(labels).toContain('Automações')
     expect(labels).toContain('Etapas do Funil')
     expect(labels).toContain('Equipe')

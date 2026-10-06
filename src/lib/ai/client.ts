@@ -6,7 +6,7 @@ import { decryptToken } from '@/lib/security/encryption'
 // Cache simples pra evitar buscar a config da org em toda chamada de análise
 // (a análise roda a cada mensagem trocada). TTL curto (5 min) garante que
 // mudanças no painel admin sejam refletidas rapidamente sem sobrecarregar o banco.
-let orgAiConfigCache: { url: string | null; key: string | null; model: string | null; ts: number } | null = null
+let orgAiConfigCache: { organizationId: string; url: string | null; key: string | null; model: string | null; ts: number } | null = null
 const ORG_AI_CACHE_TTL_MS = 5 * 60 * 1000
 
 /**
@@ -14,7 +14,7 @@ const ORG_AI_CACHE_TTL_MS = 5 * 60 * 1000
  * para as env vars globais (OMNIROUTE_*). Prioridade: org > env var > null.
  * A API key é descriptografada aqui (server-side only) — nunca trafega pro browser.
  */
-async function getOrgAiConfig(): Promise<{ baseUrl: string | null; apiKey: string | null; model: string | null }> {
+async function getOrgAiConfig(organizationId: string): Promise<{ baseUrl: string | null; apiKey: string | null; model: string | null }> {
   const env = getServerEnv()
   const fallback = {
     baseUrl: env.OMNIROUTE_BASE_URL || null,
@@ -26,7 +26,7 @@ async function getOrgAiConfig(): Promise<{ baseUrl: string | null; apiKey: strin
   if (!env.NEXT_PUBLIC_SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) return fallback
 
   // Cache hit
-  if (orgAiConfigCache && Date.now() - orgAiConfigCache.ts < ORG_AI_CACHE_TTL_MS) {
+  if (orgAiConfigCache?.organizationId === organizationId && Date.now() - orgAiConfigCache.ts < ORG_AI_CACHE_TTL_MS) {
     return {
       baseUrl: orgAiConfigCache.url ?? fallback.baseUrl,
       apiKey: orgAiConfigCache.key ?? fallback.apiKey,
@@ -39,7 +39,7 @@ async function getOrgAiConfig(): Promise<{ baseUrl: string | null; apiKey: strin
     const { data, error } = await supabase
       .from('organizations')
       .select('ai_gateway_url, ai_gateway_api_key_encrypted, ai_gateway_model')
-      .limit(1)
+      .eq('id', organizationId)
       .maybeSingle()
 
     if (error || !data) return fallback
@@ -54,6 +54,7 @@ async function getOrgAiConfig(): Promise<{ baseUrl: string | null; apiKey: strin
     }
 
     orgAiConfigCache = {
+      organizationId,
       url: data.ai_gateway_url,
       key: decryptedKey,
       model: data.ai_gateway_model,
@@ -106,19 +107,15 @@ const DEFAULT_MODEL = 'auto/cheap'
 // atrasaria quando o resultado aparece na tela de Insights.
 const TIMEOUT_MS = 15_000
 
-// A pergunta livre ("Pergunte à IA") manda um contexto bem maior (até 400 conversas
-// resumidas) do que a análise de uma conversa só — o modelo demora mais pra processar isso
-// e responder. 15s se mostrou curto demais na prática (erro "gateway não respondeu" com a
-// variável corretamente configurada e o gateway saudável, confirmado por fora). Aqui a
-// pessoa já está esperando na tela (loading visível), então vale segurar mais antes de
-// desistir — 45s deixa folga sob o maxDuration=60 da rota (ver ask-insights/route.ts).
-const QA_TIMEOUT_MS = 45_000
+// Relatórios sobre centenas de conversas podem levar mais de 45s no provedor.
+// Mantém margem abaixo dos 120s do proxy e dos 150s da rota da Vercel.
+const QA_TIMEOUT_MS = 115_000
 
 /** Sem gateway configurado (nem na org nem nas env vars), a feature de Insights fica
  * desligada de propósito — nada no resto do CRM depende disso pra funcionar
  * (ver src/lib/ai/insights.ts). Assíncrona porque lê config da org do banco. */
-export async function isAiConfigured(): Promise<boolean> {
-  const cfg = await getOrgAiConfig()
+export async function isAiConfigured(organizationId: string): Promise<boolean> {
+  const cfg = await getOrgAiConfig(organizationId)
   return !!cfg.baseUrl
 }
 
@@ -248,13 +245,15 @@ interface ChatCompletionsResponse {
  * mensagem nem a sincronização de um pedido.
  */
 export async function analyzeConversation({
+  organizationId,
   transcript,
   knownOutcome,
 }: {
+  organizationId: string
   transcript: string
   knownOutcome: 'ganha' | 'perdida' | null
 }): Promise<ConversationAnalysis | null> {
-  const cfg = await getOrgAiConfig()
+  const cfg = await getOrgAiConfig(organizationId)
   if (!cfg.baseUrl || !transcript.trim()) return null
 
   try {
@@ -305,6 +304,8 @@ PERGUNTA: ${question}
 
 Responda em português, de forma direta e objetiva, citando números quando fizer sentido (quantidades, percentuais). Baseie-se SOMENTE nos dados acima — se a pergunta não puder ser respondida com eles, diga isso claramente em vez de inventar uma resposta.
 
+Se a pessoa pedir uma análise ou relatório, apresente a análise agora com os dados disponíveis, em até 8 parágrafos curtos. Não se limite a confirmar que pode fazer isso. Os dados são resumos de conversas já analisadas, não transcrições completas; não afirme ter lido mensagens que não estão nos dados. Use os totais calculados quando estiverem disponíveis.
+
 Responda em TEXTO SIMPLES, sem nenhum símbolo de markdown — nada de **negrito**, # títulos, \`código\` ou listas com * ou -. Quem lê essa resposta está numa tela que mostra texto puro, então esses símbolos apareceriam literalmente e ficariam feios. Se precisar organizar em itens, numere com "1.", "2." etc, cada um em uma linha nova, sem nenhuma outra formatação.`
 }
 
@@ -315,15 +316,17 @@ Responda em TEXTO SIMPLES, sem nenhum símbolo de markdown — nada de **negrito
  * salvar no banco). Mesma postura de falha das outras funções deste arquivo: null em
  * qualquer problema, nunca lança.
  */
-export async function askQuestion({ context, question }: { context: string; question: string }): Promise<string | null> {
-  const cfg = await getOrgAiConfig()
+export async function askQuestion({ organizationId, context, question }: { organizationId: string; context: string; question: string }): Promise<string | null> {
+  const cfg = await getOrgAiConfig(organizationId)
   if (!cfg.baseUrl || !question.trim() || !context.trim()) return null
 
+  const controller = new AbortController()
   try {
     const baseUrl = cfg.baseUrl.replace(/\/+$/, '')
-    const response = await withTimeout(
-      fetch(`${baseUrl}/chat/completions`, {
+    return await withTimeout((async () => {
+      const response = await fetch(`${baseUrl}/chat/completions`, {
         method: 'POST',
+        signal: controller.signal,
         headers: {
           'Content-Type': 'application/json',
           ...(cfg.apiKey ? { Authorization: `Bearer ${cfg.apiKey}` } : {}),
@@ -333,22 +336,111 @@ export async function askQuestion({ context, question }: { context: string; ques
           messages: [{ role: 'user', content: buildQaPrompt(context, question) }],
           temperature: 0.3,
         }),
-      }),
-      QA_TIMEOUT_MS
-    )
+      })
 
-    if (!response.ok) {
-      console.error('[ai] Gateway respondeu com erro (pergunta livre):', response.status, await response.text().catch(() => ''))
-      return null
-    }
+      if (!response.ok) {
+        console.error('[ai] Gateway respondeu com erro (pergunta livre):', response.status, await response.text().catch(() => ''))
+        return null
+      }
 
-    const data = (await response.json()) as ChatCompletionsResponse
-    const raw = data.choices?.[0]?.message?.content
-    return raw ? raw.trim() : null
+      const data = (await response.json()) as ChatCompletionsResponse
+      const raw = data.choices?.[0]?.message?.content
+      return raw ? raw.trim() : null
+    })(), QA_TIMEOUT_MS)
   } catch (err) {
     console.error('[ai] Falha ao responder pergunta:', err)
     return null
+  } finally {
+    // Cancela também a leitura do corpo; o limite deve cobrir a resposta inteira.
+    controller.abort()
   }
+}
+
+/** Auditoria em lotes: o chamador valida o JSON e as referências contra as mensagens reais. */
+function auditGatewayFailure(response: Response, kind: 'text' | 'image' | 'audio') {
+  const raw = response.headers?.get('retry-after')
+  const seconds = raw ? (/^\d+(?:\.\d+)?$/.test(raw) ? Number(raw) : (Date.parse(raw) - Date.now()) / 1000) : 300
+  return Object.assign(new Error(`Gateway da auditoria retornou HTTP ${response.status}.`), {
+    auditGatewayStatus: response.status, auditGatewayKind: kind,
+    retryAfterSeconds: Number.isFinite(seconds) ? Math.min(86400, Math.max(1, Math.ceil(seconds))) : 300,
+  })
+}
+export async function requestAuditJson(organizationId: string, instruction: string, input: unknown, image?: { mime: string; base64: string }): Promise<unknown> {
+  const cfg = await getOrgAiConfig(organizationId)
+  if (!cfg.baseUrl) throw new Error('Gateway de auditoria não configurado.')
+  const env = getServerEnv()
+  const controller = new AbortController()
+  try {
+    return await withTimeout((async () => {
+      const primary = image ? env.OMNIROUTE_IMAGE_MODEL || 'groq/qwen/qwen3.8-27b'
+        : env.OMNIROUTE_AUDIT_MODEL || cfg.model || DEFAULT_MODEL
+      // A rota direta preserva o binário quando um combo não encaminha visão corretamente.
+      const models = [...new Set([primary, ...(image && env.OMNIROUTE_IMAGE_FALLBACK_MODEL ? [env.OMNIROUTE_IMAGE_FALLBACK_MODEL] : [])])]
+      for (const [index, model] of models.entries()) {
+        const attempt = new AbortController()
+        const timer = models.length > 1 ? setTimeout(() => attempt.abort(), 35_000) : null
+        try {
+          const response = await fetch(`${cfg.baseUrl!.replace(/\/+$/, '')}/chat/completions`, {
+            method: 'POST', signal: AbortSignal.any([controller.signal, attempt.signal]),
+            headers: { 'Content-Type': 'application/json', 'X-OmniRoute-No-Cache': 'true', 'x-omniroute-no-memory': 'true',
+              ...(cfg.apiKey ? { Authorization: `Bearer ${cfg.apiKey}` } : {}) },
+            body: JSON.stringify({
+              model,
+              messages: [{ role: 'system', content: instruction }, { role: 'user', content: image
+                ? [{ type: 'text', text: `Responda com JSON conforme as instruções. Dados:\n${JSON.stringify(input)}` }, { type: 'image_url', image_url: { url: `data:${image.mime};base64,${image.base64}` } }]
+                : `Responda com JSON conforme as instruções. Dados:\n${JSON.stringify(input)}` }],
+              response_format: { type: 'json_object' }, temperature: 0.1,
+            }),
+          })
+          if (!response.ok) throw auditGatewayFailure(response, image ? 'image' : 'text')
+          const data = await response.json() as ChatCompletionsResponse
+          const content = data.choices?.[0]?.message?.content
+          if (!content) throw new Error('Gateway da auditoria devolveu resposta vazia.')
+          const result = JSON.parse(extractJson(content)) as unknown
+          if (image && result && typeof result === 'object' && 'imageAccessible' in result && result.imageAccessible === false)
+            throw new Error('O modelo não recebeu o conteúdo da imagem.')
+          return result
+        } catch (error) {
+          const status = error && typeof error === 'object' && 'auditGatewayStatus' in error ? Number(error.auditGatewayStatus) : null
+          if (index === models.length - 1 || controller.signal.aborted || (status !== null && status !== 429 && status < 500)) throw error
+        } finally {
+          if (timer) clearTimeout(timer)
+          attempt.abort()
+        }
+      }
+      throw new Error('Gateway da auditoria devolveu resposta vazia.')
+    })(), 90_000)
+  } finally {
+    controller.abort()
+  }
+}
+
+/** O áudio passa pelo mesmo gateway e pela chave privada da organização. */
+export async function transcribeAuditAudio(organizationId: string, file: Blob, filename: string) {
+  const cfg = await getOrgAiConfig(organizationId)
+  if (!cfg.baseUrl) throw new Error('Gateway de transcrição não configurado.')
+  const env = getServerEnv()
+  const controller = new AbortController()
+  try {
+    return await withTimeout((async () => {
+      const form = new FormData()
+      form.append('file', file, filename)
+      form.append('model', env.OMNIROUTE_AUDIO_MODEL || 'groq/whisper-large-v3')
+      form.append('language', 'pt')
+      form.append('response_format', 'verbose_json')
+      form.append('temperature', '0')
+      const response = await fetch(`${cfg.baseUrl!.replace(/\/+$/, '')}/audio/transcriptions`, {
+        method: 'POST', signal: controller.signal, body: form,
+        headers: cfg.apiKey ? { Authorization: `Bearer ${cfg.apiKey}` } : {},
+      })
+      if (!response.ok) throw auditGatewayFailure(response, 'audio')
+      const result = await response.json() as { text?: unknown; segments?: { avg_logprob?: number; no_speech_prob?: number }[] }
+      if (typeof result.text !== 'string') throw new Error('Transcrição sem texto válido.')
+      const uncertain = !result.text.trim() || result.segments?.some(segment =>
+        (segment.avg_logprob ?? 0) < -1 || (segment.no_speech_prob ?? 0) > 0.6)
+      return { text: result.text.trim(), uncertain: !!uncertain }
+    })(), 90_000)
+  } finally { controller.abort() }
 }
 
 // Exportado só pra teste (validação do parsing sem precisar chamar a API de verdade).

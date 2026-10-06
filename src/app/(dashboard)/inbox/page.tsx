@@ -56,6 +56,7 @@ import { useImmersiveMobile } from '@/components/layout/MobileChromeProvider'
 import { useUnread } from '@/components/layout/UnreadProvider'
 import { formatUnreadBadge } from '@/lib/inbox/unread'
 import { matchesConversationFilters } from '@/lib/inbox/filters'
+import { inboxLoadErrorMessage, requireInboxResult, withInboxTimeout } from '@/lib/inbox/loading'
 import { createClient } from '@/lib/supabase/client'
 import { subscribeToPush, unsubscribeFromPush, pushSetupMessage, hasPushSubscription } from '@/lib/pwa/subscribe'
 import { useDemoStorage } from '@/lib/demo/useDemoStorage'
@@ -68,6 +69,7 @@ import { compressImageIfLarge, compressVideo, CompressProgress } from '@/lib/med
 import { useVoiceRecorder } from '@/lib/media/useVoiceRecorder'
 import { formatarDuracao } from '@/lib/media/audio'
 import { useEnterToSend } from '@/lib/preferences/composer'
+import { CommercialCopilot } from '@/components/inbox/CommercialCopilot'
 
 type MediaType = 'image' | 'video' | 'audio' | 'document' | 'sticker'
 
@@ -259,6 +261,7 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
     realConversationsRef.current = realConversations
   }, [realConversations])
   const [loadingReal, setLoadingReal] = useState(false)
+  const [loadErrorMessage, setLoadErrorMessage] = useState<string | null>(null)
   const [realTeamMembers, setRealTeamMembers] = useState<RealTeamMember[]>([])
   // Espelho de realTeamMembers pro mesmo motivo do realConversationsRef acima —
   // fetchConversationMessages usa isso pra resolver o nome de quem mandou (quando é a
@@ -502,10 +505,11 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
   // refreshes, so the Inbox doesn't flicker every time a message comes in.
   const fetchRealData = useCallback(async (silent = false) => {
     if (!silent) setLoadingReal(true)
+    setLoadErrorMessage(null)
     try {
       const supabase = createClient()
       const typed = supabase as unknown as {
-        auth: { getUser: () => Promise<{ data: { user: { id: string } | null } }> }
+        auth: { getUser: () => Promise<{ data: { user: { id: string } | null }; error: unknown }> }
         from: (t: string) => {
           select: (c: string) => {
             order?: (col: string, opt: { ascending: boolean }) => Promise<{ data: unknown[] | null; error: unknown }>
@@ -516,16 +520,16 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
 
       const {
         data: { user },
-      } = await typed.auth.getUser()
+      } = requireInboxResult(await withInboxTimeout(typed.auth.getUser()))
       setCurrentUserRealId(user?.id || null)
+      if (!user) throw new Error('INBOX_SESSION_REQUIRED')
 
-      const [convRes, noteRes, membersRes, dealsRes, stagesRes, myMembershipRes] = await Promise.all([
-        // RPC SECURITY INVOKER: auth.uid() resolve do JWT do caller, garantindo
-        // isolamento multi-tenant correto. A versão anterior (SECURITY DEFINER)
-        // retornava NULL para auth.uid(), causando Inbox vazio.
+      const [convRes, noteRes, membersRes, dealsRes, stagesRes, myMembershipRes] = await withInboxTimeout(Promise.all([
+        // SECURITY INVOKER preserves the caller's tenant and visibility policies.
+        // auth.uid() reads the request JWT in both invoker and definer functions.
         (supabase as unknown as {
           rpc: (fn: string) => Promise<{ data: unknown[] | null; error: unknown }>
-        }).rpc('get_conversation_list_secure'),
+        }).rpc('get_conversation_list_secure').then(requireInboxResult),
         typed.from('internal_notes').select('id, conversation_id, content, created_at, author_id, profiles(full_name)').order!('created_at', { ascending: false }),
         typed.from('organization_members').select('user_id, profiles(full_name)').order!('created_at', { ascending: true }),
         // Pedidos (Funil) — pra mostrar/gerenciar o pedido de um contato direto na aba
@@ -538,7 +542,7 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
         // o botão de excluir mensagem aparece (a API confere de novo no servidor de
         // qualquer forma; isso aqui é só pra não mostrar um botão que vai dar 403).
         typed.from('organization_members').select('role, permissions').eq!('user_id', user?.id || '').limit(1).maybeSingle(),
-      ])
+      ]))
 
       const convData = (convRes.data || []) as Array<{
         id: string
@@ -631,22 +635,29 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
       })
 
       setRealConversations(built)
-      const offlineScope = user ? await getOfflineScope() : null
-      if (offlineScope) await cacheEntity(offlineScope, 'inbox', built)
+      // Offline storage is best-effort; it must not delay or fail a successful load.
+      void withInboxTimeout(getOfflineScope(), 3_000)
+        .then((scope) => scope ? withInboxTimeout(cacheEntity(scope, 'inbox', built), 3_000) : undefined)
+        .catch(() => {})
 
       if (requestedConvId && !appliedRequestedConvRef.current && built.some((c) => c.id === requestedConvId)) {
         appliedRequestedConvRef.current = true
         setSelectedConvId(requestedConvId)
         setMobilePane('chat')
       }
-    } catch {
-      const offlineScope = await getOfflineScope().catch(() => null)
-      const cachedInbox = offlineScope ? await readCachedEntity<UiConversation[]>(offlineScope, 'inbox').catch(() => null) : null
+    } catch (error) {
+      // Only use cached conversations offline, never to hide a live permission error.
+      const offlineScope = !navigator.onLine
+        ? await withInboxTimeout(getOfflineScope(), 3_000).catch(() => null)
+        : null
+      const cachedInbox = offlineScope
+        ? await withInboxTimeout(readCachedEntity<UiConversation[]>(offlineScope, 'inbox'), 3_000).catch(() => null)
+        : null
       if (cachedInbox) {
         setRealConversations(cachedInbox)
-        setErrorMessage('Você está offline. Exibindo conversas armazenadas neste dispositivo.')
+        setLoadErrorMessage('Você está offline. Exibindo conversas armazenadas neste dispositivo.')
       } else {
-        setErrorMessage('Falha ao carregar conversas reais do Supabase.')
+        setLoadErrorMessage(inboxLoadErrorMessage(error))
       }
     } finally {
       setLoadingReal(false)
@@ -1726,10 +1737,20 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
 
       <Toast message={toastMessage} />
 
-      {(errorMessage || gravador.erro) && (
-        <div className="bg-rose-950/80 border-b border-rose-800 text-rose-200 px-4 py-2 text-xs flex items-center gap-2 shrink-0">
+      {(loadErrorMessage || errorMessage || gravador.erro) && (
+        <div role="alert" className="bg-rose-950/80 border-b border-rose-800 text-rose-200 px-4 py-2 text-xs flex items-center gap-2 shrink-0">
           <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
-          <span>{errorMessage || gravador.erro}</span>
+          <span>{loadErrorMessage || errorMessage || gravador.erro}</span>
+          {viewMode === 'real' && loadErrorMessage && (
+            <button
+              type="button"
+              onClick={() => void fetchRealData()}
+              disabled={loadingReal}
+              className="ml-auto shrink-0 underline disabled:opacity-50"
+            >
+              Tentar novamente
+            </button>
+          )}
         </div>
       )}
 
@@ -2134,6 +2155,11 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
                   <strong className="text-amber-200">{selectedConversation.currentAssigneeName}</strong>.
                 </span>
               </div>
+            )}
+
+            {/* Commercial Copilot Panel */}
+            {viewMode === 'real' && selectedConvId && (
+              <CommercialCopilot conversationId={selectedConvId} />
             )}
 
             {/* Thread Messages */}

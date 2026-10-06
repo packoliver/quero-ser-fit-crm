@@ -5,16 +5,15 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { answerQuestionAboutInsights, saveQaHistory } from '@/lib/ai/insights'
 import { withRateLimit } from '@/lib/security/rate-limit-middleware'
 
-// Padrão da Vercel pode encerrar a função bem antes do timeout de 45s que o cliente de IA
-// usa pra essa pergunta (ver QA_TIMEOUT_MS em client.ts) — sem isso, a Vercel mataria a
-// função na própria conta dela antes do nosso próprio timeout sequer disparar.
-export const maxDuration = 60
+// Inclui margem para buscas no banco e o limite de 115s da resposta completa do gateway.
+export const maxDuration = 150
 
 // 500 chars era curto demais pra um pedido de relatório detalhado (ex: "analise todas as
 // conversas do período e identifique X, Y, Z... quero um relatório objetivo com...") — o
 // contexto que já vai no prompt (até 2000 conversas resumidas) é MUITO maior que isso, uma
 // pergunta de algumas frases não pesa nada perto disso.
-const bodySchema = z.object({ question: z.string().trim().min(1, 'Pergunta vazia.').max(4000, 'Pergunta muito longa (máximo 4000 caracteres).') })
+const bodySchema = z.object({ question: z.string().trim().min(1, 'Pergunta vazia.').max(4000, 'Pergunta muito longa (máximo 4000 caracteres).'),
+  periodDays: z.number().int().min(1).max(365).nullable().optional() })
 
 type TypedSupabase = {
   from: (table: string) => {
@@ -59,7 +58,7 @@ export const POST = withRateLimit('ai', async (request: NextRequest) => {
   }
 
   const admin = createAdminClient()
-  const result = await answerQuestionAboutInsights(admin, member.organization_id, parsed.data.question)
+  const result = await answerQuestionAboutInsights(admin, member.organization_id, parsed.data.question, parsed.data.periodDays ?? null)
 
   if (!result.ok) {
     // Mensagem diferente por motivo, de propósito — "IA não configurada" e "gateway não
@@ -68,9 +67,9 @@ export const POST = withRateLimit('ai', async (request: NextRequest) => {
     const messages: Record<typeof result.reason, string> = {
       not_configured:
         'Gateway de IA não configurado — acesse Configurações → IA (Insights) no painel admin para configurar a URL e chave do gateway.',
-      no_data: 'Ainda não existe nenhuma conversa analisada — clique em "Analisar conversas antigas" primeiro.',
+      no_data: 'Não há conversas já analisadas no período solicitado. Tente outro período ou analise as conversas antigas primeiro.',
       gateway_failed:
-        'A variável está configurada, mas o gateway não respondeu a tempo (45s) ou devolveu um erro. Se o seu gateway só roda em localhost, use "npm run insights:ask -- \'sua pergunta\'" no terminal em vez desta barra — a Vercel não alcança seu localhost diretamente, só através de um túnel público.',
+        'O gateway de IA não concluiu a resposta em até 115 segundos ou devolveu um erro. Tente uma pergunta mais específica ou um período menor. Se persistir, confira os registros do OmniRoute.',
     }
     return NextResponse.json({ error: messages[result.reason] }, { status: 502 })
   }
@@ -83,5 +82,5 @@ export const POST = withRateLimit('ai', async (request: NextRequest) => {
     consideredCount: result.consideredCount,
   })
 
-  return NextResponse.json({ answer: result.answer, consideredCount: result.consideredCount })
+  return NextResponse.json({ answer: result.answer, consideredCount: result.consideredCount, periodDays: result.periodDays })
   })

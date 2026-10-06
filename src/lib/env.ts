@@ -30,6 +30,10 @@ const serverEnvSchema = z.object({
   OMNIROUTE_BASE_URL: z.string().url('OMNIROUTE_BASE_URL deve ser uma URL válida (ex: https://seu-dominio.com/v1)').optional(),
   OMNIROUTE_API_KEY: z.string().optional(),
   OMNIROUTE_MODEL: z.string().optional(),
+  OMNIROUTE_AUDIT_MODEL: z.string().trim().min(1).max(200).optional(),
+  OMNIROUTE_IMAGE_MODEL: z.string().trim().min(1).max(200).optional(),
+  OMNIROUTE_IMAGE_FALLBACK_MODEL: z.string().trim().min(1).max(200).optional(),
+  OMNIROUTE_AUDIO_MODEL: z.string().trim().min(1).max(200).optional(),
 })
 
 export type ServerEnv = z.infer<typeof serverEnvSchema>
@@ -72,6 +76,10 @@ export function getServerEnv(): ServerEnv {
     OMNIROUTE_BASE_URL: process.env.OMNIROUTE_BASE_URL || undefined,
     OMNIROUTE_API_KEY: process.env.OMNIROUTE_API_KEY || undefined,
     OMNIROUTE_MODEL: process.env.OMNIROUTE_MODEL || undefined,
+    OMNIROUTE_AUDIT_MODEL: process.env.OMNIROUTE_AUDIT_MODEL?.trim() || undefined,
+    OMNIROUTE_IMAGE_MODEL: process.env.OMNIROUTE_IMAGE_MODEL?.trim() || undefined,
+    OMNIROUTE_IMAGE_FALLBACK_MODEL: process.env.OMNIROUTE_IMAGE_FALLBACK_MODEL?.trim() || undefined,
+    OMNIROUTE_AUDIO_MODEL: process.env.OMNIROUTE_AUDIO_MODEL?.trim() || undefined,
   }
 
   const result = serverEnvSchema.safeParse(rawEnv)

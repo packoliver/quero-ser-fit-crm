@@ -46,7 +46,7 @@ interface RealPendingTask {
 export function Header({ currentRole = 'admin', onToggleRole, realUser }: HeaderProps) {
   const router = useRouter()
   const { tasks: demoTasks } = useDemoStorage()
-  const { theme, setTheme, resolvedTheme } = useTheme()
+  const { setTheme, resolvedTheme } = useTheme()
   const [realPendingTasks, setRealPendingTasks] = useState<RealPendingTask[]>([])
 
   const [menuOpen, setMenuOpen] = useState(false)

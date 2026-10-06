@@ -54,7 +54,6 @@ export async function enqueueAgentTask(options: EnqueueOptions): Promise<string 
       .from('agent_tasks')
       .insert({
         organization_id: options.payload.organizationId,
-        conversation_id: options.payload.conversationId || null,
         kind: options.kind,
         payload: options.payload,
         priority: options.priority ?? 100,
@@ -99,7 +98,6 @@ export async function claimAgentTasks(limit = 5, leaseDurationSeconds = 300) {
     return (data || []) as Array<{
       id: string
       organization_id: string
-      conversation_id: string | null
       kind: AgentTaskKind
       payload: AgentTaskPayload
       priority: number
