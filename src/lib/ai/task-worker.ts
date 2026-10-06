@@ -3,6 +3,12 @@ import { claimAgentTasks, settleAgentTask, reconcileStaleTasks, type AgentTaskPa
 import { createAdminClient } from '@/lib/supabase/admin'
 import { computeLeadScoreValue } from './lead-score'
 import { determineNextBestAction } from './next-action'
+import {
+ deriveFollowUpState,
+ scoreToTemperature,
+ deriveLossReason,
+ derivePaymentStage,
+} from './commercial-intelligence'
 import type { CommercialSignalType } from '@/types/database'
 
 // Versão do analisador comercial — bump quando prompt/regras mudarem
@@ -80,6 +86,45 @@ async function invalidateContradictorySignals(
     .eq('source', 'ai_analysis')
     .is('invalidated_at', null)
     .in('signal_type', toInvalidate)
+}
+
+/**
+ * Cria tarefa de follow-up automática quando há ação recomendada e nenhuma tarefa aberta.
+ * Idempotente: verifica existência de tarefa pendente/in_progress antes de inserir.
+ */
+async function maybeCreateFollowUpTask(
+  admin: ReturnType<typeof createAdminClient>,
+  organizationId: string,
+  conversationId: string,
+  nextAction: string | null,
+  signals: CommercialSignalType[]
+): Promise<void> {
+  if (!nextAction) return
+  // Verifica se já existe tarefa aberta para esta conversa
+  const { data: existing } = await admin
+    .from('tasks')
+    .select('id')
+    .eq('organization_id', organizationId)
+    .eq('conversation_id', conversationId)
+    .in('status', ['pending', 'in_progress'])
+    .limit(1)
+  if ((existing ?? []).length > 0) return
+  // Determina prioridade baseada em sinais
+  const hasUrgency = signals.includes('URGENCY_EXPRESSED') || signals.includes('ESCALATION_NEEDED')
+  const hasPayment = signals.includes('PIX_KEY_SENT') || signals.includes('PAYMENT_EVIDENCE_RECEIVED')
+  const priority = hasUrgency ? 'alta' : hasPayment ? 'media' : 'baixa'
+  const { error } = await admin.from('tasks').insert({
+    organization_id: organizationId,
+    title: nextAction,
+    description: `Follow-up gerado automaticamente pela IA. Sinais detectados: ${signals.slice(0, 5).join(', ')}`,
+    status: 'pending',
+    priority,
+    conversation_id: conversationId,
+    due_date: new Date(Date.now() + (hasUrgency ? 3_600_000 : 86_400_000)).toISOString(),
+  })
+  if (error) {
+    console.warn(`[task-worker] Falha ao criar follow-up automático: ${error.message}`)
+  }
 }
 
 /** Deriva um estado comercial agregado a partir dos sinais persistidos nesta execução.
@@ -206,6 +251,53 @@ async function executeTask(
       const leadScore = computeLeadScoreValue(allSignalsForConversation)
       const nextAction = determineNextBestAction(allSignalsForConversation, commercialState)
 
+      // Deriva campos de inteligência comercial determinísticos
+      const temperature = scoreToTemperature(leadScore)
+      const paymentStage = derivePaymentStage(allSignalsForConversation)
+
+      // Verifica se há tarefa aberta para esta conversa (para follow-up state e loss reason)
+      const { data: openTasks } = await admin
+        .from('tasks')
+        .select('id')
+        .eq('organization_id', payload.organizationId)
+        .eq('conversation_id', payload.conversationId)
+        .in('status', ['pending', 'in_progress'])
+        .limit(1)
+      const hasOpenTask = ((openTasks ?? []).length > 0)
+
+      // Busca última mensagem para determinar sender e tempo
+      const { data: lastMsg } = await admin
+        .from('messages')
+        .select('sender_type, created_at')
+        .eq('organization_id', payload.organizationId)
+        .eq('conversation_id', payload.conversationId)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      const lastMessageSender = (lastMsg?.sender_type as 'contact' | 'user' | 'system' | null) ?? null
+      const hoursSinceLastMessage = lastMsg
+        ? Math.floor((Date.now() - new Date(lastMsg.created_at).getTime()) / 3_600_000)
+        : null
+
+      const followUpState = deriveFollowUpState(
+        allSignalsForConversation,
+        hasOpenTask,
+        hoursSinceLastMessage,
+        lastMessageSender
+      )
+
+      // Loss reason só se aplica quando outcome é 'perdida'
+      const lossReason = deriveLossReason(
+        allSignalsForConversation,
+        analysis.status === 'risco' ? 'perdida' : 'aberta', // mapeia status do insight para outcome simplificado
+        hoursSinceLastMessage,
+        hasOpenTask,
+        lastMessageSender
+      )
+      const lossControllability = lossReason
+        ? (await import('./commercial-intelligence')).LOSS_REASON_CONTROLLABILITY[lossReason]
+        : null
+
       const { error } = await admin.from('ai_conversation_insights').upsert(
         {
           organization_id: payload.organizationId,
@@ -218,6 +310,11 @@ async function executeTask(
           lead_score: leadScore,
           next_best_action: nextAction,
           signals_extracted_at: new Date().toISOString(),
+          follow_up_state: followUpState,
+          temperature,
+          payment_stage: paymentStage,
+          loss_reason: lossReason,
+          loss_controllability: lossControllability,
         },
         { onConflict: 'conversation_id' }
       )

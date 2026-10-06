@@ -15,6 +15,9 @@ import {
   MoreHorizontal,
   Keyboard,
   Sparkles,
+  Target,
+  Activity,
+  TrendingDown,
   type LucideIcon,
 } from 'lucide-react'
 import { UserRole } from '@/types/database'
@@ -30,8 +33,12 @@ export const allNavItems: NavItem[] = [
   { href: '/inbox', label: 'Conversas', icon: MessageSquare },
   { href: '/clientes', label: 'Clientes', icon: Users },
   { href: '/funil', label: 'Funil', icon: Kanban },
-  { href: '/follow-up', label: 'Follow-up', icon: Clock3 },
+    { href: '/followups', label: 'Follow-ups', icon: Clock3 },
+  { href: '/recuperacao', label: 'Recuperação', icon: Target },
   { href: '/tarefas', label: 'Tarefas', icon: CheckSquare },
+  { href: '/analytics', label: 'Analytics', icon: Activity, adminOnly: true },
+  { href: '/funil-analytics', label: 'Funil de Conversão', icon: TrendingDown, adminOnly: true },
+  { href: '/performance', label: 'Performance', icon: Users, adminOnly: true },
   { href: '/relatorios', label: 'Relatórios', icon: BarChart3, adminOnly: false },
   // adminOnly:true de propósito (mesmo padrão de Automações/Etapas do Funil): mostra pra
   // manager também (não está em ADMIN_ONLY_HREFS), mas some pro attendant — os resumos
