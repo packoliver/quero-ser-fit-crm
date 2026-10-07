@@ -89,7 +89,11 @@ export function UnreadProvider({ children }: { children: React.ReactNode }) {
   // Mensagem nova (ou marca de leitura feita em outro aparelho) atualiza a contagem sem
   // recarregar a página. Mesmo debounce do Inbox: uma mensagem que chega mexe em mais de
   // uma tabela quase ao mesmo tempo, e basta uma releitura pra isso.
+  // Escuta apenas eventos da organização do usuário logado. Sem filtro, o Supabase
+  // entrega mudanças de TODOS os tenants — O(tenants × events) notificações por segundo.
+  // RLS filtra o payload mas NÃO a notificação em si; o filtro aqui é no Postgres Changes.
   useEffect(() => {
+    if (!userId) return
     const supabase = createClient()
     let timer: ReturnType<typeof setTimeout> | null = null
     const schedule = () => {
@@ -97,17 +101,48 @@ export function UnreadProvider({ children }: { children: React.ReactNode }) {
       timer = setTimeout(() => void refresh(), 400)
     }
 
-    const channel = supabase
-      .channel('unread-counts')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, schedule)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'conversation_reads' }, schedule)
-      .subscribe()
+    // Obtém orgId para escopar o realtime. Se falhar, não escuta nada (fail-safe).
+    let cancelled = false
+    let channel: ReturnType<typeof supabase.channel> | null = null
+
+    void (async () => {
+      try {
+        const typed = supabase as unknown as {
+          from: (t: string) => {
+            select: (c: string) => {
+              eq: (c: string, v: string) => {
+                limit: (n: number) => {
+                  maybeSingle: () => Promise<{ data: { organization_id: string } | null }>
+                }
+              }
+            }
+          }
+        }
+        const { data: member } = await typed
+          .from('organization_members')
+          .select('organization_id')
+          .eq('user_id', userId)
+          .limit(1)
+          .maybeSingle()
+        if (cancelled || !member?.organization_id) return
+
+        channel = supabase
+          .channel('unread-counts')
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'messages', filter: `organization_id=eq.${member.organization_id}` }, schedule)
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'conversation_reads', filter: `organization_id=eq.${member.organization_id}` }, schedule)
+          .subscribe()
+      } catch {
+        // Silencioso: se não conseguir obter orgId, simplesmente não escuta realtime.
+        // O polling via visibilitychange/online continua funcionando como fallback.
+      }
+    })()
 
     return () => {
+      cancelled = true
       if (timer) clearTimeout(timer)
-      supabase.removeChannel(channel)
+      if (channel) supabase.removeChannel(channel)
     }
-  }, [refresh])
+  }, [refresh, userId])
 
   // Rede de segurança pro socket do Realtime morrer em silêncio (tela apagada, troca de
   // Wi-Fi) — mesmo padrão já usado no Inbox.

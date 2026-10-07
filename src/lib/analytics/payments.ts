@@ -76,13 +76,21 @@ export async function calculatePaymentMetrics(
     created_at: string
   }>
 
-  // Agrupa sinais por conversa para detectar abandono
-  const conversationsWithSignal = new Map<string, Set<string>>()
+  // Agrupa sinais por conversa para detectar abandono, preservando timestamps
+  const conversationsWithSignal = new Map<string, { signalTypes: Set<string>; pixKeySentAt: number | null }>()
   for (const row of rows) {
     if (!conversationsWithSignal.has(row.conversation_id)) {
-      conversationsWithSignal.set(row.conversation_id, new Set())
+      conversationsWithSignal.set(row.conversation_id, { signalTypes: new Set(), pixKeySentAt: null })
     }
-    conversationsWithSignal.get(row.conversation_id)!.add(row.signal_type)
+    const entry = conversationsWithSignal.get(row.conversation_id)!
+    entry.signalTypes.add(row.signal_type)
+    if (row.signal_type === 'PIX_KEY_SENT') {
+      const ts = new Date(row.created_at).getTime()
+      // Usa o PIX_KEY_SENT mais recente da conversa
+      if (entry.pixKeySentAt === null || ts > entry.pixKeySentAt) {
+        entry.pixKeySentAt = ts
+      }
+    }
   }
 
   let pixRequested = 0
@@ -97,25 +105,25 @@ export async function calculatePaymentMetrics(
   const now = Date.now()
   const TWENTY_FOUR_HOURS_MS = 86_400_000
 
-  for (const [, signalSet] of conversationsWithSignal) {
-    if (signalSet.has('PIX_REQUESTED')) pixRequested++
-    if (signalSet.has('PIX_KEY_SENT')) pixKeySent++
-    if (signalSet.has('PAYMENT_EVIDENCE_RECEIVED')) evidenceReceived++
-    if (signalSet.has('PAYMENT_CONFIRMED')) paymentConfirmed++
-    if (signalSet.has('PAYMENT_ON_DELIVERY')) onDelivery++
-    if (signalSet.has('MOTOBOY_CONFIRMED')) motoboyDispatched++
-    if (signalSet.has('PICKUP_CONFIRMED')) pickupReady++
+  for (const [, { signalTypes, pixKeySentAt }] of conversationsWithSignal) {
+    if (signalTypes.has('PIX_REQUESTED')) pixRequested++
+    if (signalTypes.has('PIX_KEY_SENT')) pixKeySent++
+    if (signalTypes.has('PAYMENT_EVIDENCE_RECEIVED')) evidenceReceived++
+    if (signalTypes.has('PAYMENT_CONFIRMED')) paymentConfirmed++
+    if (signalTypes.has('PAYMENT_ON_DELIVERY')) onDelivery++
+    if (signalTypes.has('MOTOBOY_CONFIRMED')) motoboyDispatched++
+    if (signalTypes.has('PICKUP_CONFIRMED')) pickupReady++
 
-    // Abandono pós-PIX: tem PIX_KEY_SENT mas NÃO tem PAYMENT_CONFIRMED
-    // e o sinal de PIX_KEY_SENT tem mais de 24h
-    if (signalSet.has('PIX_KEY_SENT') && !signalSet.has('PAYMENT_CONFIRMED')) {
-      // Verifica se o sinal PIX_KEY_SENT é antigo o suficiente
-      const pixSignals = rows.filter(
-        (r) => r.conversation_id === [...conversationsWithSignal.keys()][0] && r.signal_type === 'PIX_KEY_SENT'
-      )
-      // Simplificação: conta como abandonado se não tem confirmação
-      // A verificação precisa de tempo requereria buscar created_at individualmente
-      // Para v1, contamos qualquer PIX_KEY_SENT sem CONFIRMED como potencial abandono
+    // Abandono pós-PIX: tem PIX_KEY_SENT mas NÃO tem PAYMENT_CONFIRMED nem PAYMENT_ON_DELIVERY,
+    // E o sinal PIX_KEY_SENT foi criado há mais de 24 horas.
+    // Conversas com pagamento na entrega ou comprovante recebido não são abandono.
+    if (
+      signalTypes.has('PIX_KEY_SENT') &&
+      !signalTypes.has('PAYMENT_CONFIRMED') &&
+      !signalTypes.has('PAYMENT_ON_DELIVERY') &&
+      pixKeySentAt !== null &&
+      (now - pixKeySentAt) >= TWENTY_FOUR_HOURS_MS
+    ) {
       abandonedAfterPix++
     }
   }

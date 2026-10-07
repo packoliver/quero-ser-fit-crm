@@ -4,6 +4,7 @@ DROP POLICY IF EXISTS "Profiles viewable by authenticated users" ON public.profi
 DROP POLICY IF EXISTS "Service role or authenticated users can manage webhook events" ON public.webhook_events;
 DROP POLICY IF EXISTS "Public can read chat media" ON storage.objects;
 
+DROP POLICY IF EXISTS "Users view profiles in their organizations" ON public.profiles;
 CREATE POLICY "Users view profiles in their organizations" ON public.profiles
   FOR SELECT USING (
     id IN (
@@ -14,13 +15,16 @@ CREATE POLICY "Users view profiles in their organizations" ON public.profiles
     )
   );
 
+DROP POLICY IF EXISTS "Users can update their own profile" ON public.profiles;
 CREATE POLICY "Users can update their own profile" ON public.profiles
   FOR UPDATE USING (id = auth.uid());
 
+DROP POLICY IF EXISTS "Service role can manage profiles" ON public.profiles;
 CREATE POLICY "Service role can manage profiles" ON public.profiles
   FOR ALL USING (auth.role() = 'service_role')
   WITH CHECK (auth.role() = 'service_role');
 
+DROP POLICY IF EXISTS "Only service role can manage webhook events" ON public.webhook_events;
 CREATE POLICY "Only service role can manage webhook events" ON public.webhook_events
   FOR ALL USING (auth.role() = 'service_role')
   WITH CHECK (auth.role() = 'service_role');

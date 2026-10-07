@@ -55,6 +55,27 @@ const SIGNAL_TYPE_MAP: Record<string, CommercialSignalType> = {
   'follow up': 'FOLLOW_UP_SCHEDULED',
   'escalar': 'ESCALATION_NEEDED',
   'escalação': 'ESCALATION_NEEDED',
+  // Sinais de objeção específicos — usados por deriveLossReason e lead-score
+  'frete caro': 'OBJECTION_SHIPPING',
+  'frete alto': 'OBJECTION_SHIPPING',
+  'objeção de frete': 'OBJECTION_SHIPPING',
+  'prazo longo': 'OBJECTION_DEADLINE',
+  'prazo demorado': 'OBJECTION_DEADLINE',
+  'objeção de prazo': 'OBJECTION_DEADLINE',
+  'produto inadequado': 'OBJECTION_PRODUCT',
+  'não serve': 'OBJECTION_PRODUCT',
+  'objeção de produto': 'OBJECTION_PRODUCT',
+  // Reembolso e desistência — usados por deriveFollowUpState e contradictory signals
+  'reembolso': 'REFUND_REQUESTED',
+  'devolução': 'REFUND_REQUESTED',
+  'quero meu dinheiro': 'REFUND_REQUESTED',
+  'desistiu': 'NO_REAL_PURCHASE_INTENT',
+  'não quer mais': 'NO_REAL_PURCHASE_INTENT',
+  'sem interesse': 'NO_REAL_PURCHASE_INTENT',
+  // PIX solicitado pelo cliente — usado por deriveCommercialState e lead-score
+  'pediu pix': 'PIX_REQUESTED',
+  'quer pix': 'PIX_REQUESTED',
+  'solicitou pix': 'PIX_REQUESTED',
 }
 
 /** Normaliza uma string de sinal livre para CommercialSignalType ou null se não mapeada. */
@@ -286,10 +307,12 @@ async function executeTask(
         lastMessageSender
       )
 
-      // Loss reason só se aplica quando outcome é 'perdida'
+      // Loss reason só se aplica quando outcome é 'perdida'.
+      // Usa analysis.outcome (campo validado pelo schema Zod) em vez de status === 'risco',
+      // pois uma conversa pode estar em risco sem ter sido perdida.
       const lossReason = deriveLossReason(
         allSignalsForConversation,
-        analysis.status === 'risco' ? 'perdida' : 'aberta', // mapeia status do insight para outcome simplificado
+        analysis.outcome ?? (analysis.status === 'risco' ? 'perdida' : 'aberta'),
         hoursSinceLastMessage,
         hasOpenTask,
         lastMessageSender

@@ -45,3 +45,16 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# playwright / e2e artifacts
+e2e/.auth/
+test-results/
+playwright-report/
+
+# local supabase artifacts
+supabase/.temp/
+supabase/.branches/
+supabase/seed.sql
+
+# generated reports
+outputs/

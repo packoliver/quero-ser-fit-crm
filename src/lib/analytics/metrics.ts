@@ -187,6 +187,19 @@ export async function calculateMetric(
       break
     }
 
+    case 'leads_total': {
+      // Contatos únicos com pelo menos uma conversa no período
+      const { data: convContactIds } = await admin
+        .from('conversations')
+        .select('contact_id')
+        .eq('organization_id', organizationId)
+        .gte('created_at', period.start)
+        .lte('created_at', period.end)
+      const uniqueContactIds = [...new Set((convContactIds ?? []).map((c: { contact_id: string }) => c.contact_id).filter(Boolean))]
+      value = uniqueContactIds.length
+      break
+    }
+
     case 'leads_hot': {
       const { count } = await admin
         .from('ai_conversation_insights')

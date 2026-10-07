@@ -914,16 +914,49 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
       }
     }
 
-    const channel = supabase
-      .channel('inbox-realtime')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, scheduleRefresh)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations' }, scheduleRefresh)
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, handleNewMessage)
-      .subscribe()
+    // Escuta apenas eventos da organização do usuário logado. Sem filtro, o Supabase
+    // entrega mudanças de TODOS os tenants — O(tenants × events) notificações por segundo.
+    let cancelled = false
+    let channel: ReturnType<typeof supabase.channel> | null = null
+    void (async () => {
+      try {
+        const typed = supabase as unknown as {
+          auth: { getUser: () => Promise<{ data: { user: { id: string } | null } }> }
+          from: (t: string) => {
+            select: (c: string) => {
+              eq: (c: string, v: string) => {
+                limit: (n: number) => {
+                  maybeSingle: () => Promise<{ data: { organization_id: string } | null }>
+                }
+              }
+            }
+          }
+        }
+        const { data: { user } } = await typed.auth.getUser()
+        if (cancelled || !user) return
+        const { data: member } = await typed
+          .from('organization_members')
+          .select('organization_id')
+          .eq('user_id', user.id)
+          .limit(1)
+          .maybeSingle()
+        if (cancelled || !member?.organization_id) return
+        channel = supabase
+          .channel('inbox-realtime')
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'messages', filter: `organization_id=eq.${member.organization_id}` }, scheduleRefresh)
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations', filter: `organization_id=eq.${member.organization_id}` }, scheduleRefresh)
+          .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `organization_id=eq.${member.organization_id}` }, handleNewMessage)
+          .subscribe()
+      } catch {
+        // Silencioso: se não conseguir obter orgId, simplesmente não escuta realtime.
+        // O polling via visibilitychange/online continua funcionando como fallback.
+      }
+    })()
 
     return () => {
+      cancelled = true
       if (debounceTimer) clearTimeout(debounceTimer)
-      supabase.removeChannel(channel)
+      if (channel) supabase.removeChannel(channel)
     }
   }, [viewMode, fetchRealData, notificationsEnabled])
 

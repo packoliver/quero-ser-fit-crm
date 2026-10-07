@@ -30,6 +30,21 @@ vi.mock('@supabase/supabase-js', () => ({
 // Estado persistente simulado (representa o banco real entre chamadas)
 const storedSignals: Array<{ signal_type: string; conversation_id: string }> = []
 
+// Helper: cria um builder chainable que suporta .eq/.is/.in/.order/.limit/.maybeSingle/.update/.insert/.select
+const chainBuilder = (terminalData: unknown = null): Record<string, unknown> => {
+  const builder: Record<string, unknown> = {}
+  const terminal = () => Promise.resolve({ data: terminalData, error: null })
+  for (const method of ['eq', 'is', 'in', 'order', 'limit']) {
+    builder[method] = () => builder
+  }
+  builder.maybeSingle = terminal
+  builder.single = terminal
+  builder.update = () => builder
+  builder.insert = () => builder
+  builder.select = () => builder
+  return builder
+}
+
 vi.mock('@/lib/supabase/admin', () => ({
   createAdminClient: () => ({
     from: (table: string) => {
@@ -37,7 +52,9 @@ vi.mock('@/lib/supabase/admin', () => ({
         return {
           select: mocks.select.mockImplementation(() => ({
             eq: () => ({
-              eq: () => Promise.resolve({ data: [...storedSignals], error: null }),
+              eq: () => ({
+                is: () => Promise.resolve({ data: [...storedSignals], error: null }),
+              }),
             }),
           })),
           insert: mocks.insert.mockImplementation((row: { signal_type: string; conversation_id: string }) => {
@@ -49,7 +66,14 @@ vi.mock('@/lib/supabase/admin', () => ({
             }
             return Promise.resolve({ error: null })
           }),
+          update: () => chainBuilder(),
         }
+      }
+      if (table === 'tasks') {
+        return chainBuilder([])
+      }
+      if (table === 'messages') {
+        return chainBuilder(null)
       }
       // ai_conversation_insights
       return {

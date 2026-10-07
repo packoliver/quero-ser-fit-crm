@@ -8,46 +8,62 @@ import {
 import { UserRole } from '@/types/database'
 
 describe('Navegação e Permissões de Menu por Perfil (Fase 2)', () => {
-  it('deve retornar todas as 16 opções de menu para o perfil Administrador', () => {
+it('deve retornar todas as 20 opções de menu para o perfil Administrador', () => {
     const adminNav = getNavItemsForRole('admin')
-    expect(adminNav.length).toBe(16)
+    expect(adminNav.length).toBe(20)
 
     const labels = adminNav.map((n) => n.label)
     expect(labels).toContain('Conversas')
     expect(labels).toContain('Clientes')
     expect(labels).toContain('Funil')
-    expect(labels).toContain('Follow-up')
+    expect(labels).toContain('Follow-ups')
+    expect(labels).toContain('Recuperação')
     expect(labels).toContain('Tarefas')
+    expect(labels).toContain('Analytics')
+    expect(labels).toContain('Funil de Conversão')
+    expect(labels).toContain('Performance')
     expect(labels).toContain('Relatórios')
+    expect(labels).toContain('Insights')
     expect(labels).toContain('Respostas Rápidas')
     expect(labels).toContain('Preferências')
-    expect(labels).toContain('Insights')
-    expect(labels).toContain('IA (Insights)')
     expect(labels).toContain('Automações')
     expect(labels).toContain('Etapas do Funil')
     expect(labels).toContain('Equipe')
     expect(labels).toContain('Integrações')
     expect(labels).toContain('API Pública')
+    expect(labels).toContain('IA (Insights)')
     expect(labels).toContain('Auditoria')
   })
 
-  it('deve ocultar Equipe e Integrações para o perfil Atendente', () => {
-    const attendantNav = getNavItemsForRole('attendant')
-    expect(attendantNav.length).toBe(8)
+it('deve ocultar itens adminOnly para o perfil Atendente', () => {
+ const attendantNav = getNavItemsForRole('attendant')
+ // Attendant vê apenas itens sem adminOnly: Conversas, Clientes, Funil, Follow-ups,
+ // Recuperação, Tarefas, Relatórios, Respostas Rápidas, Preferências
+ expect(attendantNav.length).toBe(9)
 
-    const labels = attendantNav.map((n) => n.label)
-    expect(labels).toContain('Conversas')
-    expect(labels).toContain('Clientes')
-    expect(labels).toContain('Funil')
-    expect(labels).toContain('Follow-up')
-    expect(labels).toContain('Tarefas')
-    expect(labels).toContain('Relatórios')
-    expect(labels).toContain('Respostas Rápidas')
-    expect(labels).toContain('Preferências')
+ const labels = attendantNav.map((n) => n.label)
+ expect(labels).toContain('Conversas')
+ expect(labels).toContain('Clientes')
+ expect(labels).toContain('Funil')
+ expect(labels).toContain('Follow-ups')
+ expect(labels).toContain('Recuperação')
+ expect(labels).toContain('Tarefas')
+ expect(labels).toContain('Relatórios')
+ expect(labels).toContain('Respostas Rápidas')
+ expect(labels).toContain('Preferências')
 
-    expect(labels).not.toContain('Equipe')
-    expect(labels).not.toContain('Integrações')
-  })
+ expect(labels).not.toContain('Analytics')
+ expect(labels).not.toContain('Funil de Conversão')
+ expect(labels).not.toContain('Performance')
+ expect(labels).not.toContain('Insights')
+ expect(labels).not.toContain('Automações')
+ expect(labels).not.toContain('Etapas do Funil')
+ expect(labels).not.toContain('Equipe')
+ expect(labels).not.toContain('Integrações')
+ expect(labels).not.toContain('API Pública')
+ expect(labels).not.toContain('IA (Insights)')
+ expect(labels).not.toContain('Auditoria')
+ })
 
   it('deve ocultar Integrações e Auditoria (mas manter Equipe e Insights) para o perfil Gerente', () => {
     const managerNav = getNavItemsForRole('manager')

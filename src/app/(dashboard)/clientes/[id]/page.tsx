@@ -119,7 +119,7 @@ export default function Client360Page() {
         .select('id, title, value, stage, closed_at, pipeline_stages!inner(is_won)')
         .eq('organization_id', orgId).eq('contact_id', clientId)
         .order('created_at', { ascending: false }).limit(50)
-      const mappedDeals = (rawDeals || []).map((d: any) => ({
+      const mappedDeals = (rawDeals || []).map((d: { id: string; title: string; value: number | null; stage: string; closed_at: string | null; pipeline_stages: { is_won: boolean } | null }) => ({
         id: d.id, title: d.title, value: d.value, stage: d.stage,
         closed_at: d.closed_at, is_won: d.pipeline_stages?.is_won ?? false,
       }))

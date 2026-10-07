@@ -73,12 +73,6 @@ export function deriveFollowUpState(
   if (signals.includes('WAITING_CUSTOMER_REPLY')) return 'AGUARDANDO_CLIENTE'
   if (signals.includes('FOLLOW_UP_SCHEDULED')) return 'FOLLOWUP_AGENDADO'
 
-  // Pagamento confirmado ou entrega em andamento → sem ação (PRIORIDADE ALTA)
-  // Deve vir ANTES de PIX_KEY_SENT e interesse para evitar falso positivo de follow-up
-  if (signals.includes('PAYMENT_CONFIRMED') || signals.includes('MOTOBOY_CONFIRMED') || signals.includes('PICKUP_CONFIRMED')) {
-    return 'SEM_ACAO_NECESSARIA'
-  }
-
   // PIX enviado mas não confirmado → follow-up necessário
   if (signals.includes('PIX_KEY_SENT')) {
     return 'FOLLOWUP_NECESSARIO'
@@ -91,11 +85,6 @@ export function deriveFollowUpState(
   ]
   const hasInterest = interestSignals.some((s) => signals.includes(s))
   if (hasInterest && !hasOpenTask) return 'FOLLOWUP_NECESSARIO'
-
-  // Cancelamento/resolução → sem ação
-  if (signals.includes('CANCELLATION_REQUESTED') || signals.includes('REFUND_REQUESTED')) {
-    return 'SEM_ACAO_NECESSARIA'
-  }
 
   // Default baseado em quem enviou última mensagem
   if (lastMessageSender === 'contact') return 'AGUARDANDO_VENDEDORA'

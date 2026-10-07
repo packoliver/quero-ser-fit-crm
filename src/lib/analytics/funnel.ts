@@ -86,6 +86,11 @@ export async function calculateFunnel(
     stageCounts[def.id] = new Set()
   }
 
+  // Classificação monotônica: cada etapa só inclui conversas que também estão na etapa
+  // anterior. Isso garante que nenhuma taxa de conversão entre etapas adjacentes exceda
+  // 100%, pois o conjunto de cada etapa é sempre subconjunto estrito da precedente.
+  // A classificação independente por sinais (v1) permitia que uma conversa com OBJECTION_*
+  // aparecesse em "Negociação" sem estar em "Interesse", produzindo conversões >100%.
   for (const row of rows) {
     const signals = parseSignals(row.signals)
     const cid = row.conversation_id
@@ -93,43 +98,54 @@ export async function calculateFunnel(
     // Etapa 1: Conversas (todas que têm insight no período)
     stageCounts.conversations.add(cid)
 
-    // Etapa 2: Interesse
-    if (signals.includes('PRODUCT_INTEREST') || signals.includes('PRICE_ASKED')) {
+    // Etapa 2: Interesse — subconjunto de Conversas
+    const hasInterest = signals.includes('PRODUCT_INTEREST') || signals.includes('PRICE_ASKED')
+    if (hasInterest) {
       stageCounts.interest.add(cid)
     }
 
-    // Etapa 3: Produto Identificado
-    if (signals.includes('SIZE_SELECTED') || signals.includes('COLOR_SELECTED')) {
+    // Etapa 3: Produto Identificado — subconjunto de Interesse
+    const hasProduct = hasInterest && (signals.includes('SIZE_SELECTED') || signals.includes('COLOR_SELECTED'))
+    if (hasProduct) {
       stageCounts.product_identified.add(cid)
     }
 
-    // Etapa 4: Preço
-    if (signals.includes('DISCOUNT_ASKED') || signals.includes('BUDGET_STATED')) {
+    // Etapa 4: Preço — subconjunto de Interesse (não necessariamente de Produto)
+    // Uma conversa pode discutir preço sem ter escolhido tamanho/cor, mas ainda precisa
+    // ter demonstrado interesse para entrar nesta etapa.
+    const hasPrice = hasInterest && (signals.includes('DISCOUNT_ASKED') || signals.includes('BUDGET_STATED'))
+    if (hasPrice) {
       stageCounts.price.add(cid)
     }
 
-    // Etapa 5: Negociação (tem objeção ativa)
-    if (signals.some(s => s.startsWith('OBJECTION_'))) {
+    // Etapa 5: Negociação — subconjunto de Interesse (tem objeção ativa)
+    const hasNegotiation = hasInterest && signals.some(s => s.startsWith('OBJECTION_'))
+    if (hasNegotiation) {
       stageCounts.negotiation.add(cid)
     }
 
-    // Etapa 6: Alta Intenção
-    if ((row.lead_score ?? 0) >= 70) {
+    // Etapa 6: Alta Intenção — subconjunto de Interesse (lead_score >= 70)
+    const hasHighIntent = hasInterest && (row.lead_score ?? 0) >= 70
+    if (hasHighIntent) {
       stageCounts.high_intent.add(cid)
     }
 
-    // Etapa 7: Pagamento Solicitado
-    if (signals.includes('PIX_REQUESTED') || row.payment_stage === 'PIX_KEY_SENT') {
+    // Etapa 7: Pagamento Solicitado — subconjunto de Alta Intenção ou Interesse
+    // PIX solicitado indica progressão comercial; requer pelo menos interesse demonstrado.
+    const hasPaymentRequested = hasInterest && (signals.includes('PIX_REQUESTED') || row.payment_stage === 'PIX_KEY_SENT')
+    if (hasPaymentRequested) {
       stageCounts.payment_requested.add(cid)
     }
 
-    // Etapa 8: Aguardando Pagamento
-    if (signals.includes('PIX_KEY_SENT') && !signals.includes('PAYMENT_CONFIRMED')) {
+    // Etapa 8: Aguardando Pagamento — subconjunto de Pagamento Solicitado
+    const hasAwaitingPayment = hasPaymentRequested && signals.includes('PIX_KEY_SENT') && !signals.includes('PAYMENT_CONFIRMED')
+    if (hasAwaitingPayment) {
       stageCounts.awaiting_payment.add(cid)
     }
 
-    // Etapa 9: Venda
-    if (signals.includes('PAYMENT_CONFIRMED') || row.payment_stage === 'CONFIRMED') {
+    // Etapa 9: Venda — subconjunto de Pagamento Solicitado (confirmou ou entregou)
+    const hasSale = hasPaymentRequested && (signals.includes('PAYMENT_CONFIRMED') || row.payment_stage === 'CONFIRMED')
+    if (hasSale) {
       stageCounts.sale.add(cid)
     }
   }

@@ -330,6 +330,8 @@ export default function FunilPage() {
   // Realtime: um card que outra vendedora mover (ou uma etapa que o admin renomear)
   // aparece pra todo mundo sem precisar atualizar a página — mesmo padrão de debounce
   // usado no Inbox.
+  // Escuta apenas eventos da organização do usuário logado. Sem filtro, o Supabase
+  // entrega mudanças de TODOS os tenants — O(tenants × events) notificações por segundo.
   useEffect(() => {
     if (viewMode !== 'real') return
     const supabase = createClient()
@@ -343,16 +345,45 @@ export default function FunilPage() {
       if (stagesDebounceTimer) clearTimeout(stagesDebounceTimer)
       stagesDebounceTimer = setTimeout(() => void fetchStages(), 400)
     }
-    const channel = supabase
-      .channel('funil-realtime')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'deals' }, scheduleRefresh)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'pipeline_stages' }, scheduleStagesRefresh)
-      .subscribe()
-
+    let cancelled = false
+    let channel: ReturnType<typeof supabase.channel> | null = null
+    void (async () => {
+      try {
+        const typed = supabase as unknown as {
+          auth: { getUser: () => Promise<{ data: { user: { id: string } | null } }> }
+          from: (t: string) => {
+            select: (c: string) => {
+              eq: (c: string, v: string) => {
+                limit: (n: number) => {
+                  maybeSingle: () => Promise<{ data: { organization_id: string } | null }>
+                }
+              }
+            }
+          }
+        }
+        const { data: { user } } = await typed.auth.getUser()
+        if (cancelled || !user) return
+        const { data: member } = await typed
+          .from('organization_members')
+          .select('organization_id')
+          .eq('user_id', user.id)
+          .limit(1)
+          .maybeSingle()
+        if (cancelled || !member?.organization_id) return
+        channel = supabase
+          .channel('funil-realtime')
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'deals', filter: `organization_id=eq.${member.organization_id}` }, scheduleRefresh)
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'pipeline_stages', filter: `organization_id=eq.${member.organization_id}` }, scheduleStagesRefresh)
+          .subscribe()
+      } catch {
+        // Silencioso: se não conseguir obter orgId, simplesmente não escuta realtime.
+      }
+    })()
     return () => {
+      cancelled = true
       if (debounceTimer) clearTimeout(debounceTimer)
       if (stagesDebounceTimer) clearTimeout(stagesDebounceTimer)
-      supabase.removeChannel(channel)
+      if (channel) supabase.removeChannel(channel)
     }
   }, [viewMode, fetchRealDeals, fetchStages])
 

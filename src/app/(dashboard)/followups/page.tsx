@@ -22,9 +22,10 @@ interface FollowUpRow {
  summary: string | null
  last_message_at: string | null
  last_analyzed_at: string | null
- deal_title: string | null
- deal_value: number | null
- seller_name: string | null
+deal_title: string | null
+  deal_value: number | null
+  seller_name: string | null
+  hours_since_last_message: number | null
 }
 
 type QueueFilter = 'ALL' | 'NOW' | 'TODAY' | 'TOMORROW' | 'OVERDUE' | 'RECOVERY'
@@ -147,25 +148,33 @@ const typed = supabase as any
  namesById = Object.fromEntries(profileRows.map(p => [p.id, p.full_name]))
  }
 
- const mapped: FollowUpRow[] = raw.map(r => {
- const deal = (r.deals ?? [])[0] ?? null
- return {
- conversation_id: r.conversation_id,
- contact_name: r.conversations?.contacts?.name || 'Contato sem nome',
- contact_phone: r.conversations?.contacts?.phone ?? null,
- channel_type: r.conversations?.channel_type ?? '',
- lead_score: r.lead_score,
- temperature: r.temperature,
- follow_up_state: r.follow_up_state,
- next_best_action: r.next_best_action,
- summary: r.summary,
- last_message_at: r.conversations?.last_message_at ?? null,
- last_analyzed_at: r.last_analyzed_at,
- deal_title: deal?.title ?? null,
- deal_value: deal?.value ?? null,
- seller_name: deal?.assigned_to_id ? namesById[deal.assigned_to_id] ?? null : null,
- }
- })
+// Calcula hoursSinceLastMessage aqui (dentro do callback assíncrono) para evitar
+  // chamar Date.now() durante o render, o que viola react-hooks/purity.
+  const fetchNow = Date.now()
+  const mapped: FollowUpRow[] = raw.map(r => {
+    const deal = (r.deals ?? [])[0] ?? null
+    const lastMsgAt = r.conversations?.last_message_at ?? null
+    const hoursSinceLastMessage = lastMsgAt
+      ? (fetchNow - new Date(lastMsgAt).getTime()) / 3_600_000
+      : null
+    return {
+      conversation_id: r.conversation_id,
+      contact_name: r.conversations?.contacts?.name || 'Contato sem nome',
+      contact_phone: r.conversations?.contacts?.phone ?? null,
+      channel_type: r.conversations?.channel_type ?? '',
+      lead_score: r.lead_score,
+      temperature: r.temperature,
+      follow_up_state: r.follow_up_state,
+      next_best_action: r.next_best_action,
+      summary: r.summary,
+      last_message_at: lastMsgAt,
+      last_analyzed_at: r.last_analyzed_at,
+      deal_title: deal?.title ?? null,
+      deal_value: deal?.value ?? null,
+      seller_name: deal?.assigned_to_id ? namesById[deal.assigned_to_id] ?? null : null,
+      hours_since_last_message: hoursSinceLastMessage,
+    }
+  })
 
  setRows(mapped)
  } catch {
@@ -180,23 +189,21 @@ const typed = supabase as any
  return () => clearTimeout(timer)
  }, [fetchFollowUps])
 
- const filtered = useMemo(() => {
- if (queue === 'ALL') return rows.filter(r => r.follow_up_state && r.follow_up_state !== 'SEM_ACAO_NECESSARIA')
- if (queue === 'NOW') return rows.filter(r => r.follow_up_state === 'AGUARDANDO_VENDEDORA' || r.follow_up_state === 'FOLLOWUP_ATRASADO')
- if (queue === 'OVERDUE') return rows.filter(r => r.follow_up_state === 'FOLLOWUP_ATRASADO')
- if (queue === 'RECOVERY') return rows.filter(r => r.follow_up_state === 'FOLLOWUP_NECESSARIO' && (r.lead_score ?? 0) >= 50)
- if (queue === 'TODAY') return rows.filter(r => {
- if (!r.last_message_at) return false
- const hours = (Date.now() - new Date(r.last_message_at).getTime()) / 3_600_000
- return hours < 24 && r.follow_up_state !== 'SEM_ACAO_NECESSARIA'
- })
- if (queue === 'TOMORROW') return rows.filter(r => {
- if (!r.last_message_at) return false
- const hours = (Date.now() - new Date(r.last_message_at).getTime()) / 3_600_000
- return hours >= 24 && hours < 48 && r.follow_up_state !== 'SEM_ACAO_NECESSARIA'
- })
- return rows
- }, [rows, queue])
+const filtered = useMemo(() => {
+    if (queue === 'ALL') return rows.filter(r => r.follow_up_state && r.follow_up_state !== 'SEM_ACAO_NECESSARIA')
+    if (queue === 'NOW') return rows.filter(r => r.follow_up_state === 'AGUARDANDO_VENDEDORA' || r.follow_up_state === 'FOLLOWUP_ATRASADO')
+    if (queue === 'OVERDUE') return rows.filter(r => r.follow_up_state === 'FOLLOWUP_ATRASADO')
+    if (queue === 'RECOVERY') return rows.filter(r => r.follow_up_state === 'FOLLOWUP_NECESSARIO' && (r.lead_score ?? 0) >= 50)
+    if (queue === 'TODAY') return rows.filter(r => {
+      const hours = r.hours_since_last_message
+      return hours !== null && hours < 24 && r.follow_up_state !== 'SEM_ACAO_NECESSARIA'
+    })
+    if (queue === 'TOMORROW') return rows.filter(r => {
+      const hours = r.hours_since_last_message
+      return hours !== null && hours >= 24 && hours < 48 && r.follow_up_state !== 'SEM_ACAO_NECESSARIA'
+    })
+    return rows
+  }, [rows, queue])
 
  const counts = useMemo(() => ({
  all: rows.filter(r => r.follow_up_state && r.follow_up_state !== 'SEM_ACAO_NECESSARIA').length,

@@ -10,6 +10,6 @@ export default defineConfig({
   test: {
     environment: 'node',
     // Exclui node_modules e scripts de auditoria VPS que usam node:test (não vitest)
-    exclude: ['**/node_modules/**', '**/scripts/__tests__/**'],
+    exclude: ['**/node_modules/**', '**/scripts/__tests__/**', '**/e2e/**'],
   },
 })
