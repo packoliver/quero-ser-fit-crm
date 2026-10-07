@@ -232,49 +232,79 @@ export class UazapiWhatsAppProvider implements ICRMIntegrationProvider {
       const looksLikeStatusEvent = !!eventType && /messages?[_.]?update|message[_.]?status|^status$|ack/.test(eventType)
       if (!looksLikeStatusEvent) return []
 
-      // Alguns provedores baseados em Baileys mandam um ARRAY de `{key, update}` (o
-      // formato nativo do evento messages.update da lib) em vez de um único objeto —
-      // aceita os dois.
-      const rawEntries: Record<string, unknown>[] = Array.isArray(body.messages)
-        ? (body.messages as Record<string, unknown>[])
-        : Array.isArray(body.data)
-          ? (body.data as Record<string, unknown>[])
-          : [(body.message ?? body.data ?? body) as Record<string, unknown>]
+      // Formato REAL da uazapi (confirmado via logs de produção):
+      // { BaseUrl, EventType: "messages_update", event: { Chat, IsFromMe, MessageIDs: [...],
+      //   Type: "Delivered"/"Read"/"Sent", Sender, Timestamp, ... }, instanceName, owner, state }
+      // O status vem em `event.Type` (capitalizado), não em `entry.status`.
+      // Os IDs das mensagens vêm em `event.MessageIDs` (array), não em `entry.messageid`.
+      const eventObj = body.event && typeof body.event === 'object' ? (body.event as Record<string, unknown>) : undefined
+
+      // Extrai status do formato real da uazapi (event.Type) ou dos formatos alternativos
+      const rawStatus = eventObj?.Type ?? eventObj?.status
+      const resolvedStatus =
+        typeof rawStatus === 'string'
+          ? UAZAPI_STATUS_MAP[rawStatus.toLowerCase()]
+          : typeof rawStatus === 'number'
+            ? // Enum real de status da Baileys (proto.WebMessageInfo.Status), a lib em cima
+              // da qual a uazapi é construída: ERROR=0, PENDING=1, SERVER_ACK=2 (só chegou
+              // no servidor do WhatsApp, não no aparelho do cliente — NÃO é "entregue"),
+              // DELIVERY_ACK=3 (entregue de verdade), READ=4, PLAYED=5 (áudio ouvido).
+              // 0-2 não avança nada — 'sent' já cobre esse caso.
+              rawStatus >= 4
+              ? 'read'
+              : rawStatus === 3
+                ? 'delivered'
+                : undefined
+            : undefined
 
       const results: MessageStatusUpdate[] = []
-      for (const entry of rawEntries) {
-        const key = (entry.key as Record<string, unknown> | undefined) ?? entry
-        const update = (entry.update as Record<string, unknown> | undefined) ?? entry
 
-        const externalId =
-          typeof key.messageid === 'string'
-            ? key.messageid
-            : typeof key.id === 'string'
-              ? key.id
-              : typeof entry.messageid === 'string'
-                ? entry.messageid
-                : typeof entry.id === 'string'
-                  ? entry.id
-                  : undefined
+      // Formato real da uazapi: MessageIDs é um array de strings dentro de event
+      if (resolvedStatus && eventObj && Array.isArray(eventObj.MessageIDs)) {
+        for (const mid of eventObj.MessageIDs) {
+          if (typeof mid === 'string' && mid.length > 0) {
+            results.push({ externalId: mid, status: resolvedStatus })
+          }
+        }
+      }
 
-        const rawStatus = update.status
-        const status =
-          typeof rawStatus === 'string'
-            ? UAZAPI_STATUS_MAP[rawStatus.toLowerCase()]
-            : typeof rawStatus === 'number'
-              ? // Enum real de status da Baileys (proto.WebMessageInfo.Status), a lib em cima
-                // da qual a uazapi é construída: ERROR=0, PENDING=1, SERVER_ACK=2 (só chegou
-                // no servidor do WhatsApp, não no aparelho do cliente — NÃO é "entregue"),
-                // DELIVERY_ACK=3 (entregue de verdade), READ=4, PLAYED=5 (áudio ouvido).
-                // 0-2 não avança nada — 'sent' já cobre esse caso.
-                rawStatus >= 4
-                ? 'read'
-                : rawStatus === 3
-                  ? 'delivered'
-                  : undefined
-              : undefined
+      // Fallback: formatos alternativos (Baileys nativo, array de {key, update}, etc.)
+      if (results.length === 0) {
+        const rawEntries: Record<string, unknown>[] = Array.isArray(body.messages)
+          ? (body.messages as Record<string, unknown>[])
+          : Array.isArray(body.data)
+            ? (body.data as Record<string, unknown>[])
+            : [(body.message ?? body.data ?? body) as Record<string, unknown>]
 
-        if (externalId && status) results.push({ externalId, status })
+        for (const entry of rawEntries) {
+          const key = (entry.key as Record<string, unknown> | undefined) ?? entry
+          const update = (entry.update as Record<string, unknown> | undefined) ?? entry
+
+          const externalId =
+            typeof key.messageid === 'string'
+              ? key.messageid
+              : typeof key.id === 'string'
+                ? key.id
+                : typeof entry.messageid === 'string'
+                  ? entry.messageid
+                  : typeof entry.id === 'string'
+                    ? entry.id
+                    : undefined
+
+          const entryRawStatus = update.status
+          const entryStatus =
+            typeof entryRawStatus === 'string'
+              ? UAZAPI_STATUS_MAP[entryRawStatus.toLowerCase()]
+              : typeof entryRawStatus === 'number'
+                ? entryRawStatus >= 4
+                  ? 'read'
+                  : entryRawStatus === 3
+                    ? 'delivered'
+                    : undefined
+                : undefined
+
+          if (externalId && entryStatus) results.push({ externalId, status: entryStatus })
+        }
       }
 
       if (results.length === 0) {
