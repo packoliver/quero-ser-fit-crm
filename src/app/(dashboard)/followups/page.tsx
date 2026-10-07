@@ -106,20 +106,24 @@ const typed = supabase as any
  const { data: member } = await typed.from('organization_members').select('organization_id').eq('user_id', userData.user.id).limit(1).maybeSingle()
  if (!member) { setError('Organização não encontrada.'); setLoading(false); return }
 
- // Busca insights com follow_up_state definido + joins necessários
- const { data: insights, error: err } = await typed
- .from('ai_conversation_insights')
- .select(`
- conversation_id,
- lead_score,
- temperature,
- follow_up_state,
- next_best_action,
- summary,
- last_analyzed_at,
- conversations!inner(last_message_at, channel_type, status, contacts(name, phone)),
- deals(conversation_id, title, value, assigned_to_id)
- `)
+// Busca insights com follow_up_state definido + joins necessários
+  // Em produção, ai_conversation_insights tem FK deal_id → deals.id (nome da constraint:
+  // ai_conversation_insights_deal_id_fkey). O PostgREST não consegue inferir a relação
+  // automaticamente quando partimos de ai_conversation_insights para deals via conversation_id
+  // (não existe FK direta), então precisamos do hint explícito.
+  const { data: insights, error: err } = await typed
+  .from('ai_conversation_insights')
+  .select(`
+  conversation_id,
+  lead_score,
+  temperature,
+  follow_up_state,
+  next_best_action,
+  summary,
+  last_analyzed_at,
+  conversations!inner(last_message_at, channel_type, status, contacts(name, phone)),
+  deals!ai_conversation_insights_deal_id_fkey(conversation_id, title, value, assigned_to_id)
+  `)
  .eq('organization_id', member.organization_id)
  .in('conversations.status', ['open', 'assigned'])
  .order('last_analyzed_at', { ascending: false })

@@ -216,13 +216,15 @@ export default function FunilPage() {
         }
       })
         .from('deals')
-        // !deals_contact_id_fkey desambigua de propósito: desde a migration
+        // !deals_org_contact_fk desambigua de propósito: desde a migration
         // 20260812000000_security_followup.sql, `deals` tem DUAS foreign keys pra
         // `contacts` (a original por contact_id, e uma composta org+contact_id só pra
         // reforçar isolamento por tenant) — sem apontar qual usar, o PostgREST recusa o
         // embed com "Could not embed because more than one relationship was found" (erro
         // cru em inglês que chegava a aparecer pro usuário antes desta correção).
-        .select('id, title, contact_id, conversation_id, value, stage, notes, created_at, updated_at, closed_at, contacts!deals_contact_id_fkey(name, phone)')
+        // Em produção, apenas a FK composta deals_org_contact_fk existe; a FK simples
+        // deals_contact_id_fkey não foi criada pelo histórico de migrations real.
+        .select('id, title, contact_id, conversation_id, value, stage, notes, created_at, updated_at, closed_at, contacts!deals_org_contact_fk(name, phone)')
         .order('created_at', { ascending: false })
 
       if (dbError) {
