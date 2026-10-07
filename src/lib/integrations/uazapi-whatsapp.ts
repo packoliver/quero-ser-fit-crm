@@ -308,7 +308,14 @@ export class UazapiWhatsAppProvider implements ICRMIntegrationProvider {
       }
 
       if (results.length === 0) {
-        console.error('uazapi parseStatusUpdates: payload de status não reconhecido:', JSON.stringify(body).slice(0, 500))
+        // Eventos como FileDownloaded, MediaUploaded etc. chegam como messages_update
+        // mas não são status de entrega — não logar como erro pra não poluir os logs.
+        const eventObj = body.event && typeof body.event === 'object' ? (body.event as Record<string, unknown>) : undefined
+        const eventTypeValue = typeof eventObj?.Type === 'string' ? eventObj.Type : undefined
+        const isNonStatusEvent = eventTypeValue && !/^(sent|delivered|read|failed)$/i.test(eventTypeValue)
+        if (!isNonStatusEvent) {
+          console.error('uazapi parseStatusUpdates: payload de status não reconhecido:', JSON.stringify(body).slice(0, 500))
+        }
       }
       return results
     } catch (err) {
