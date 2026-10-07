@@ -1152,10 +1152,15 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
       const body = await res.json()
       if (!res.ok) {
         setErrorMessage(body.error || 'Falha ao enviar mensagem.')
-        fetchRealData()
+        // Não faz fetchRealData aqui — o Realtime já vai atualizar a lista quando o
+        // banco refletir a mudança, e fazer refetch completo a cada mensagem enviada
+        // em rajada causa latência perceptível e requests redundantes.
         return false
       }
-      fetchRealData()
+      // Removido fetchRealData() do caminho de sucesso: a reconciliação acontece via
+      // fetchConversationMessages no drainTextSendQueue (apenas para a conversa aberta)
+      // e via Realtime para a lista de conversas. Fazer ambos aqui era triplicar o
+      // mesmo trabalho pra cada mensagem enviada.
       return true
     } catch {
       setErrorMessage('Erro de conexão ao enviar mensagem.')
@@ -1169,6 +1174,16 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
   // quando o eco do tempo real voltava — em conexão lenta/instável, parecia que nada tinha
   // acontecido, e às vezes levava a mandar a mesma coisa de novo.
   const [optimisticMessages, setOptimisticMessages] = useState<OptimisticMessage[]>([])
+
+  // Auto-scroll quando mensagem otimista é adicionada: sem isso, enviar uma mensagem não
+  // disparava scroll porque o dependency do efeito original só contava mensagens confirmadas.
+  const optimisticInCurrentConv = optimisticMessages.filter((m) => m.conversationId === selectedConvId).length
+  useEffect(() => {
+    if (!isNearBottomRef.current || optimisticInCurrentConv === 0) return
+    const el = messagesContainerRef.current
+    if (!el) return
+    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+  }, [optimisticInCurrentConv])
 
   // Fila de envio de texto: cada linha mandada entra aqui e é enviada pro servidor uma de
   // cada vez, NA ORDEM, mas sem travar o campo de digitar — a pessoa pode escrever e
@@ -1186,14 +1201,12 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
       const next = textSendQueueRef.current[0]
       const ok = await sendRealMessage(next.conversationId, next.content)
       if (ok) {
-        // Busca o histórico da conversa ANTES de tirar a bolha otimista — sem isso havia uma
-        // janela de ~400ms (o debounce do eco em tempo real) em que nem a bolha otimista nem
-        // a mensagem de verdade apareciam na tela, como se a mensagem tivesse sumido por um
-        // instante logo depois de confirmada. Só busca se a conversa enviada ainda é a que
-        // está aberta — se a pessoa já trocou, não há o que sincronizar na tela agora.
-        if (next.conversationId === selectedConvIdRef.current) {
-          await fetchConversationMessages(next.conversationId)
-        }
+        // Removido fetchConversationMessages: o Realtime já reconcilia a mensagem no
+        // histórico via scheduleRefresh (debounce 400ms). Fazer refetch explícito aqui
+        // duplicava o trabalho e causava latência perceptível em envios em rajada.
+        // A bolha otimista é removida imediatamente; quando o Realtime chegar com a
+        // mensagem persistida, ela aparece no lugar sem piscar porque o merge em
+        // selectedConversation.messages já inclui as confirmadas + otimistas.
         setOptimisticMessages((prev) => prev.filter((m) => m.id !== next.localId))
       } else {
         // Falha: mantém a bolha, só marca como falhada — fica vermelha com "Falha ao
