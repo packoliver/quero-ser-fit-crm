@@ -1201,13 +1201,16 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
       const next = textSendQueueRef.current[0]
       const ok = await sendRealMessage(next.conversationId, next.content)
       if (ok) {
-        // Removido fetchConversationMessages: o Realtime já reconcilia a mensagem no
-        // histórico via scheduleRefresh (debounce 400ms). Fazer refetch explícito aqui
-        // duplicava o trabalho e causava latência perceptível em envios em rajada.
-        // A bolha otimista é removida imediatamente; quando o Realtime chegar com a
-        // mensagem persistida, ela aparece no lugar sem piscar porque o merge em
-        // selectedConversation.messages já inclui as confirmadas + otimistas.
-        setOptimisticMessages((prev) => prev.filter((m) => m.id !== next.localId))
+        // NÃO remove a bolha otimista imediatamente: sem ela, haveria um intervalo
+        // visível (~400ms do debounce do Realtime) em que a mensagem some da tela
+        // antes de reaparecer como confirmada — parece que o envio falhou ou travou.
+        // Em vez disso, marca como 'sent' para mostrar ✓ enquanto espera o Realtime
+        // trazer a versão persistida. A deduplicação acontece na renderização: quando
+        // a mensagem confirmada chega (mesmo content + mesma conversa), a otimista
+        // é filtrada automaticamente pelo merge abaixo.
+        setOptimisticMessages((prev) =>
+          prev.map((m) => (m.id === next.localId ? { ...m, status: 'sent' } : m))
+        )
       } else {
         // Falha: mantém a bolha, só marca como falhada — fica vermelha com "Falha ao
         // enviar" (mesmo estilo já usado pra mensagem com status='failed' vinda do banco),
@@ -2216,8 +2219,22 @@ function InboxPageInner({ requestedConvId }: { requestedConvId: string | null })
             >
               {/* Mensagens confirmadas + as ainda otimistas (mandadas agora, sem resposta
                   do servidor ainda) desta conversa, nessa ordem — a otimista vem sempre
-                  depois porque é a mais nova. */}
-              {[...selectedConversation.messages, ...optimisticMessages.filter((m) => m.conversationId === selectedConvId)].map((msg) => {
+                  depois porque é a mais nova.
+                  Deduplicação: quando o Realtime traz a mensagem persistida, a otimista
+                  marcada como 'sent' é removida pra não duplicar. Otimistas ainda em
+                  'sending' ou 'failed' continuam aparecendo normalmente. */}
+              {[...selectedConversation.messages, ...optimisticMessages.filter((m) => {
+                if (m.conversationId !== selectedConvId) return false
+                // Se já foi confirmada pelo servidor (status=sent), verifica se a versão
+                // persistida já chegou no histórico — se sim, esconde a otimista.
+                if (m.status === 'sent') {
+                  const hasServerCopy = selectedConversation.messages.some(
+                    (sm) => sm.senderType === 'user' && sm.content === m.content
+                  )
+                  if (hasServerCopy) return false
+                }
+                return true
+              })].map((msg) => {
                 if (msg.senderType === 'system') {
                   return (
                     <div key={msg.id} className="flex justify-center my-2">
